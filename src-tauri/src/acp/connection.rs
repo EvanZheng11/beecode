@@ -5206,11 +5206,10 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     // registered as `mcp-<name>` toolsets), Kimi Code from
     // `~/.kimi-code/mcp.json` (`mcpServers`), Grok from `~/.grok/config.toml`
     // (`[mcp_servers.<name>]`), Cursor from `~/.cursor/mcp.json`
-    // (`mcpServers`, shared with the IDE). codeg manages those files directly
-    // via the MCP settings UI, so forwarding the same servers over the ACP
-    // wire here would double-register them — skip it. (The built-in
-    // `codeg-mcp` companion is injected separately by `inject_codeg_mcp`, so
-    // it still reaches them.)
+    // (`mcpServers`, shared with the IDE). codeg 通过 MCP 设置界面直接管理这些
+    // 文件，因此经 ACP wire 再转发同一批服务器会重复注册。OpenCode 启动时
+    // 也会自行读取原生 `opencode.json` 的 `mcp` 配置，所以同样跳过转发；内置
+    // `codeg-mcp` 仍由 `inject_codeg_mcp` 独立注入，不受这个跳过规则影响。
     //
     // DeepSeek is deliberately NOT in this set: deepseek-acp reads no MCP file
     // at all, so `$DSH_HOME/mcp.json` (codeg's own store) reaches it ONLY
@@ -5235,6 +5234,7 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
             | AgentType::Cursor
             | AgentType::Qoder
             | AgentType::Antigravity
+            | AgentType::OpenCode
     ) {
         return Vec::new();
     }
@@ -30587,6 +30587,22 @@ mod tests {
             plan_approvals: Arc::new(TestNoPlanApprovals)
                 as Arc<dyn crate::acp::plan_approval::SessionPlanApprovalAccess>,
         }
+    }
+
+    // ─── 转发跳过集合：OpenCode 走原生配置 ─────────────────────
+    //
+    // OpenCode 启动时自己读 `~/.config/opencode/opencode.json` 的 `mcp`
+    // 段（codeg 的 MCP 设置界面就是直接写这个文件），所以同一批服务器再
+    // 经 `session/new.mcpServers` 转发一次属于重复注册 —— 实测 4 个全局
+    // MCP 会让 `session/new` 多花约 2s。跳过集合必须包含 OpenCode。
+    // （内置 `codeg-mcp` 伴侣由 `inject_codeg_mcp` 单独注入，不受影响。）
+    #[test]
+    fn opencode_mcp_servers_are_not_forwarded_over_the_acp_wire() {
+        let forwarded = load_mcp_servers_for_agent(AgentType::OpenCode);
+        assert!(
+            forwarded.is_empty(),
+            "OpenCode 自己读 opencode.json 的 mcp，codeg 不应再经 session/new 转发，实际转发了 {forwarded:?}"
+        );
     }
 
     // ─── inject_codeg_mcp: enabled=false short-circuit ──────────
