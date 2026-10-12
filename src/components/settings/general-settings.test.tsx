@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -63,7 +64,25 @@ vi.mock("@/lib/api", () => ({
 }))
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-vi.mock("@/lib/platform", () => ({ isDesktop: () => true }))
+
+// 事件订阅：把提问记录的广播处理器按事件名存下来，用例才能演"另一个窗口（agent-tools
+// 面板）刚写过这条记录"。用 `vi.hoisted` 是因为 `vi.mock` 工厂会被提升到文件里每个
+// 普通 `const` 之前。
+const broadcasts = vi.hoisted(() => ({
+  handlers: new Map<string, (payload: unknown) => void>(),
+  unsubscribe: vi.fn(),
+}))
+vi.mock("@/lib/platform", () => ({
+  isDesktop: () => true,
+  subscribe: vi.fn((event: string, handler: (payload: unknown) => void) => {
+    broadcasts.handlers.set(event, handler)
+    return Promise.resolve(broadcasts.unsubscribe)
+  }),
+}))
+
+/** 本页订阅的提问记录广播，由用例手动触发。 */
+const questionHandler = () =>
+  broadcasts.handlers.get("question-settings://changed")
 vi.mock("@/lib/transport", () => ({
   getActiveRemoteConnectionId: () => null,
   // Read by the desktop-notification section to decide whether permission is
@@ -124,6 +143,8 @@ describe("GeneralSettings", () => {
     platform.current = "windows"
     vi.mocked(getQuestionSettings).mockClear()
     vi.mocked(setQuestionSettings).mockClear()
+    // 处理器属于已经卸载的那次渲染，不该留给下一个用例。
+    broadcasts.handlers.clear()
   })
 
   it("mounts every section and wires each row's label to its control", async () => {
@@ -401,6 +422,44 @@ describe("GeneralSettings", () => {
         wait_timeout_minutes: 20,
         retry_count: 3,
         auto_select_first_on_timeout: false,
+      })
+    )
+  })
+
+  /**
+   * 这条记录有两个编辑者：本页写等待策略三项，开关（`enabled`）的编辑器是
+   * agent-tools 面板。另一窗口把开关关掉后，本页保存等待时长必须跟着广播走 ——
+   * 拿着加载时的旧值整条写回，就是把别处刚关掉的开关又打开，而这个字段在本页
+   * 根本不显示，用户看不到任何回退。反过来，广播不得改写本页正在编辑的三项策略。
+   */
+  it("保存等待策略时跟随广播的提问 MCP（Question MCP）开关", async () => {
+    renderSettings()
+
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    await waitFor(() => expect(questionHandler()).toBeDefined())
+
+    // 另一个窗口关掉提问开关，顺带带着它手里的等待策略一起广播。
+    act(() =>
+      questionHandler()?.({
+        enabled: false,
+        wait_timeout_minutes: 30,
+        retry_count: 9,
+        auto_select_first_on_timeout: false,
+      })
+    )
+    // 三项策略是本页的：广播带来的 30 分钟 / 9 次不跟着跳。
+    expect(timeout).toHaveValue(10)
+    expect(screen.getByLabelText("Question MCP retries")).toHaveValue(3)
+
+    fireEvent.change(timeout, { target: { value: "20" } })
+    fireEvent.blur(timeout)
+
+    await waitFor(() =>
+      expect(vi.mocked(setQuestionSettings)).toHaveBeenCalledWith({
+        enabled: false,
+        wait_timeout_minutes: 20,
+        retry_count: 3,
+        auto_select_first_on_timeout: true,
       })
     )
   })

@@ -48,9 +48,13 @@ import {
   updateSystemTerminalSettings,
   type QuestionSettings,
 } from "@/lib/api"
-import { isDesktop } from "@/lib/platform"
+import { isDesktop, subscribe } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
-import type { AvailableTerminalShells, TerminalShellOption } from "@/lib/types"
+import {
+  QUESTION_SETTINGS_CHANGED_EVENT,
+  type AvailableTerminalShells,
+  type TerminalShellOption,
+} from "@/lib/types"
 import { usePlatform } from "@/hooks/use-platform"
 import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
@@ -152,8 +156,12 @@ export function GeneralSettings() {
   const [questionDraft, setQuestionDraft] = useState<QuestionSettings | null>(
     null
   )
-  /// 最近一次读到或保存成功的提问配置，保存失败时用它把控件收回去。
+  /// 最近一次读到、保存成功或从广播收到的提问配置（整条），保存失败时用它把控件
+  /// 收回去。
   const questionSettingsRef = useRef<QuestionSettings | null>(null)
+  /// 广播计数：别的设置窗口写这条记录时递增。初次加载先采样一份，读回来时比对 ——
+  /// 加载期间落地的广播比那次读取新。
+  const questionRemoteGenRef = useRef(0)
   const [savingQuestion, setSavingQuestion] = useState(false)
 
   const [disableHwAccel, setDisableHwAccel] = useState(false)
@@ -168,6 +176,8 @@ export function GeneralSettings() {
   const loadSettings = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
+    // 这次读取可能比广播旧：先记下广播计数，读回来时再比一次。
+    const questionGen = questionRemoteGenRef.current
 
     try {
       const [terminalSettings, terminalShells, renderingSettings, question] =
@@ -180,8 +190,16 @@ export function GeneralSettings() {
           getQuestionSettings(),
         ])
 
-      setQuestionDraft(question)
-      questionSettingsRef.current = question
+      // `enabled` 本页没有编辑器（开关在 agent-tools 面板上），整条记录因此跟着广播
+      // 走：加载期间已有广播落地，就以那条记录为准，而不是这次读到的旧值 —— 否则
+      // 下一次保存等待策略会把别处刚关掉的开关又打开。三个策略字段显示的仍是本页
+      // 读到的值。
+      const questionRecord =
+        questionRemoteGenRef.current === questionGen
+          ? question
+          : (questionSettingsRef.current ?? question)
+      questionSettingsRef.current = questionRecord
+      setQuestionDraft({ ...question, enabled: questionRecord.enabled })
       setAvailableShells(terminalShells)
       setStoredDefaultShell(terminalSettings.default_shell)
       setColorizeCommandOutput(terminalSettings.colorize_command_output)
@@ -225,6 +243,42 @@ export function GeneralSettings() {
       console.error("[Settings] load general settings failed:", err)
     })
   }, [loadSettings])
+
+  /**
+   * 提问记录有两个编辑者：本页写等待策略三项，agent-tools 面板的开关写 `enabled`。
+   * 两边都整条记录写回，所以保存等待策略时 `enabled` 必须跟着广播走 —— 这个字段
+   * 在本页没有编辑器，拿加载时的旧值写回等于把别处刚关掉的开关又打开，而用户在本
+   * 页看不到任何回退（开关根本不在这块界面上）。
+   *
+   * 反过来，广播不改写本页正在编辑的三个策略字段：它们是这块界面的字段，广播带来的
+   * 版本会顶掉用户还没保存的输入。
+   */
+  useEffect(() => {
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<QuestionSettings>(
+      QUESTION_SETTINGS_CHANGED_EVENT,
+      (remote) => {
+        questionRemoteGenRef.current += 1
+        // 整条以广播为准存进 ref：保存时 `enabled` 取自它，空输入框的兜底值也取自它。
+        questionSettingsRef.current = remote
+        // 界面上只跟开关（本页不编辑它）；读取失败时保持 null，三个控件照旧不渲染。
+        setQuestionDraft((prev) =>
+          prev ? { ...prev, enabled: remote.enabled } : prev
+        )
+      }
+    )
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      // 传输层没就绪不该弄坏这块表单：那只是说本窗口继续用它自己读到的值。
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }, [])
 
   /// Resolves to whether the row was actually written, so the caller can put
   /// back whatever it moved ahead of the save.
