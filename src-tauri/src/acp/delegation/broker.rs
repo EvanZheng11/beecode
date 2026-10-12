@@ -564,9 +564,10 @@ impl PendingInner {
     /// The just-inserted entry is never the victim: a single result is capped
     /// at [`COMPLETED_TEXT_CAP`] (256 KiB), far below any MB-scale budget, so
     /// the newest result always survives for the LLM's immediate
-    /// `get_delegation_status`. The caller does the atomic `running.remove` +
-    /// this insert under one lock, then notifies long-poll waiters AFTER
-    /// releasing the lock.
+    /// `get_delegation_status`.
+    ///
+    /// 调用方在同一把锁内完成 `running.remove` + 此处插入；锁释放后立即
+    /// 通知状态长轮询，再执行父级 meta、完成事件和子连接收尾。
     fn insert_completed(&mut self, call_id: &str, task: CompletedTask) {
         let parent = task.parent_connection_id.clone();
         let task_bytes = task.text.as_ref().map_or(0, |t| t.len());
@@ -1422,8 +1423,9 @@ pub struct DelegationBroker {
     tool_calls: Arc<ToolCallTracker>,
     pre_canceled_handles: Arc<PreCanceledHandles>,
     config: Arc<Mutex<DelegationConfig>>,
-    /// Woken after every terminal `record_completed` so a `get_delegation_status`
-    /// long-poll wakes the instant its task finishes instead of busy-polling.
+    /// 在终态写入 `completed` 缓存后唤醒所有状态长轮询；正常
+    /// `complete_call` 会在释放 `pending.inner` 锁后、父级 meta/事件/子连接
+    /// 收尾前通知，因此 waiter 不会被慢收尾阻塞。
     result_notify: Arc<Notify>,
     /// How long an already-reported blocking prompt stays suppressed —
     /// [`BLOCK_RESURFACE_INTERVAL`] in production. A field only so tests can
@@ -2902,9 +2904,9 @@ impl DelegationBroker {
     /// Called by the child-session lifecycle subscriber on `TurnComplete`
     /// (success path) or by error mappers (failure path).
     ///
-    /// Migrates the task from `running` into `completed` (atomically, under one
-    /// lock) and then finalizes (terminal meta + `DelegationCompleted` event +
-    /// child teardown) and wakes any `get_delegation_status` long-poll.
+    /// 将任务从 `running` 原子迁移到 `completed`，释放 pending 锁后立即
+    /// 唤醒状态 waiter，再执行终态 meta、`DelegationCompleted` 事件和子连接
+    /// 断开。若任务仍处于 setup 保留窗口，则继续按原规则缓存早到完成。
     ///
     /// If no entry is in `running` under `call_id`, the outcome is buffered for
     /// a racing `start_delegation` to drain at registration — but ONLY while the
@@ -2945,6 +2947,20 @@ impl DelegationBroker {
             }
         };
         if let Some((task, duration_ms)) = task {
+            let terminal_status = match &outcome {
+                DelegationOutcome::Ok(_) => "completed",
+                DelegationOutcome::Err { code, .. } if code == "canceled" => "canceled",
+                DelegationOutcome::Err { .. } => "failed",
+            };
+            tracing::debug!(
+                task_id = %task.task_id,
+                parent_connection_id = %task.parent_connection_id,
+                terminal_status = %terminal_status,
+                wakeup_phase = "completed_cache_visible",
+                finalize_phase = "pending",
+                "委托已进入 completed 缓存，先唤醒状态等待再执行终态收尾"
+            );
+            self.result_notify.notify_waiters();
             self.finalize_delegation(
                 &task.parent_connection_id,
                 &task.parent_tool_use_id,
@@ -2957,7 +2973,14 @@ impl DelegationBroker {
                 &task.task_id,
             )
             .await;
-            self.result_notify.notify_waiters();
+            tracing::debug!(
+                task_id = %task.task_id,
+                parent_connection_id = %task.parent_connection_id,
+                terminal_status = %terminal_status,
+                wakeup_phase = "completed_cache_visible",
+                finalize_phase = "finished",
+                "委托终态收尾完成"
+            );
         }
     }
 
