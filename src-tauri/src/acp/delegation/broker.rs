@@ -4630,6 +4630,60 @@ mod tests {
     use crate::acp::delegation::types::DelegationSuccess;
     use crate::models::AgentType;
 
+    /// 测试专用的实时回复查询器：将每次 `blocked_on` 探测停在门闩上，
+    /// 让测试精确控制状态长轮询何时完成阻塞提示检查。进入时发送
+    /// `entered` 信号；返回 `None` 前等待 `release`（确实处于工作中）。
+    struct StatusProbeGate {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl ChildLiveReplyLookup for StatusProbeGate {
+        async fn latest_reply(&self, _child_connection_id: &str) -> Option<String> {
+            None
+        }
+
+        async fn blocked_on(&self, _child_connection_id: &str) -> Option<BlockedOn> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            None
+        }
+    }
+
+    /// 测试专用的 meta 写入器：终态 `completed` meta 写入完成后才停住，
+    /// 模拟较慢的收尾尾段（事件发送和断开连接仍未完成）。非终态写入
+    /// （`start_delegation` 产生的 `running` meta）直接通过，因此只有
+    /// 终态门闩可控。
+    struct SlowFinalizeMetaWriter {
+        inner: Arc<MockMetaWriter>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl DelegationMetaWriter for SlowFinalizeMetaWriter {
+        async fn write_meta(
+            &self,
+            parent_connection_id: &str,
+            parent_tool_use_id: &str,
+            meta: serde_json::Value,
+        ) {
+            let is_terminal_completed = meta
+                .get("codeg.delegation")
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("completed");
+            self.inner
+                .write_meta(parent_connection_id, parent_tool_use_id, meta)
+                .await;
+            if is_terminal_completed {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        }
+    }
+
     /// Test-only `ConversationDepthLookup` that resolves against a flat
     /// (id, parent_id) table. Unknown ids return `Ok(None)` to keep test
     /// setup small.
@@ -4831,6 +4885,126 @@ mod tests {
         let report = waiter.await.unwrap();
         assert_eq!(report.status, TaskStatus::Completed);
         assert_eq!(report.text.as_deref(), Some("done"));
+    }
+
+    /// 回归测试：状态长轮询必须在 running → completed 迁移时唤醒，不能等
+    /// 终态收尾尾段完成后才唤醒。等待器停住时保持慢收尾门闩关闭；正确的
+    /// `complete_call` 会在执行 `finalize_delegation(...)` 前通知
+    /// `result_notify`，因此终态 meta 仍在写入时等待器就能返回 `Completed`。
+    /// 旧顺序（收尾后通知）会让等待器一直停到超时。
+    #[tokio::test]
+    async fn complete_call_wakes_status_waiter_before_slow_finalize() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-conn-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+
+        let status_probe_entered = Arc::new(Notify::new());
+        let status_probe_release = Arc::new(Notify::new());
+        let finalize_entered = Arc::new(Notify::new());
+        let finalize_release = Arc::new(Notify::new());
+        let writer = Arc::new(MockMetaWriter::new());
+        let emitter = Arc::new(MockEventEmitter::new());
+        let broker = DelegationBroker::with_writers(
+            mock.clone() as Arc<dyn ConnectionSpawner>,
+            shallow_lookup(),
+            Arc::new(SlowFinalizeMetaWriter {
+                inner: writer.clone(),
+                entered: finalize_entered.clone(),
+                release: finalize_release.clone(),
+            }) as Arc<dyn DelegationMetaWriter>,
+            emitter.clone() as Arc<dyn DelegationEventEmitter>,
+        )
+        .with_live_reply_lookup(Arc::new(StatusProbeGate {
+            entered: status_probe_entered.clone(),
+            release: status_probe_release.clone(),
+        }) as Arc<dyn ChildLiveReplyLookup>);
+        enable_delegation(&broker).await;
+
+        let task_id = broker
+            .start_delegation(request(1, "pt-wakeup"))
+            .await
+            .task_id
+            .expect("start_delegation must return a task id");
+
+        let mut waiter = {
+            let broker = broker.clone();
+            let task_id = task_id.clone();
+            tokio::spawn(async move {
+                broker
+                    .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Infinite)
+                    .await
+            })
+        };
+        status_probe_entered.notified().await;
+
+        let call_id = task_id.clone();
+        let completion = {
+            let broker = broker.clone();
+            tokio::spawn(async move {
+                broker
+                    .complete_call(
+                        &call_id,
+                        DelegationOutcome::Ok(DelegationSuccess {
+                            text: "done".into(),
+                            child_conversation_id: 42,
+                            child_agent_type: AgentType::ClaudeCode,
+                            turn_count: 1,
+                            duration_ms: 0,
+                            token_usage: None,
+                        }),
+                    )
+                    .await;
+            })
+        };
+        finalize_entered.notified().await;
+        status_probe_release.notify_one();
+
+        let waiter_result = tokio::time::timeout(Duration::from_secs(1), &mut waiter).await;
+        let report = match waiter_result {
+            Ok(joined) => joined.expect("status waiter task must not panic"),
+            Err(_) => {
+                finalize_release.notify_one();
+                completion
+                    .await
+                    .expect("completion task must finish during cleanup");
+                waiter
+                    .await
+                    .expect("status waiter must finish during cleanup");
+                panic!("状态等待器未能在终态收尾完成前唤醒");
+            }
+        };
+
+        assert_eq!(report.status, TaskStatus::Completed);
+        assert_eq!(report.text.as_deref(), Some("done"));
+        assert!(
+            !completion.is_finished(),
+            "complete_call must still be blocked in slow finalization"
+        );
+        assert_eq!(emitter.count().await, 0);
+        assert!(mock.disconnects.lock().await.is_empty());
+
+        finalize_release.notify_one();
+        completion
+            .await
+            .expect("completion task must finish after finalization release");
+
+        let cached = broker
+            .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Immediate)
+            .await;
+        assert_eq!(cached.status, TaskStatus::Completed);
+        assert_eq!(cached.text.as_deref(), Some("done"));
+
+        let meta_calls = writer.snapshot().await;
+        assert_eq!(meta_calls.len(), 2);
+        assert_eq!(
+            meta_calls[1].meta["codeg.delegation"]["status"].as_str(),
+            Some("completed")
+        );
+        assert_eq!(emitter.count().await, 1);
+        assert_eq!(
+            mock.disconnects.lock().await.as_slice(),
+            &["child-conn-1".to_string()]
+        );
     }
 
     /// A running snapshot upgrades its bare `"Running."` message with the child's
