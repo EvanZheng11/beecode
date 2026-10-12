@@ -123,7 +123,14 @@ function primeBackend(
     workTasks = false,
   } = overrides
   mockGetFeedback.mockResolvedValue({ enabled: feedback })
-  mockGetQuestion.mockResolvedValue({ enabled: question })
+  // The question record now carries the MCP wait policy too; the panel never
+  // edits those fields, so a save must hand them back unchanged.
+  mockGetQuestion.mockResolvedValue({
+    enabled: question,
+    wait_timeout_minutes: 10,
+    retry_count: 3,
+    auto_select_first_on_timeout: true,
+  })
   mockGetSessionInfo.mockResolvedValue({ enabled: sessionInfo })
   mockGetBrowser.mockResolvedValue({
     enabled: browserTools,
@@ -207,7 +214,12 @@ describe("AgentToolsSettingsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => {
-      expect(mockSetQuestion).toHaveBeenCalledWith({ enabled: false })
+      expect(mockSetQuestion).toHaveBeenCalledWith({
+        enabled: false,
+        wait_timeout_minutes: 10,
+        retry_count: 3,
+        auto_select_first_on_timeout: true,
+      })
     })
     // The other three endpoints hold values this panel never touched; writing
     // them back would republish state the user didn't ask to change.

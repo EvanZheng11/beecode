@@ -5363,9 +5363,16 @@ export async function submitSessionFeedback(
 
 // ─── Ask-user-question settings ────────────────────────────────────────────
 
-/** Mirror of Rust `QuestionSettings` (default ON). */
+/** Mirror of Rust `QuestionSettings` (default ON). 除开关外还带 MCP 等待策略：
+ *  一次提问等多久、超时后重提几次、等待用尽后是否自动选第一个选项。 */
 export interface QuestionSettings {
   enabled: boolean
+  /** 单次询问等待用户回答的时长（分钟）。 */
+  wait_timeout_minutes: number
+  /** 等待超时后重新询问的次数，0 表示不重提。 */
+  retry_count: number
+  /** 等待全部用尽后自动选择每个问题的第一个选项。 */
+  auto_select_first_on_timeout: boolean
 }
 
 export async function getQuestionSettings(): Promise<QuestionSettings> {

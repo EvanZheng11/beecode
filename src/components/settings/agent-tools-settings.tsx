@@ -69,6 +69,7 @@ import {
   setSessionInfoSettings,
   type BrowserToolsSettings,
   type ChatAuthoringSettings,
+  type QuestionSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -156,6 +157,8 @@ export function AgentToolsSettingsSection() {
    * that read is older than it. A broadcast about one record says nothing
    * about another's read. */
   const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0 })
+  /** 最近一次读到的提问整条配置（含 MCP 等待策略），保存时用它补齐只改开关的那次写入。 */
+  const questionSettingsRef = useRef<QuestionSettings | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -179,9 +182,10 @@ export function AgentToolsSettingsSection() {
       if (feedback.status === "fulfilled")
         next.feedback = feedback.value.enabled
       else failures.push(toErrorMessage(feedback.reason))
-      if (question.status === "fulfilled")
+      if (question.status === "fulfilled") {
         next.question = question.value.enabled
-      else failures.push(toErrorMessage(question.reason))
+        questionSettingsRef.current = question.value
+      } else failures.push(toErrorMessage(question.reason))
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
       else failures.push(toErrorMessage(sessionInfo.reason))
@@ -373,11 +377,19 @@ export function AgentToolsSettingsSection() {
           })
         )
       }
-      if (values.question !== baseline.question) {
+      // 提问配置还带等待策略字段，保存时用最近读到的整条记录补齐，只改开关；
+      // 否则一次开关翻转会把别处改过的等待时长/重提次数打回默认值。尚未读到过
+      // 该记录（读取失败）时不写，避免用臆测的值覆盖。
+      const questionSettings = questionSettingsRef.current
+      if (values.question !== baseline.question && questionSettings) {
         writes.push(
-          setQuestionSettings({ enabled: values.question }).then((applied) => ({
-            question: applied.enabled,
-          }))
+          setQuestionSettings({
+            ...questionSettings,
+            enabled: values.question,
+          }).then((applied) => {
+            questionSettingsRef.current = applied
+            return { question: applied.enabled }
+          })
         )
       }
       if (values.sessionInfo !== baseline.sessionInfo) {
