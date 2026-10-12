@@ -425,6 +425,7 @@ async fn async_main() -> ExitCode {
             Arc::new(codeg_lib::acp::manager::ConnectionManagerQuestionLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
+            state.question_config.clone(),
             Arc::new(codeg_lib::commands::session_info::DbSessionInfoLookup::new(
                 Arc::new(codeg_lib::db::AppDatabase {
                     conn: state.db.conn.clone(),

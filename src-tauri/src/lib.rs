@@ -1174,6 +1174,7 @@ mod tauri_app {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
                         ),
+                        question_config.clone(),
                         std::sync::Arc::new(
                             crate::commands::session_info::DbSessionInfoLookup::new(
                                 std::sync::Arc::new(db::AppDatabase {

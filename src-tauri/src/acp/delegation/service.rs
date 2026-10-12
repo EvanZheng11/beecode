@@ -493,6 +493,7 @@ mod tests {
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
+            crate::acp::question::QuestionRuntimeConfig::new(),
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
