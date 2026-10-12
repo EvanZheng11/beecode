@@ -1338,12 +1338,7 @@ where
     let question_id = reg.question_id;
     let answer_rx = reg.answer_rx;
     let mut probe = [0u8; 1];
-    let answer = async {
-        match answer_rx.await {
-            Ok(outcome) => Some(outcome),
-            Err(_) => None,
-        }
-    };
+    let answer = async { answer_rx.await.ok() };
     tokio::pin!(answer);
     let peer_closed = conn.read(&mut probe);
     tokio::pin!(peer_closed);
@@ -3390,21 +3385,13 @@ mod tests {
     use crate::acp::question::{QuestionConfig, QuestionRuntimeConfig};
 
     async fn wait_for_question_registration(questions: &StubQuestion, expected: usize) {
-        let registered = async {
-            for _ in 0..64 {
-                if questions.registered.lock().await.len() >= expected {
-                    return true;
-                }
-                tokio::task::yield_now().await;
+        for _ in 0..64 {
+            if questions.registered.lock().await.len() >= expected {
+                return;
             }
-            false
-        };
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), registered)
-                .await
-                .unwrap_or(false),
-            "问题注册未在有限等待内完成"
-        );
+            tokio::task::yield_now().await;
+        }
+        panic!("问题注册未在有限等待内完成");
     }
 
     async fn read_paused_response(client: &mut tokio::io::DuplexStream) -> BrokerResponse {
@@ -3634,6 +3621,7 @@ mod tests {
         assert_eq!(registered, 2);
         assert_eq!(canceled, vec!["q-1", "q-2"]);
         assert_eq!(response.outcome["answers"][0]["selected"][0], "Incremental");
+        assert_eq!(response.outcome["declined"], false);
     }
 
     #[tokio::test]
