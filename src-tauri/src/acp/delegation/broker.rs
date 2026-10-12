@@ -566,8 +566,9 @@ impl PendingInner {
     /// the newest result always survives for the LLM's immediate
     /// `get_delegation_status`.
     ///
-    /// 调用方在同一把锁内完成 `running.remove` + 此处插入；锁释放后立即
-    /// 通知状态长轮询，再执行父级 meta、完成事件和子连接收尾。
+    /// 对正常 `complete_call` 的 running → completed 路径，此插入发生在
+    /// pending 锁内；调用方释放锁后立即通知状态长轮询，再执行父级 meta、
+    /// 完成事件和子连接收尾。
     fn insert_completed(&mut self, call_id: &str, task: CompletedTask) {
         let parent = task.parent_connection_id.clone();
         let task_bytes = task.text.as_ref().map_or(0, |t| t.len());
@@ -4917,6 +4918,22 @@ mod tests {
     /// 旧顺序（收尾后通知）会让等待器一直停到超时。
     #[tokio::test]
     async fn complete_call_wakes_status_waiter_before_slow_finalize() {
+        async fn cleanup_tasks<T>(
+            status_probe_release: &Notify,
+            finalize_release: &Notify,
+            waiter: &mut tokio::task::JoinHandle<T>,
+            completion: &mut Option<tokio::task::JoinHandle<()>>,
+        ) {
+            status_probe_release.notify_waiters();
+            finalize_release.notify_waiters();
+            waiter.abort();
+            let _ = waiter.await;
+            if let Some(completion) = completion.take() {
+                completion.abort();
+                let _ = completion.await;
+            }
+        }
+
         let mock = Arc::new(MockSpawner::new());
         mock.queue_spawn(Ok("child-conn-1".into())).await;
         mock.queue_send(Ok(42)).await;
@@ -4958,10 +4975,22 @@ mod tests {
                     .await
             })
         };
-        status_probe_entered.notified().await;
+        let status_probe_result =
+            tokio::time::timeout(Duration::from_secs(1), status_probe_entered.notified()).await;
+        if status_probe_result.is_err() {
+            let mut completion = None;
+            cleanup_tasks(
+                &status_probe_release,
+                &finalize_release,
+                &mut waiter,
+                &mut completion,
+            )
+            .await;
+            panic!("状态探测器未能在超时前进入");
+        }
 
         let call_id = task_id.clone();
-        let completion = {
+        let mut completion = Some({
             let broker = broker.clone();
             tokio::spawn(async move {
                 broker
@@ -4978,21 +5007,32 @@ mod tests {
                     )
                     .await;
             })
-        };
-        finalize_entered.notified().await;
+        });
+        let finalize_result =
+            tokio::time::timeout(Duration::from_secs(1), finalize_entered.notified()).await;
+        if finalize_result.is_err() {
+            cleanup_tasks(
+                &status_probe_release,
+                &finalize_release,
+                &mut waiter,
+                &mut completion,
+            )
+            .await;
+            panic!("终态收尾未能在超时前进入");
+        }
         status_probe_release.notify_one();
 
         let waiter_result = tokio::time::timeout(Duration::from_secs(1), &mut waiter).await;
         let report = match waiter_result {
             Ok(joined) => joined.expect("status waiter task must not panic"),
             Err(_) => {
-                finalize_release.notify_one();
-                completion
-                    .await
-                    .expect("completion task must finish during cleanup");
-                waiter
-                    .await
-                    .expect("status waiter must finish during cleanup");
+                cleanup_tasks(
+                    &status_probe_release,
+                    &finalize_release,
+                    &mut waiter,
+                    &mut completion,
+                )
+                .await;
                 panic!("状态等待器未能在终态收尾完成前唤醒");
             }
         };
@@ -5000,7 +5040,10 @@ mod tests {
         assert_eq!(report.status, TaskStatus::Completed);
         assert_eq!(report.text.as_deref(), Some("done"));
         assert!(
-            !completion.is_finished(),
+            !completion
+                .as_ref()
+                .expect("completion task must still be active")
+                .is_finished(),
             "complete_call must still be blocked in slow finalization"
         );
         assert_eq!(emitter.count().await, 0);
@@ -5008,6 +5051,8 @@ mod tests {
 
         finalize_release.notify_one();
         completion
+            .take()
+            .expect("completion task must still be active")
             .await
             .expect("completion task must finish after finalization release");
 
