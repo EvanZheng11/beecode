@@ -106,6 +106,14 @@ pub fn build_router(
             post(handlers::question::set_question_settings),
         )
         .route(
+            "/update_question_enabled",
+            post(handlers::question::update_question_enabled),
+        )
+        .route(
+            "/update_question_policy",
+            post(handlers::question::update_question_policy),
+        )
+        .route(
             "/get_session_info_settings",
             post(handlers::session_info::get_session_info_settings),
         )

@@ -255,9 +255,10 @@ pub struct CodegMcpToolGroupTargets<'a> {
 /// `depth_limit`, `completed_cache_max_mb` and the per-agent defaults, and
 /// `automations`/`taskboard`, like `browser`/`browser_eval`, are two switches
 /// over one record that sit one click apart in this very popover — a
-/// read-modify-write of the pair loses whichever flip lands first. `feedback`,
-/// `ask` and `sessions` each own a single-field record, so their existing
-/// writer is already narrow.
+/// read-modify-write of the pair loses whichever flip lands first. `feedback`
+/// and `sessions` each own a single-field record, so their existing writer is
+/// already narrow; `ask` also carries the MCP wait policy, so it reads the
+/// record back and flips only its switch.
 pub async fn set_codeg_mcp_tool_group_core(
     conn: &DatabaseConnection,
     targets: CodegMcpToolGroupTargets<'_>,
@@ -285,13 +286,8 @@ pub async fn set_codeg_mcp_tool_group_core(
             .await?;
         }
         "ask" => {
-            question::set_question_settings_core(
-                conn,
-                targets.question,
-                emitter,
-                question::QuestionSettings { enabled },
-            )
-            .await?;
+            question::update_question_enabled_core(conn, targets.question, emitter, enabled)
+                .await?;
         }
         "sessions" => {
             session_info::set_session_info_settings_core(

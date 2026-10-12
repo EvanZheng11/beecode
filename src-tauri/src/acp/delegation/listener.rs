@@ -42,7 +42,9 @@ use crate::acp::delegation::types::{
     DelegationRequest, DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
-use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
+use crate::acp::question::{
+    QuestionConfig, QuestionOutcome, QuestionRuntimeConfig, SessionQuestionAccess,
+};
 #[cfg(unix)]
 use crate::acp::scratch_dir::SUN_PATH_CAP;
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
@@ -148,6 +150,7 @@ pub struct DelegationListener {
     /// Registers / cancels the blocking `ask_user_question` tool's pending
     /// questions. Same `tokens` registry and parent-connection scoping.
     pub questions: Arc<dyn SessionQuestionAccess>,
+    pub question_config: QuestionRuntimeConfig,
     /// Resolves a referenced session for the `get_session_info` tool. Unlike the
     /// other arms this is NOT parent-scoped — it looks any non-deleted session up
     /// by its codeg conversation id (still token-gated against an invalid caller).
@@ -182,6 +185,7 @@ impl DelegationListener {
         parent_lookup: Arc<dyn ParentSessionLookup>,
         feedback: Arc<dyn SessionFeedbackAccess>,
         questions: Arc<dyn SessionQuestionAccess>,
+        question_config: QuestionRuntimeConfig,
         session_info: Arc<dyn SessionInfoAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
@@ -194,6 +198,7 @@ impl DelegationListener {
             parent_lookup,
             feedback,
             questions,
+            question_config,
             session_info,
             tasks,
             authoring,
@@ -510,49 +515,60 @@ impl DelegationListener {
                     write_frame(conn, &ask_declined_response()?).await?;
                     return Ok(());
                 };
-                let Some(reg) = self
-                    .questions
-                    .register_question(&parent_conn_id, req.questions)
-                    .await
-                else {
-                    write_frame(conn, &ask_declined_response()?).await?;
-                    return Ok(());
-                };
-                let question_id = reg.question_id;
-                let mut answer_rx = reg.answer_rx;
-                // Close the teardown race: `ask_target` validated the token, but the
-                // parent connection may have been revoked + swept
-                // (`cancel_questions_by_parent`) in the window before the insert
-                // above — the sweep would have missed this just-registered entry,
-                // leaving it parked until peer-close. The token is revoked before
-                // the sweep, so a re-check that now finds it gone means teardown is
-                // underway: cancel immediately so the ask can't linger.
-                if self.tokens.lookup(&req.token).await.is_none() {
-                    self.questions
-                        .cancel_question(&parent_conn_id, &question_id)
-                        .await;
-                    write_frame(conn, &ask_declined_response()?).await?;
-                    return Ok(());
-                }
-                let mut probe = [0u8; 1];
-                let outcome = tokio::select! {
-                    biased;
-                    ans = &mut answer_rx => ans.ok(),
-                    _ = conn.read(&mut probe) => {
+                let cfg = self.question_config.snapshot().await;
+                let attempts = cfg.retry_count.saturating_add(1);
+                for attempt in 0..attempts {
+                    let Some(reg) = self
+                        .questions
+                        .register_question(&parent_conn_id, req.questions.clone())
+                        .await
+                    else {
+                        write_frame(conn, &ask_declined_response()?).await?;
+                        return Ok(());
+                    };
+                    let question_id = reg.question_id.clone();
+                    // 关闭注册与连接拆除之间的竞态，避免留下孤立提问。
+                    if self.tokens.lookup(&req.token).await.is_none() {
                         self.questions
                             .cancel_question(&parent_conn_id, &question_id)
                             .await;
+                        write_frame(conn, &ask_declined_response()?).await?;
                         return Ok(());
                     }
-                };
-                let resp = match outcome {
-                    Some(o) => ask_response(&o)?,
-                    // Sender dropped without sending (connection teardown drain):
-                    // surface a declined outcome so the tool returns cleanly.
-                    None => ask_declined_response()?,
-                };
-                write_frame(conn, &resp).await?;
-                return Ok(());
+                    match wait_for_question_answer(
+                        conn,
+                        &self.questions,
+                        &parent_conn_id,
+                        reg,
+                        &cfg,
+                    )
+                    .await
+                    {
+                        AskWaitResult::Answered(outcome) => {
+                            write_frame(conn, &ask_response(&outcome)?).await?;
+                            return Ok(());
+                        }
+                        AskWaitResult::PeerClosed => return Ok(()),
+                        AskWaitResult::TimedOut if attempt + 1 < attempts => {
+                            tracing::info!(
+                                parent_connection_id = %parent_conn_id,
+                                attempt = attempt + 1,
+                                "提问等待超时，重新注册问题"
+                            );
+                        }
+                        AskWaitResult::TimedOut => {
+                            tracing::info!(
+                                parent_connection_id = %parent_conn_id,
+                                attempt = attempt + 1,
+                                "提问等待耗尽，选择首个选项"
+                            );
+                            let outcome = build_first_option_outcome(&req.questions);
+                            write_frame(conn, &ask_response(&outcome)?).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                unreachable!("提问至少包含一次等待");
             }
             BrokerMessage::SessionInfo(req) => {
                 // Read-only resolution (DB + a bounded transcript parse). No
@@ -1303,6 +1319,105 @@ fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
     })
 }
 
+enum AskWaitResult {
+    Answered(QuestionOutcome),
+    TimedOut,
+    PeerClosed,
+}
+
+fn question_answer_result(
+    outcome: Result<QuestionOutcome, tokio::sync::oneshot::error::RecvError>,
+) -> AskWaitResult {
+    match outcome {
+        Ok(outcome) => AskWaitResult::Answered(outcome),
+        Err(_) => AskWaitResult::Answered(QuestionOutcome {
+            answers: Vec::new(),
+            declined: true,
+        }),
+    }
+}
+
+async fn wait_for_question_answer<C>(
+    conn: &mut C,
+    questions: &Arc<dyn SessionQuestionAccess>,
+    parent_connection_id: &str,
+    reg: crate::acp::question::RegisteredQuestion,
+    config: &QuestionConfig,
+) -> AskWaitResult
+where
+    C: AsyncReadExt + Unpin,
+{
+    let question_id = reg.question_id;
+    let mut answer_rx = reg.answer_rx;
+    let mut probe = [0u8; 1];
+    let peer_closed = conn.read(&mut probe);
+    tokio::pin!(peer_closed);
+
+    let mut result = if config.auto_select_first_on_timeout {
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(
+            u64::from(config.wait_timeout_minutes) * 60,
+        ));
+        tokio::pin!(timeout);
+        tokio::select! {
+            biased;
+            outcome = &mut answer_rx => question_answer_result(outcome),
+            _ = &mut peer_closed => AskWaitResult::PeerClosed,
+            _ = &mut timeout => AskWaitResult::TimedOut,
+        }
+    } else {
+        tokio::select! {
+            biased;
+            outcome = &mut answer_rx => question_answer_result(outcome),
+            _ = &mut peer_closed => AskWaitResult::PeerClosed,
+        }
+    };
+
+    if matches!(result, AskWaitResult::TimedOut) {
+        // 超时已经就绪时再无阻塞地取一次答案，覆盖 select 与取消之间的最短窗口。
+        if let Ok(outcome) = answer_rx.try_recv() {
+            result = AskWaitResult::Answered(outcome);
+        }
+    }
+
+    if matches!(result, AskWaitResult::TimedOut | AskWaitResult::PeerClosed) {
+        questions
+            .cancel_question(parent_connection_id, &question_id)
+            .await;
+    }
+
+    if matches!(result, AskWaitResult::TimedOut) {
+        // 取消操作与回答共用后端注册表锁；取消返回后再 drain 一次，确保先赢得
+        // 注册表条目的用户回答不会被超时分支静默丢弃。
+        if let Ok(outcome) = answer_rx.try_recv() {
+            result = AskWaitResult::Answered(outcome);
+        }
+    }
+
+    result
+}
+
+fn build_first_option_outcome(
+    questions: &[crate::acp::question::QuestionSpec],
+) -> QuestionOutcome {
+    QuestionOutcome {
+        answers: questions
+            .iter()
+            .map(|question| crate::acp::question::QuestionAnsweredItem {
+                question: question.question.clone(),
+                header: question.header.clone(),
+                multi_select: question.multi_select,
+                selected: question
+                    .options
+                    .first()
+                    .map(|option| option.label.clone())
+                    .into_iter()
+                    .collect(),
+            })
+            .collect(),
+        declined: false,
+    }
+}
+
 /// Serialize a resolved [`SessionInfo`] into a [`BrokerResponse`] for the
 /// `SessionInfo` arm — the companion renders it into the `get_session_info`
 /// tool result.
@@ -1702,6 +1817,7 @@ mod tests {
             Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
         >,
         canceled: tokio::sync::Mutex<Vec<String>>,
+        answer_during_cancel: tokio::sync::Mutex<Option<QuestionOutcome>>,
     }
     #[async_trait]
     impl SessionQuestionAccess for StubQuestion {
@@ -1723,7 +1839,13 @@ mod tests {
             })
         }
         async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
-            self.pending.lock().await.remove(question_id);
+            if let Some(outcome) = self.answer_during_cancel.lock().await.take() {
+                if let Some(tx) = self.pending.lock().await.remove(question_id) {
+                    let _ = tx.send(outcome);
+                }
+            } else {
+                self.pending.lock().await.remove(question_id);
+            }
             self.canceled.lock().await.push(question_id.to_string());
         }
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {
@@ -1737,6 +1859,10 @@ mod tests {
             if let Some(tx) = self.pending.lock().await.remove(question_id) {
                 let _ = tx.send(outcome);
             }
+        }
+
+        async fn answer_during_cancel(&self, outcome: QuestionOutcome) {
+            *self.answer_during_cancel.lock().await = Some(outcome);
         }
     }
 
@@ -1954,6 +2080,7 @@ mod tests {
             Arc::new(StaticParentLookup(parent_conversation)),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -1978,6 +2105,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             feedback,
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -1993,6 +2121,14 @@ mod tests {
         tokens: Arc<TokenRegistry>,
         questions: Arc<StubQuestion>,
     ) -> Arc<DelegationListener> {
+        make_question_listener_with_config(tokens, questions, QuestionRuntimeConfig::new())
+    }
+
+    fn make_question_listener_with_config(
+        tokens: Arc<TokenRegistry>,
+        questions: Arc<StubQuestion>,
+        question_config: QuestionRuntimeConfig,
+    ) -> Arc<DelegationListener> {
         let broker = Arc::new(DelegationBroker::new(
             Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
             Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
@@ -2003,6 +2139,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             questions,
+            question_config,
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2027,6 +2164,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             session_info,
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -2053,6 +2191,7 @@ mod tests {
             Arc::new(StaticParentLookup(parent_conversation)),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             authoring,
@@ -2078,6 +2217,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
@@ -3267,6 +3407,39 @@ mod tests {
     }
 
     use crate::acp::question::QuestionAnsweredItem;
+    use crate::acp::question::{QuestionConfig, QuestionRuntimeConfig};
+
+    async fn wait_for_question_registration(questions: &StubQuestion, expected: usize) {
+        for _ in 0..64 {
+            if questions.registered.lock().await.len() >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("问题注册未在有限等待内完成");
+    }
+
+    async fn read_paused_response(client: &mut tokio::io::DuplexStream) -> BrokerResponse {
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            read_frame::<_, BrokerResponse>(client),
+        );
+        tokio::pin!(response);
+        for _ in 0..8 {
+            tokio::select! {
+                biased;
+                result = &mut response => {
+                    return result.expect("读取提问响应超时").expect("读取提问响应失败");
+                }
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        response
+            .await
+            .expect("读取提问响应超时")
+            .expect("读取提问响应失败")
+    }
 
     /// An `Ask` registers the question, parks, and — once the user answers —
     /// writes the `{ answers, declined }` envelope back over the same socket.
@@ -3299,9 +3472,7 @@ mod tests {
         assert!(early.is_err(), "ask must block until the user answers");
 
         // Wait for the stub to record the registration, then answer it.
-        while questions.registered.lock().await.is_empty() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        wait_for_question_registration(&questions, 1).await;
         assert_eq!(questions.registered.lock().await[0].0, "parent-conn");
         questions
             .answer(
@@ -3318,7 +3489,13 @@ mod tests {
             )
             .await;
 
-        let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
+        let resp: BrokerResponse = tokio::time::timeout(
+            Duration::from_secs(1),
+            read_frame(&mut client),
+        )
+        .await
+        .expect("提问回答读取超时")
+        .expect("提问回答读取失败");
         server_task.await.unwrap();
         assert_eq!(resp.outcome["declined"], false);
         assert_eq!(resp.outcome["answers"][0]["selected"][0], "Incremental");
@@ -3347,9 +3524,7 @@ mod tests {
         write_frame(&mut client, &ask_msg("tok")).await.unwrap();
 
         // Let the server park inside the wait.
-        while questions.registered.lock().await.is_empty() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        wait_for_question_registration(&questions, 1).await;
         // Companion cancels: drop the request socket.
         drop(client);
 
@@ -3377,6 +3552,169 @@ mod tests {
         server_task.await.unwrap();
         assert_eq!(resp.outcome["declined"], true);
         assert!(questions.registered.lock().await.is_empty());
+    }
+
+    fn default_config() -> QuestionConfig {
+        QuestionConfig {
+            enabled: true,
+            wait_timeout_minutes: 10,
+            retry_count: 3,
+            auto_select_first_on_timeout: true,
+        }
+    }
+
+    fn incremental_outcome() -> QuestionOutcome {
+        QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: "Which approach?".into(),
+                header: "Approach".into(),
+                multi_select: false,
+                selected: vec!["Incremental".into()],
+            }],
+            declined: false,
+        }
+    }
+
+    fn user_answer_outcome() -> QuestionOutcome {
+        QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: "Which approach?".into(),
+                header: "Approach".into(),
+                multi_select: false,
+                selected: vec!["Rewrite".into()],
+            }],
+            declined: false,
+        }
+    }
+
+    async fn start_ask_round_trip(
+        config: QuestionConfig,
+    ) -> (Arc<DelegationListener>, Arc<StubQuestion>, tokio::io::DuplexStream) {
+        let questions = Arc::new(StubQuestion::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let runtime_config = QuestionRuntimeConfig::new();
+        runtime_config.set(config).await;
+        let listener = make_question_listener_with_config(
+            tokens,
+            questions.clone(),
+            runtime_config,
+        );
+        let (mut client, mut server) = duplex(8 * 1024);
+        let listener_for_task = listener.clone();
+        tokio::spawn(async move {
+            listener_for_task.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut client, &ask_msg("tok")).await.unwrap();
+        (listener, questions, client)
+    }
+
+    async fn run_ask_round_trip(
+        config: QuestionConfig,
+    ) -> (BrokerResponse, usize, Vec<String>) {
+        let timeout = Duration::from_secs(u64::from(config.wait_timeout_minutes) * 60);
+        let attempts = config.retry_count.saturating_add(1);
+        let (_listener, questions, mut client) = start_ask_round_trip(config).await;
+        wait_for_question_registration(&questions, 1).await;
+        for _ in 0..=attempts {
+            tokio::task::yield_now().await;
+            tokio::time::advance(timeout).await;
+        }
+        let response = read_paused_response(&mut client).await;
+        let registered = questions.registered.lock().await.len();
+        let canceled = questions.canceled.lock().await.clone();
+        (response, registered, canceled)
+    }
+
+    #[tokio::test]
+    async fn ask_retries_after_timeout_then_returns_first_options() {
+        tokio::time::pause();
+        let (response, registered, canceled) = run_ask_round_trip(QuestionConfig {
+            wait_timeout_minutes: 1,
+            retry_count: 1,
+            ..default_config()
+        })
+        .await;
+        assert_eq!(registered, 2);
+        assert_eq!(canceled, vec!["q-1", "q-2"]);
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Incremental");
+        assert_eq!(response.outcome["declined"], false);
+    }
+
+    #[tokio::test]
+    async fn ask_user_answer_wins_over_timeout() {
+        tokio::time::pause();
+        let (listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            wait_timeout_minutes: 1,
+            retry_count: 0,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        questions.answer("q-1", user_answer_outcome()).await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        let response = read_paused_response(&mut client).await;
+        drop(listener);
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+    }
+
+    #[tokio::test]
+    async fn ask_answer_arriving_during_timeout_cancel_wins() {
+        tokio::time::pause();
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            wait_timeout_minutes: 1,
+            retry_count: 0,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        questions.answer_during_cancel(user_answer_outcome()).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+
+        let response = read_paused_response(&mut client).await;
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+        assert_eq!(
+            questions.canceled.lock().await.as_slice(),
+            &["q-1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_without_auto_select_waits_until_user_answers() {
+        tokio::time::pause();
+        let (listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        {
+            let early = tokio::time::timeout(
+                Duration::from_millis(20),
+                read_frame::<_, BrokerResponse>(&mut client),
+            );
+            tokio::pin!(early);
+            tokio::select! {
+                biased;
+                result = &mut early => panic!("提问在用户回答前提前返回: {result:?}"),
+                _ = tokio::task::yield_now() => {}
+            }
+            tokio::time::advance(Duration::from_secs(60 * 60 + 20)).await;
+            assert!(early.await.is_err());
+        }
+        questions.answer("q-1", incremental_outcome()).await;
+        let response = read_paused_response(&mut client).await;
+        drop(listener);
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Incremental");
     }
 
     // -- browser tools ------------------------------------------------------
@@ -3877,6 +4215,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),

@@ -1761,6 +1761,16 @@
     "restartRequired": "已保存，重启应用后生效。",
     "restartNow": "立即重启",
     "restartFailed": "重启失败：{message}",
+    "questionMcpTitle": "提问超时",
+    "questionMcpDescription": "提问工具等你回答的时长、超时后是否重新提问，以及等待用尽时怎么处理。",
+    "questionMcpWaitMinutes": "单次等待时长",
+    "questionMcpWaitHint": "一次提问等你回答多久算超时（1-1440 分钟）。",
+    "questionMcpRetryCount": "超时重提次数",
+    "questionMcpRetryHint": "超时的提问重新问几次（0-10 次），0 表示不重提。",
+    "questionMcpAutoSelect": "超时后自动选第一个选项",
+    "questionMcpAutoSelectHint": "等待时长和重提次数都用尽后，直接选第一个选项，让智能体继续往下做。",
+    "questionMcpInfiniteWait": "已关闭自动选择：没人回答的提问会一直等下去，上面的等待时长和重提次数不再起作用。",
+    "questionMcpSaveFailed": "保存提问配置失败：{message}",
     "loadFailed": "加载失败：{message}"
   },
   "CollaborationSettings": {

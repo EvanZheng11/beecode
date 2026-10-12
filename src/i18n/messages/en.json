@@ -1761,6 +1761,16 @@
     "restartRequired": "Saved. Restart the app for the change to take effect.",
     "restartNow": "Restart now",
     "restartFailed": "Failed to restart: {message}",
+    "questionMcpTitle": "Question timeouts",
+    "questionMcpDescription": "How long the ask-your-question tool waits for your answer, whether a timed-out question is asked again, and what happens when the wait runs out.",
+    "questionMcpWaitMinutes": "Question MCP wait time",
+    "questionMcpWaitHint": "How long one question waits for your answer before it counts as timed out (1-1440 minutes).",
+    "questionMcpRetryCount": "Question MCP retries",
+    "questionMcpRetryHint": "How many times a timed-out question is asked again (0-10). 0 turns the retries off.",
+    "questionMcpAutoSelect": "Auto-select the first option after timeout",
+    "questionMcpAutoSelectHint": "When the wait and the retries run out, answer with the first option so the agent can continue.",
+    "questionMcpInfiniteWait": "Auto-select is off, so an unanswered question will wait indefinitely - the wait time and the retries above have no effect.",
+    "questionMcpSaveFailed": "Failed to save question settings: {message}",
     "loadFailed": "Load failed: {message}"
   },
   "CollaborationSettings": {

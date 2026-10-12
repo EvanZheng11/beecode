@@ -1761,6 +1761,16 @@
     "restartRequired": "已儲存，需重新啟動應用程式才會生效。",
     "restartNow": "立即重新啟動",
     "restartFailed": "重新啟動失敗：{message}",
+    "questionMcpTitle": "提問逾時",
+    "questionMcpDescription": "提問工具等你回答的時長、逾時後是否重新提問，以及等待用盡時怎麼處理。",
+    "questionMcpWaitMinutes": "單次等待時間",
+    "questionMcpWaitHint": "一次提問等你回答多久算逾時（1-1440 分鐘）。",
+    "questionMcpRetryCount": "逾時重試次數",
+    "questionMcpRetryHint": "逾時的提問重新問幾次（0-10 次），0 表示不重試。",
+    "questionMcpAutoSelect": "逾時後自動選取第一個選項",
+    "questionMcpAutoSelectHint": "等待時間和重試次數都用盡後，直接選取第一個選項，讓代理繼續往下做。",
+    "questionMcpInfiniteWait": "已關閉自動選取：沒人回答的提問會一直等下去，上面的等待時間和重試次數不再生效。",
+    "questionMcpSaveFailed": "儲存提問設定失敗：{message}",
     "loadFailed": "載入失敗：{message}"
   },
   "CollaborationSettings": {

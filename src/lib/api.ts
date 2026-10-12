@@ -5363,19 +5363,46 @@ export async function submitSessionFeedback(
 
 // ─── Ask-user-question settings ────────────────────────────────────────────
 
-/** Mirror of Rust `QuestionSettings` (default ON). */
+/** Mirror of Rust `QuestionSettings` (default ON). 除开关外还带 MCP 等待策略：
+ *  一次提问等多久、超时后重提几次、等待用尽后是否自动选第一个选项。 */
 export interface QuestionSettings {
   enabled: boolean
+  /** 单次询问等待用户回答的时长（分钟）。 */
+  wait_timeout_minutes: number
+  /** 等待超时后重新询问的次数，0 表示不重提。 */
+  retry_count: number
+  /** 等待全部用尽后自动选择每个问题的第一个选项。 */
+  auto_select_first_on_timeout: boolean
 }
+
+export type QuestionPolicy = Pick<
+  QuestionSettings,
+  "wait_timeout_minutes" | "retry_count" | "auto_select_first_on_timeout"
+>
 
 export async function getQuestionSettings(): Promise<QuestionSettings> {
   return getTransport().call("get_question_settings")
 }
 
+/** 兼容调用方使用的整条提问配置写入接口。 */
 export async function setQuestionSettings(
   settings: QuestionSettings
 ): Promise<QuestionSettings> {
   return getTransport().call("set_question_settings", { settings })
+}
+
+/** 只更新提问开关，后端会合并当前等待策略。 */
+export async function updateQuestionEnabled(
+  enabled: boolean
+): Promise<QuestionSettings> {
+  return getTransport().call("update_question_enabled", { enabled })
+}
+
+/** 只更新三项 MCP 等待策略，后端会合并当前开关。 */
+export async function updateQuestionPolicy(
+  policy: QuestionPolicy
+): Promise<QuestionSettings> {
+  return getTransport().call("update_question_policy", { policy })
 }
 
 // ─── Get-session-info settings ─────────────────────────────────────────────

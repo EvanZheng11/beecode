@@ -47,6 +47,7 @@ import { subscribe } from "@/lib/platform"
 import {
   BROWSER_TOOLS_SETTINGS_CHANGED_EVENT,
   CHAT_AUTHORING_SETTINGS_CHANGED_EVENT,
+  QUESTION_SETTINGS_CHANGED_EVENT,
 } from "@/lib/types"
 import {
   getComputerToolsSettings,
@@ -65,10 +66,11 @@ import {
   setBrowserToolsSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
-  setQuestionSettings,
   setSessionInfoSettings,
+  updateQuestionEnabled,
   type BrowserToolsSettings,
   type ChatAuthoringSettings,
+  type QuestionSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -155,7 +157,7 @@ export function AgentToolsSettingsSection() {
    * while they were in flight, yields that record's fields to the broadcast —
    * that read is older than it. A broadcast about one record says nothing
    * about another's read. */
-  const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0 })
+  const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0, question: 0 })
 
   useEffect(() => {
     let cancelled = false
@@ -179,9 +181,9 @@ export function AgentToolsSettingsSection() {
       if (feedback.status === "fulfilled")
         next.feedback = feedback.value.enabled
       else failures.push(toErrorMessage(feedback.reason))
-      if (question.status === "fulfilled")
+      if (question.status === "fulfilled") {
         next.question = question.value.enabled
-      else failures.push(toErrorMessage(question.reason))
+      } else failures.push(toErrorMessage(question.reason))
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
       else failures.push(toErrorMessage(sessionInfo.reason))
@@ -211,6 +213,7 @@ export function AgentToolsSettingsSection() {
           ? { browserTools: prev.browserTools, browserEval: prev.browserEval }
           : {}),
         ...(moved.computer !== gen.computer ? { computer: prev.computer } : {}),
+        ...(moved.question !== gen.question ? { question: prev.question } : {}),
       })
       setValues(keepBroadcast)
       setBaseline(keepBroadcast)
@@ -348,6 +351,40 @@ export function AgentToolsSettingsSection() {
     }
   }, [])
 
+  /**
+   * 提问记录同样是两个编辑者：这块面板写开关，常规设置页写 MCP 等待策略，两边
+   * 都整条记录写回。没有这次收敛，一边的保存会静默打回另一边刚写好的值 —— 而
+   * 等待策略在这块面板上根本不显示，用户看不到自己被回退的改动。
+   */
+  useEffect(() => {
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<QuestionSettings>(
+      QUESTION_SETTINGS_CHANGED_EVENT,
+      (remote) => {
+        remoteGenRef.current.question += 1
+        // 等待策略由常规设置页独立写入；本页只处理开关字段。
+        const current = valuesRef.current
+        const base = baselineRef.current
+        setValues((prev) =>
+          current.question === base.question
+            ? { ...prev, question: remote.enabled }
+            : prev
+        )
+        setBaseline((prev) => ({ ...prev, question: remote.enabled }))
+      }
+    )
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }, [])
+
   const dirty =
     values.feedback !== baseline.feedback ||
     values.question !== baseline.question ||
@@ -373,9 +410,10 @@ export function AgentToolsSettingsSection() {
           })
         )
       }
+      // 只提交开关字段，后端在统一写入路径中合并当前等待策略。
       if (values.question !== baseline.question) {
         writes.push(
-          setQuestionSettings({ enabled: values.question }).then((applied) => ({
+          updateQuestionEnabled(values.question).then((applied) => ({
             question: applied.enabled,
           }))
         )

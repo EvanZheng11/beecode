@@ -645,6 +645,16 @@ export const BROWSER_TOOLS_SETTINGS_CHANGED_EVENT =
  *  Rust `DELEGATION_SETTINGS_CHANGED_EVENT`. */
 export const DELEGATION_SETTINGS_CHANGED_EVENT = "delegation-settings://changed"
 
+/** Global side-channel announcing a question-settings write (payload is the
+ *  full `QuestionSettings`). The same two-editor problem as
+ *  [CHAT_AUTHORING_SETTINGS_CHANGED_EVENT], with one twist: the record is
+ *  wider than either editor. The collaboration panel writes only `enabled`,
+ *  the General page writes the MCP wait policy, and both send the whole
+ *  record — so without this broadcast one window's save silently reverts the
+ *  other's, in fields the saving window never showed. Mirrors the Rust
+ *  `QUESTION_SETTINGS_CHANGED_EVENT`. */
+export const QUESTION_SETTINGS_CHANGED_EVENT = "question-settings://changed"
+
 /** Payload for the global `tabs://changed` side-channel that keeps every
  *  client's open-tab set in sync across desktop + browsers. Mirrors the Rust
  *  `TabsChanged` struct. The full conversation-bound tab set is sent as a

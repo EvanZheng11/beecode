@@ -1753,13 +1753,45 @@ pub fn grok_result_card_output(outcome: &QuestionOutcome) -> Value {
     serde_json::json!({ "answers": answers, "declined": outcome.declined })
 }
 
+/// MCP 提问等待用户回答的默认时长（分钟）。
+pub const DEFAULT_QUESTION_TIMEOUT_MINUTES: u32 = 10;
+/// 等待超时后重新提问的默认次数。
+pub const DEFAULT_QUESTION_RETRY_COUNT: u32 = 3;
+/// 等待时长上限（分钟）= 24 小时，防止配出“永不超时”。
+pub const MAX_QUESTION_TIMEOUT_MINUTES: u32 = 1440;
+/// 重提次数上限，防止一次提问无限循环。
+pub const MAX_QUESTION_RETRY_COUNT: u32 = 10;
+
 /// The hot-swappable feature config read at MCP injection time. Kept tiny and
 /// separate from `FeedbackConfig` / `DelegationConfig` so the three features
 /// toggle independently — `codeg-mcp` is injected when ANY is enabled, and each
 /// tool is listed only when its own feature is on.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// 除开关外还带一组“等待策略”：一次 `ask_user_question` 等多久、超时后重提几次、
+/// 等待全部用尽时是否自动选第一个选项。一次提问开始时用
+/// [`QuestionRuntimeConfig::snapshot`] 取一份克隆，本次提问期间不再变化。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuestionConfig {
     pub enabled: bool,
+    /// 单次询问等待用户回答的时长（分钟）。
+    pub wait_timeout_minutes: u32,
+    /// 等待超时后重新询问的次数，0 表示不重提。
+    pub retry_count: u32,
+    /// 等待全部用尽后自动选择每个问题的第一个选项，而不是继续等待。
+    pub auto_select_first_on_timeout: bool,
+}
+
+impl Default for QuestionConfig {
+    /// `enabled` 沿用原语义（运行时默认关闭，由持久化配置在启动时打开）；
+    /// 等待策略给默认值，这样尚未应用持久化配置的调用方也能读到可用的一组值。
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            wait_timeout_minutes: DEFAULT_QUESTION_TIMEOUT_MINUTES,
+            retry_count: DEFAULT_QUESTION_RETRY_COUNT,
+            auto_select_first_on_timeout: true,
+        }
+    }
 }
 
 /// Shared, hot-swappable handle to [`QuestionConfig`]. Cloned into
@@ -3134,7 +3166,11 @@ mod tests {
     async fn runtime_config_hot_swaps() {
         let cfg = QuestionRuntimeConfig::new();
         assert!(!cfg.is_enabled().await);
-        cfg.set(QuestionConfig { enabled: true }).await;
+        cfg.set(QuestionConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .await;
         assert!(cfg.is_enabled().await);
     }
 

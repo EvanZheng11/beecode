@@ -1761,6 +1761,16 @@
     "restartRequired": "保存しました。再起動後に反映されます。",
     "restartNow": "今すぐ再起動",
     "restartFailed": "再起動に失敗しました: {message}",
+    "questionMcpTitle": "質問のタイムアウト",
+    "questionMcpDescription": "質問ツールが回答を待つ長さ、タイムアウトした質問を再び尋ねるかどうか、待ち時間を使い切ったときの動作を決めます。",
+    "questionMcpWaitMinutes": "1 回あたりの待ち時間",
+    "questionMcpWaitHint": "1 つの質問が回答を待つ上限（1〜1440 分）。",
+    "questionMcpRetryCount": "タイムアウト後の再質問回数",
+    "questionMcpRetryHint": "タイムアウトした質問を再び尋ねる回数（0〜10 回）。0 で再質問しません。",
+    "questionMcpAutoSelect": "タイムアウト後に最初の選択肢を自動選択",
+    "questionMcpAutoSelectHint": "待ち時間と再質問を使い切ったら、最初の選択肢で答えてエージェントに続けさせます。",
+    "questionMcpInfiniteWait": "自動選択がオフのため、回答のない質問は無期限に待ち続けます。上の待ち時間と再質問回数は効きません。",
+    "questionMcpSaveFailed": "質問設定を保存できませんでした：{message}",
     "loadFailed": "読み込みに失敗しました: {message}"
   },
   "CollaborationSettings": {
