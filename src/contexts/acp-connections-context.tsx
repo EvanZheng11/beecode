@@ -1265,13 +1265,21 @@ function extractPermissionToolKind(toolCall: unknown): string | null {
 }
 
 /**
- * Extract the free-text question for the LEGACY `QuestionDialog` from a tool
- * call's raw input — gated on a singular `question` STRING field. Exported so a
- * regression test can prove the new multiple-choice `ask_user_question` tool
- * (whose input is `{ questions: [...] }`, plural array) never trips this legacy
- * path even though tool-name normalization classifies it as "question".
+ * 从工具调用输入中提取纯文本提问。
+ *
+ * 可视化提问只有在 MCP 超时后才允许回退到首个 `questions[]` 条目，正常
+ * 完成时不能再弹出一遍旧的文本输入框。
  */
-export function extractQuestionText(rawInput: string | null): string | null {
+const MCP_QUESTION_TIMEOUT_RE = /MCP error\s+-32001\s*:\s*Request timed out/i
+
+function isMcpQuestionTimeout(rawOutput: string | null): boolean {
+  return MCP_QUESTION_TIMEOUT_RE.test(rawOutput ?? "")
+}
+
+export function extractQuestionText(
+  rawInput: string | null,
+  rawOutput: string | null = null
+): string | null {
   if (!rawInput) return null
   try {
     const parsed = JSON.parse(rawInput)
@@ -1282,8 +1290,22 @@ export function extractQuestionText(rawInput: string | null): string | null {
     ) {
       return parsed.question
     }
+    if (
+      isMcpQuestionTimeout(rawOutput) &&
+      parsed &&
+      typeof parsed === "object" &&
+      Array.isArray(parsed.questions)
+    ) {
+      const firstQuestion = parsed.questions.find(
+        (item: unknown) =>
+          item &&
+          typeof item === "object" &&
+          typeof (item as { question?: unknown }).question === "string"
+      ) as { question: string } | undefined
+      return firstQuestion?.question ?? null
+    }
   } catch {
-    // not JSON, try using rawInput as-is if it looks like a question
+    // 输入不是 JSON 时保留旧路径，不猜测问题内容。
   }
   return null
 }
@@ -5392,8 +5414,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 meta: block.info.meta,
               })
               if (normalized === "question") {
-                const questionText = extractQuestionText(block.info.raw_input)
+                const rawOutput = [
+                  block.info.content ?? "",
+                  ...block.info.raw_output_chunks,
+                ].join("\n")
+                const questionText = extractQuestionText(
+                  block.info.raw_input,
+                  rawOutput
+                )
                 if (questionText) {
+                  if (isMcpQuestionTimeout(rawOutput)) {
+                    console.warn(
+                      "[AcpConnections] 可视化提问 MCP 超时，恢复为纯文本提问",
+                      { contextKey, toolCallId: block.info.tool_call_id }
+                    )
+                  }
                   dispatch({
                     type: "SET_PENDING_QUESTION",
                     contextKey,

@@ -6,6 +6,7 @@ import {
   AcpConnectionsProvider,
   STREAM_FLUSH_FRAME_MS,
   STREAM_FLUSH_MAX_MS,
+  extractQuestionText,
   useAcpActions,
   useConnectionStore,
 } from "@/contexts/acp-connections-context"
@@ -29,6 +30,75 @@ import type {
   SessionConfigOptionInfo,
   UserMessageBlock,
 } from "@/lib/types"
+
+describe("可视化提问超时后的文本兜底", () => {
+  const visualQuestion = JSON.stringify({
+    questions: [{ question: "应该选择哪种实现方式？" }],
+  })
+
+  it("MCP 超时后恢复首个问题为纯文本提问", () => {
+    expect(
+      extractQuestionText(
+        visualQuestion,
+        "Error: MCP error -32001: Request timed out"
+      )
+    ).toBe("应该选择哪种实现方式？")
+  })
+
+  it("可视化提问正常完成时不重复恢复纯文本提问", () => {
+    expect(
+      extractQuestionText(visualQuestion, "The user answered your question(s):")
+    ).toBeNull()
+  })
+})
+
+describe("AcpConnectionsProvider 可视化提问超时事件", () => {
+  it("回收选择卡后保留一个可提交的纯文本问题", async () => {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+
+    const handlers = latestAttachHandlers()
+    const rawInput = JSON.stringify({
+      questions: [{ question: "应该选择哪种实现方式？" }],
+    })
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "tool_call",
+      tool_call_id: "ask-1",
+      title: "mcp__codeg-mcp__ask_user_question",
+      kind: "other",
+      status: "completed",
+      content: null,
+      raw_input: rawInput,
+      raw_output: "Error: MCP error -32001: Request timed out",
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "turn_complete",
+      session_id: "sess-1",
+      stop_reason: "end_turn",
+    })
+
+    expect(h.store!.getConnection(TAB)).toMatchObject({
+      pendingAskQuestion: null,
+      pendingQuestion: {
+        tool_call_id: "ask-1",
+        question: "应该选择哪种实现方式？",
+      },
+    })
+  })
+})
 
 // Shared spies + a stub EventStream. `vi.hoisted` runs before the mock
 // factories so they can close over this state. Mocking `getEventStream` to a
