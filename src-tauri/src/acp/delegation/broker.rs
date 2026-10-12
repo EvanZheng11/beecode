@@ -564,9 +564,11 @@ impl PendingInner {
     /// The just-inserted entry is never the victim: a single result is capped
     /// at [`COMPLETED_TEXT_CAP`] (256 KiB), far below any MB-scale budget, so
     /// the newest result always survives for the LLM's immediate
-    /// `get_delegation_status`. The caller does the atomic `running.remove` +
-    /// this insert under one lock, then notifies long-poll waiters AFTER
-    /// releasing the lock.
+    /// `get_delegation_status`.
+    ///
+    /// 对正常 `complete_call` 的 running → completed 路径，此插入发生在
+    /// pending 锁内；调用方释放锁后立即通知状态长轮询，再执行父级 meta、
+    /// 完成事件和子连接收尾。
     fn insert_completed(&mut self, call_id: &str, task: CompletedTask) {
         let parent = task.parent_connection_id.clone();
         let task_bytes = task.text.as_ref().map_or(0, |t| t.len());
@@ -1422,8 +1424,9 @@ pub struct DelegationBroker {
     tool_calls: Arc<ToolCallTracker>,
     pre_canceled_handles: Arc<PreCanceledHandles>,
     config: Arc<Mutex<DelegationConfig>>,
-    /// Woken after every terminal `record_completed` so a `get_delegation_status`
-    /// long-poll wakes the instant its task finishes instead of busy-polling.
+    /// 在终态写入 `completed` 缓存后唤醒所有状态长轮询；正常
+    /// `complete_call` 会在释放 `pending.inner` 锁后、父级 meta/事件/子连接
+    /// 收尾前通知，因此 waiter 不会被慢收尾阻塞。
     result_notify: Arc<Notify>,
     /// How long an already-reported blocking prompt stays suppressed —
     /// [`BLOCK_RESURFACE_INTERVAL`] in production. A field only so tests can
@@ -2902,9 +2905,9 @@ impl DelegationBroker {
     /// Called by the child-session lifecycle subscriber on `TurnComplete`
     /// (success path) or by error mappers (failure path).
     ///
-    /// Migrates the task from `running` into `completed` (atomically, under one
-    /// lock) and then finalizes (terminal meta + `DelegationCompleted` event +
-    /// child teardown) and wakes any `get_delegation_status` long-poll.
+    /// 将任务从 `running` 原子迁移到 `completed`，释放 pending 锁后立即
+    /// 唤醒状态 waiter，再执行终态 meta、`DelegationCompleted` 事件和子连接
+    /// 断开。若任务仍处于 setup 保留窗口，则继续按原规则缓存早到完成。
     ///
     /// If no entry is in `running` under `call_id`, the outcome is buffered for
     /// a racing `start_delegation` to drain at registration — but ONLY while the
@@ -2945,6 +2948,20 @@ impl DelegationBroker {
             }
         };
         if let Some((task, duration_ms)) = task {
+            let terminal_status = match &outcome {
+                DelegationOutcome::Ok(_) => "completed",
+                DelegationOutcome::Err { code, .. } if code == "canceled" => "canceled",
+                DelegationOutcome::Err { .. } => "failed",
+            };
+            tracing::debug!(
+                task_id = %task.task_id,
+                parent_connection_id = %task.parent_connection_id,
+                terminal_status = %terminal_status,
+                wakeup_phase = "completed_cache_visible",
+                finalize_phase = "pending",
+                "委托已进入 completed 缓存，先唤醒状态等待再执行终态收尾"
+            );
+            self.result_notify.notify_waiters();
             self.finalize_delegation(
                 &task.parent_connection_id,
                 &task.parent_tool_use_id,
@@ -2957,7 +2974,14 @@ impl DelegationBroker {
                 &task.task_id,
             )
             .await;
-            self.result_notify.notify_waiters();
+            tracing::debug!(
+                task_id = %task.task_id,
+                parent_connection_id = %task.parent_connection_id,
+                terminal_status = %terminal_status,
+                wakeup_phase = "completed_cache_visible",
+                finalize_phase = "finished",
+                "委托终态收尾完成"
+            );
         }
     }
 
@@ -4630,6 +4654,60 @@ mod tests {
     use crate::acp::delegation::types::DelegationSuccess;
     use crate::models::AgentType;
 
+    /// 测试专用的实时回复查询器：将每次 `blocked_on` 探测停在门闩上，
+    /// 让测试精确控制状态长轮询何时完成阻塞提示检查。进入时发送
+    /// `entered` 信号；返回 `None` 前等待 `release`（确实处于工作中）。
+    struct StatusProbeGate {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl ChildLiveReplyLookup for StatusProbeGate {
+        async fn latest_reply(&self, _child_connection_id: &str) -> Option<String> {
+            None
+        }
+
+        async fn blocked_on(&self, _child_connection_id: &str) -> Option<BlockedOn> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            None
+        }
+    }
+
+    /// 测试专用的 meta 写入器：终态 `completed` meta 写入完成后才停住，
+    /// 模拟较慢的收尾尾段（事件发送和断开连接仍未完成）。非终态写入
+    /// （`start_delegation` 产生的 `running` meta）直接通过，因此只有
+    /// 终态门闩可控。
+    struct SlowFinalizeMetaWriter {
+        inner: Arc<MockMetaWriter>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl DelegationMetaWriter for SlowFinalizeMetaWriter {
+        async fn write_meta(
+            &self,
+            parent_connection_id: &str,
+            parent_tool_use_id: &str,
+            meta: serde_json::Value,
+        ) {
+            let is_terminal_completed = meta
+                .get("codeg.delegation")
+                .and_then(|value| value.get("status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("completed");
+            self.inner
+                .write_meta(parent_connection_id, parent_tool_use_id, meta)
+                .await;
+            if is_terminal_completed {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        }
+    }
+
     /// Test-only `ConversationDepthLookup` that resolves against a flat
     /// (id, parent_id) table. Unknown ids return `Ok(None)` to keep test
     /// setup small.
@@ -4831,6 +4909,170 @@ mod tests {
         let report = waiter.await.unwrap();
         assert_eq!(report.status, TaskStatus::Completed);
         assert_eq!(report.text.as_deref(), Some("done"));
+    }
+
+    /// 回归测试：状态长轮询必须在 running → completed 迁移时唤醒，不能等
+    /// 终态收尾尾段完成后才唤醒。等待器停住时保持慢收尾门闩关闭；正确的
+    /// `complete_call` 会在执行 `finalize_delegation(...)` 前通知
+    /// `result_notify`，因此终态 meta 仍在写入时等待器就能返回 `Completed`。
+    /// 旧顺序（收尾后通知）会让等待器一直停到超时。
+    #[tokio::test]
+    async fn complete_call_wakes_status_waiter_before_slow_finalize() {
+        async fn cleanup_tasks<T>(
+            status_probe_release: &Notify,
+            finalize_release: &Notify,
+            waiter: &mut tokio::task::JoinHandle<T>,
+            completion: &mut Option<tokio::task::JoinHandle<()>>,
+        ) {
+            status_probe_release.notify_waiters();
+            finalize_release.notify_waiters();
+            waiter.abort();
+            let _ = waiter.await;
+            if let Some(completion) = completion.take() {
+                completion.abort();
+                let _ = completion.await;
+            }
+        }
+
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-conn-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+
+        let status_probe_entered = Arc::new(Notify::new());
+        let status_probe_release = Arc::new(Notify::new());
+        let finalize_entered = Arc::new(Notify::new());
+        let finalize_release = Arc::new(Notify::new());
+        let writer = Arc::new(MockMetaWriter::new());
+        let emitter = Arc::new(MockEventEmitter::new());
+        let broker = DelegationBroker::with_writers(
+            mock.clone() as Arc<dyn ConnectionSpawner>,
+            shallow_lookup(),
+            Arc::new(SlowFinalizeMetaWriter {
+                inner: writer.clone(),
+                entered: finalize_entered.clone(),
+                release: finalize_release.clone(),
+            }) as Arc<dyn DelegationMetaWriter>,
+            emitter.clone() as Arc<dyn DelegationEventEmitter>,
+        )
+        .with_live_reply_lookup(Arc::new(StatusProbeGate {
+            entered: status_probe_entered.clone(),
+            release: status_probe_release.clone(),
+        }) as Arc<dyn ChildLiveReplyLookup>);
+        enable_delegation(&broker).await;
+
+        let task_id = broker
+            .start_delegation(request(1, "pt-wakeup"))
+            .await
+            .task_id
+            .expect("start_delegation must return a task id");
+
+        let mut waiter = {
+            let broker = broker.clone();
+            let task_id = task_id.clone();
+            tokio::spawn(async move {
+                broker
+                    .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Infinite)
+                    .await
+            })
+        };
+        let status_probe_result =
+            tokio::time::timeout(Duration::from_secs(1), status_probe_entered.notified()).await;
+        if status_probe_result.is_err() {
+            let mut completion = None;
+            cleanup_tasks(
+                &status_probe_release,
+                &finalize_release,
+                &mut waiter,
+                &mut completion,
+            )
+            .await;
+            panic!("状态探测器未能在超时前进入");
+        }
+
+        let call_id = task_id.clone();
+        let mut completion = Some({
+            let broker = broker.clone();
+            tokio::spawn(async move {
+                broker
+                    .complete_call(
+                        &call_id,
+                        DelegationOutcome::Ok(DelegationSuccess {
+                            text: "done".into(),
+                            child_conversation_id: 42,
+                            child_agent_type: AgentType::ClaudeCode,
+                            turn_count: 1,
+                            duration_ms: 0,
+                            token_usage: None,
+                        }),
+                    )
+                    .await;
+            })
+        });
+        let finalize_result =
+            tokio::time::timeout(Duration::from_secs(1), finalize_entered.notified()).await;
+        if finalize_result.is_err() {
+            cleanup_tasks(
+                &status_probe_release,
+                &finalize_release,
+                &mut waiter,
+                &mut completion,
+            )
+            .await;
+            panic!("终态收尾未能在超时前进入");
+        }
+        status_probe_release.notify_one();
+
+        let waiter_result = tokio::time::timeout(Duration::from_secs(1), &mut waiter).await;
+        let report = match waiter_result {
+            Ok(joined) => joined.expect("status waiter task must not panic"),
+            Err(_) => {
+                cleanup_tasks(
+                    &status_probe_release,
+                    &finalize_release,
+                    &mut waiter,
+                    &mut completion,
+                )
+                .await;
+                panic!("状态等待器未能在终态收尾完成前唤醒");
+            }
+        };
+
+        assert_eq!(report.status, TaskStatus::Completed);
+        assert_eq!(report.text.as_deref(), Some("done"));
+        assert!(
+            !completion
+                .as_ref()
+                .expect("completion task must still be active")
+                .is_finished(),
+            "complete_call must still be blocked in slow finalization"
+        );
+        assert_eq!(emitter.count().await, 0);
+        assert!(mock.disconnects.lock().await.is_empty());
+
+        finalize_release.notify_one();
+        completion
+            .take()
+            .expect("completion task must still be active")
+            .await
+            .expect("completion task must finish after finalization release");
+
+        let cached = broker
+            .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Immediate)
+            .await;
+        assert_eq!(cached.status, TaskStatus::Completed);
+        assert_eq!(cached.text.as_deref(), Some("done"));
+
+        let meta_calls = writer.snapshot().await;
+        assert_eq!(meta_calls.len(), 2);
+        assert_eq!(
+            meta_calls[1].meta["codeg.delegation"]["status"].as_str(),
+            Some("completed")
+        );
+        assert_eq!(emitter.count().await, 1);
+        assert_eq!(
+            mock.disconnects.lock().await.as_slice(),
+            &["child-conn-1".to_string()]
+        );
     }
 
     /// A running snapshot upgrades its bare `"Running."` message with the child's
