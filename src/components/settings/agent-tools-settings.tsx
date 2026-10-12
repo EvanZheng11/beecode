@@ -66,8 +66,8 @@ import {
   setBrowserToolsSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
-  setQuestionSettings,
   setSessionInfoSettings,
+  updateQuestionEnabled,
   type BrowserToolsSettings,
   type ChatAuthoringSettings,
   type QuestionSettings,
@@ -158,8 +158,6 @@ export function AgentToolsSettingsSection() {
    * that read is older than it. A broadcast about one record says nothing
    * about another's read. */
   const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0, question: 0 })
-  /** 最近一次读到的提问整条配置（含 MCP 等待策略），保存时用它补齐只改开关的那次写入。 */
-  const questionSettingsRef = useRef<QuestionSettings | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -185,11 +183,6 @@ export function AgentToolsSettingsSection() {
       else failures.push(toErrorMessage(feedback.reason))
       if (question.status === "fulfilled") {
         next.question = question.value.enabled
-        // 广播若落在这次读取之前，广播才是新的事实：整条记录（含等待策略）
-        // 以它为准，否则下一次保存开关会把别处刚改的时长写回旧值。
-        if (remoteGenRef.current.question === gen.question) {
-          questionSettingsRef.current = question.value
-        }
       } else failures.push(toErrorMessage(question.reason))
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
@@ -370,9 +363,7 @@ export function AgentToolsSettingsSection() {
       QUESTION_SETTINGS_CHANGED_EVENT,
       (remote) => {
         remoteGenRef.current.question += 1
-        // 等待策略只由常规设置页写：整条以广播为准，保存开关时才能原样写回。
-        // 开关本身跟随广播，除非用户已经动过它（那他的编辑在保存时胜出）。
-        questionSettingsRef.current = remote
+        // 等待策略由常规设置页独立写入；本页只处理开关字段。
         const current = valuesRef.current
         const base = baselineRef.current
         setValues((prev) =>
@@ -419,19 +410,12 @@ export function AgentToolsSettingsSection() {
           })
         )
       }
-      // 提问配置还带等待策略字段，保存时用最近读到的整条记录补齐，只改开关；
-      // 否则一次开关翻转会把别处改过的等待时长/重提次数打回默认值。尚未读到过
-      // 该记录（读取失败）时不写，避免用臆测的值覆盖。
-      const questionSettings = questionSettingsRef.current
-      if (values.question !== baseline.question && questionSettings) {
+      // 只提交开关字段，后端在统一写入路径中合并当前等待策略。
+      if (values.question !== baseline.question) {
         writes.push(
-          setQuestionSettings({
-            ...questionSettings,
-            enabled: values.question,
-          }).then((applied) => {
-            questionSettingsRef.current = applied
-            return { question: applied.enabled }
-          })
+          updateQuestionEnabled(values.question).then((applied) => ({
+            question: applied.enabled,
+          }))
         )
       }
       if (values.sessionInfo !== baseline.sessionInfo) {

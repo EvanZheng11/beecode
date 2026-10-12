@@ -1325,6 +1325,18 @@ enum AskWaitResult {
     PeerClosed,
 }
 
+fn question_answer_result(
+    outcome: Result<QuestionOutcome, tokio::sync::oneshot::error::RecvError>,
+) -> AskWaitResult {
+    match outcome {
+        Ok(outcome) => AskWaitResult::Answered(outcome),
+        Err(_) => AskWaitResult::Answered(QuestionOutcome {
+            answers: Vec::new(),
+            declined: true,
+        }),
+    }
+}
+
 async fn wait_for_question_answer<C>(
     conn: &mut C,
     questions: &Arc<dyn SessionQuestionAccess>,
@@ -1336,49 +1348,51 @@ where
     C: AsyncReadExt + Unpin,
 {
     let question_id = reg.question_id;
-    let answer_rx = reg.answer_rx;
+    let mut answer_rx = reg.answer_rx;
     let mut probe = [0u8; 1];
-    let answer = async { answer_rx.await.ok() };
-    tokio::pin!(answer);
     let peer_closed = conn.read(&mut probe);
     tokio::pin!(peer_closed);
 
-    let result = if config.auto_select_first_on_timeout {
+    let mut result = if config.auto_select_first_on_timeout {
         let timeout = tokio::time::sleep(std::time::Duration::from_secs(
             u64::from(config.wait_timeout_minutes) * 60,
         ));
         tokio::pin!(timeout);
         tokio::select! {
             biased;
-            outcome = &mut answer => match outcome {
-                Some(outcome) => AskWaitResult::Answered(outcome),
-                None => AskWaitResult::Answered(QuestionOutcome {
-                    answers: Vec::new(),
-                    declined: true,
-                }),
-            },
+            outcome = &mut answer_rx => question_answer_result(outcome),
             _ = &mut peer_closed => AskWaitResult::PeerClosed,
             _ = &mut timeout => AskWaitResult::TimedOut,
         }
     } else {
         tokio::select! {
             biased;
-            outcome = &mut answer => match outcome {
-                Some(outcome) => AskWaitResult::Answered(outcome),
-                None => AskWaitResult::Answered(QuestionOutcome {
-                    answers: Vec::new(),
-                    declined: true,
-                }),
-            },
+            outcome = &mut answer_rx => question_answer_result(outcome),
             _ = &mut peer_closed => AskWaitResult::PeerClosed,
         }
     };
+
+    if matches!(result, AskWaitResult::TimedOut) {
+        // 超时已经就绪时再无阻塞地取一次答案，覆盖 select 与取消之间的最短窗口。
+        if let Ok(outcome) = answer_rx.try_recv() {
+            result = AskWaitResult::Answered(outcome);
+        }
+    }
 
     if matches!(result, AskWaitResult::TimedOut | AskWaitResult::PeerClosed) {
         questions
             .cancel_question(parent_connection_id, &question_id)
             .await;
     }
+
+    if matches!(result, AskWaitResult::TimedOut) {
+        // 取消操作与回答共用后端注册表锁；取消返回后再 drain 一次，确保先赢得
+        // 注册表条目的用户回答不会被超时分支静默丢弃。
+        if let Ok(outcome) = answer_rx.try_recv() {
+            result = AskWaitResult::Answered(outcome);
+        }
+    }
+
     result
 }
 
@@ -1803,6 +1817,7 @@ mod tests {
             Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
         >,
         canceled: tokio::sync::Mutex<Vec<String>>,
+        answer_during_cancel: tokio::sync::Mutex<Option<QuestionOutcome>>,
     }
     #[async_trait]
     impl SessionQuestionAccess for StubQuestion {
@@ -1824,7 +1839,13 @@ mod tests {
             })
         }
         async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
-            self.pending.lock().await.remove(question_id);
+            if let Some(outcome) = self.answer_during_cancel.lock().await.take() {
+                if let Some(tx) = self.pending.lock().await.remove(question_id) {
+                    let _ = tx.send(outcome);
+                }
+            } else {
+                self.pending.lock().await.remove(question_id);
+            }
             self.canceled.lock().await.push(question_id.to_string());
         }
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {
@@ -1838,6 +1859,10 @@ mod tests {
             if let Some(tx) = self.pending.lock().await.remove(question_id) {
                 let _ = tx.send(outcome);
             }
+        }
+
+        async fn answer_during_cancel(&self, outcome: QuestionOutcome) {
+            *self.answer_during_cancel.lock().await = Some(outcome);
         }
     }
 
@@ -3639,6 +3664,28 @@ mod tests {
         let response = read_paused_response(&mut client).await;
         drop(listener);
         assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+    }
+
+    #[tokio::test]
+    async fn ask_answer_arriving_during_timeout_cancel_wins() {
+        tokio::time::pause();
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            wait_timeout_minutes: 1,
+            retry_count: 0,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        questions.answer_during_cancel(user_answer_outcome()).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+
+        let response = read_paused_response(&mut client).await;
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+        assert_eq!(
+            questions.canceled.lock().await.as_slice(),
+            &["q-1".to_string()]
+        );
     }
 
     #[tokio::test]

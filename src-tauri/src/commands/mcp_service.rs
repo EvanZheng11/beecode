@@ -286,11 +286,8 @@ pub async fn set_codeg_mcp_tool_group_core(
             .await?;
         }
         "ask" => {
-            // 提问配置还带等待时长/重提次数/超时自动选首项，整条写回会把用户改过的
-            // 策略打回默认值，所以先读回当前记录，只翻转开关。
-            let mut settings = question::load_question_settings(conn).await;
-            settings.enabled = enabled;
-            question::set_question_settings_core(conn, targets.question, emitter, settings).await?;
+            question::update_question_enabled_core(conn, targets.question, emitter, enabled)
+                .await?;
         }
         "sessions" => {
             session_info::set_session_info_settings_core(

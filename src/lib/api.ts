@@ -5375,14 +5375,34 @@ export interface QuestionSettings {
   auto_select_first_on_timeout: boolean
 }
 
+export type QuestionPolicy = Pick<
+  QuestionSettings,
+  "wait_timeout_minutes" | "retry_count" | "auto_select_first_on_timeout"
+>
+
 export async function getQuestionSettings(): Promise<QuestionSettings> {
   return getTransport().call("get_question_settings")
 }
 
+/** 兼容调用方使用的整条提问配置写入接口。 */
 export async function setQuestionSettings(
   settings: QuestionSettings
 ): Promise<QuestionSettings> {
   return getTransport().call("set_question_settings", { settings })
+}
+
+/** 只更新提问开关，后端会合并当前等待策略。 */
+export async function updateQuestionEnabled(
+  enabled: boolean
+): Promise<QuestionSettings> {
+  return getTransport().call("update_question_enabled", { enabled })
+}
+
+/** 只更新三项 MCP 等待策略，后端会合并当前开关。 */
+export async function updateQuestionPolicy(
+  policy: QuestionPolicy
+): Promise<QuestionSettings> {
+  return getTransport().call("update_question_policy", { policy })
 }
 
 // ─── Get-session-info settings ─────────────────────────────────────────────

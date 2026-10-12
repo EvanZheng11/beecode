@@ -43,12 +43,12 @@ import {
   getSystemRenderingSettings,
   getSystemTerminalSettings,
   probeTerminalShellPath,
-  setQuestionSettings,
+  updateQuestionPolicy,
   updateSystemRenderingSettings,
   updateSystemTerminalSettings,
   type QuestionSettings,
 } from "@/lib/api"
-import { isDesktop, subscribe } from "@/lib/platform"
+import { isDesktop, onTransportReconnect, subscribe } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import {
   QUESTION_SETTINGS_CHANGED_EVENT,
@@ -238,6 +238,21 @@ export function GeneralSettings() {
     }
   }, [renderingSettingsLoadable])
 
+  const reconcileQuestionSettings = useCallback(async () => {
+    const questionGen = questionRemoteGenRef.current
+    try {
+      const remote = await getQuestionSettings()
+      if (questionRemoteGenRef.current !== questionGen) return
+      questionSettingsRef.current = remote
+      // 权威重读只协调本页不编辑的开关，保留三个策略输入框里的用户编辑。
+      setQuestionDraft((prev) =>
+        prev ? { ...prev, enabled: remote.enabled } : prev
+      )
+    } catch (err) {
+      console.error("[Settings] refresh question settings failed:", err)
+    }
+  }, [])
+
   useEffect(() => {
     loadSettings().catch((err) => {
       console.error("[Settings] load general settings failed:", err)
@@ -270,15 +285,23 @@ export function GeneralSettings() {
     )
       .then((fn) => {
         if (disposed) fn()
-        else unsubscribe = fn
+        else {
+          unsubscribe = fn
+          // 初次读取可能早于订阅注册；注册完成后重新读取一次权威记录。
+          void reconcileQuestionSettings()
+        }
       })
       // 传输层没就绪不该弄坏这块表单：那只是说本窗口继续用它自己读到的值。
       .catch(() => {})
+    const stopReconnect = onTransportReconnect(() => {
+      void reconcileQuestionSettings()
+    })
     return () => {
       disposed = true
       unsubscribe?.()
+      stopReconnect?.()
     }
-  }, [])
+  }, [reconcileQuestionSettings])
 
   /// Resolves to whether the row was actually written, so the caller can put
   /// back whatever it moved ahead of the save.
@@ -398,7 +421,11 @@ export function GeneralSettings() {
       }
       setSavingQuestion(true)
       try {
-        const applied = await setQuestionSettings(payload)
+        const applied = await updateQuestionPolicy({
+          wait_timeout_minutes: payload.wait_timeout_minutes,
+          retry_count: payload.retry_count,
+          auto_select_first_on_timeout: payload.auto_select_first_on_timeout,
+        })
         questionSettingsRef.current = applied
         setQuestionDraft(applied)
       } catch (err) {

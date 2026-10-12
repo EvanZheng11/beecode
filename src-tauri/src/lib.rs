@@ -1916,6 +1916,8 @@ mod tauri_app {
                 crate::commands::generative_ui::set_generative_ui_settings,
                 question_commands::get_question_settings,
                 question_commands::set_question_settings,
+                question_commands::update_question_enabled,
+                question_commands::update_question_policy,
                 session_info_commands::get_session_info_settings,
                 session_info_commands::set_session_info_settings,
                 chat_authoring_commands::get_chat_authoring_settings,

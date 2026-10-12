@@ -6,7 +6,7 @@ vi.mock("@/lib/api", () => ({
   getFeedbackSettings: vi.fn(),
   setFeedbackSettings: vi.fn(),
   getQuestionSettings: vi.fn(),
-  setQuestionSettings: vi.fn(),
+  updateQuestionEnabled: vi.fn(),
   getSessionInfoSettings: vi.fn(),
   setSessionInfoSettings: vi.fn(),
   getBrowserToolsSettings: vi.fn(),
@@ -58,7 +58,7 @@ import {
   setBrowserToolsSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
-  setQuestionSettings,
+  updateQuestionEnabled,
   setSessionInfoSettings,
 } from "@/lib/api"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -70,7 +70,7 @@ import {
 const mockGetFeedback = vi.mocked(getFeedbackSettings)
 const mockSetFeedback = vi.mocked(setFeedbackSettings)
 const mockGetQuestion = vi.mocked(getQuestionSettings)
-const mockSetQuestion = vi.mocked(setQuestionSettings)
+const mockUpdateQuestion = vi.mocked(updateQuestionEnabled)
 const mockGetSessionInfo = vi.mocked(getSessionInfoSettings)
 const mockSetSessionInfo = vi.mocked(setSessionInfoSettings)
 const mockGetBrowser = vi.mocked(getBrowserToolsSettings)
@@ -124,8 +124,7 @@ function primeBackend(
     workTasks = false,
   } = overrides
   mockGetFeedback.mockResolvedValue({ enabled: feedback })
-  // The question record now carries the MCP wait policy too; the panel never
-  // edits those fields, so a save must hand them back unchanged.
+  // 提问记录还带 MCP 等待策略；本面板只通过字段级接口更新 enabled。
   mockGetQuestion.mockResolvedValue({
     enabled: question,
     wait_timeout_minutes: 10,
@@ -142,7 +141,12 @@ function primeBackend(
     work_tasks_enabled: workTasks,
   })
   mockSetFeedback.mockImplementation(async (next) => next)
-  mockSetQuestion.mockImplementation(async (next) => next)
+  mockUpdateQuestion.mockImplementation(async (enabled) => ({
+    enabled,
+    wait_timeout_minutes: 10,
+    retry_count: 3,
+    auto_select_first_on_timeout: true,
+  }))
   mockSetSessionInfo.mockImplementation(async (next) => next)
   mockSetBrowser.mockImplementation(async (next) => next)
   mockSetChat.mockImplementation(async (next) => next)
@@ -215,12 +219,7 @@ describe("AgentToolsSettingsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => {
-      expect(mockSetQuestion).toHaveBeenCalledWith({
-        enabled: false,
-        wait_timeout_minutes: 10,
-        retry_count: 3,
-        auto_select_first_on_timeout: true,
-      })
+      expect(mockUpdateQuestion).toHaveBeenCalledWith(false)
     })
     // The other three endpoints hold values this panel never touched; writing
     // them back would republish state the user didn't ask to change.
@@ -430,9 +429,8 @@ describe("AgentToolsSettingsSection", () => {
     )
   })
 
-  /** 提问配置是一整条记录（开关 + 等待策略），常规设置页有第二个编辑者。
-   *  别处刚把等待时长改过，本窗口保存开关时必须跟着广播走：拿旧快照整条写回
-   *  会把用户刚改的时长/次数打回旧值，而他在这块面板上看不到这件事。 */
+  /** 提问配置有独立的开关和等待策略字段，常规设置页有第二个编辑者。
+   *  本窗口保存开关时走字段级接口，不会把另一窗口刚改的等待策略写回旧值。 */
   it("adopts a remote question wait-policy write instead of reverting it on save", async () => {
     primeBackend()
     renderWithIntl()
@@ -453,14 +451,7 @@ describe("AgentToolsSettingsSection", () => {
     fireEvent.click(screen.getByLabelText(LABELS.question))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
-    await waitFor(() =>
-      expect(mockSetQuestion).toHaveBeenCalledWith({
-        enabled: false,
-        wait_timeout_minutes: 20,
-        retry_count: 5,
-        auto_select_first_on_timeout: false,
-      })
-    )
+    await waitFor(() => expect(mockUpdateQuestion).toHaveBeenCalledWith(false))
   })
 
   /** A broadcast that lands while the initial reads are still in flight is the
@@ -538,7 +529,7 @@ describe("AgentToolsSettingsSection", () => {
     })
     // …and the group whose load failed is showing a default, not stored state,
     // so an untouched switch must not overwrite the backend with it.
-    expect(mockSetQuestion).not.toHaveBeenCalled()
+    expect(mockUpdateQuestion).not.toHaveBeenCalled()
   })
 
   /** The computer switch rides its own narrow endpoint: saving it moves the

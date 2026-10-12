@@ -52,7 +52,16 @@ vi.mock("@/lib/api", () => ({
     retry_count: 3,
     auto_select_first_on_timeout: true,
   })),
-  setQuestionSettings: vi.fn(async (v: unknown) => v),
+  updateQuestionPolicy: vi.fn(
+    async (v: {
+      wait_timeout_minutes: number
+      retry_count: number
+      auto_select_first_on_timeout: boolean
+    }) => ({
+      enabled: true,
+      ...v,
+    })
+  ),
   getSystemCloseBehaviorSettings: vi.fn(async () => ({
     behavior: "ask" as const,
     tray_available: true,
@@ -71,10 +80,18 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 const broadcasts = vi.hoisted(() => ({
   handlers: new Map<string, (payload: unknown) => void>(),
   unsubscribe: vi.fn(),
+  registration: null as Promise<() => void> | null,
 }))
 vi.mock("@/lib/platform", () => ({
   isDesktop: () => true,
+  onTransportReconnect: vi.fn(() => null),
   subscribe: vi.fn((event: string, handler: (payload: unknown) => void) => {
+    if (broadcasts.registration) {
+      return broadcasts.registration.then((unsubscribe) => {
+        broadcasts.handlers.set(event, handler)
+        return unsubscribe
+      })
+    }
     broadcasts.handlers.set(event, handler)
     return Promise.resolve(broadcasts.unsubscribe)
   }),
@@ -111,7 +128,7 @@ import {
   getAvailableTerminalShells,
   getQuestionSettings,
   getSystemTerminalSettings,
-  setQuestionSettings,
+  updateQuestionPolicy,
   updateSystemTerminalSettings,
 } from "@/lib/api"
 import { GeneralSettings } from "./general-settings"
@@ -142,9 +159,20 @@ describe("GeneralSettings", () => {
   beforeEach(() => {
     platform.current = "windows"
     vi.mocked(getQuestionSettings).mockClear()
-    vi.mocked(setQuestionSettings).mockClear()
+    vi.mocked(getQuestionSettings).mockImplementation(async () => ({
+      enabled: true,
+      wait_timeout_minutes: 10,
+      retry_count: 3,
+      auto_select_first_on_timeout: true,
+    }))
+    vi.mocked(updateQuestionPolicy).mockClear()
+    vi.mocked(updateQuestionPolicy).mockImplementation(async (v) => ({
+      enabled: true,
+      ...v,
+    }))
     // 处理器属于已经卸载的那次渲染，不该留给下一个用例。
     broadcasts.handlers.clear()
+    broadcasts.registration = null
   })
 
   it("mounts every section and wires each row's label to its control", async () => {
@@ -399,7 +427,7 @@ describe("GeneralSettings", () => {
   })
 
   /**
-   * 提问配置是整条记录：读取时三个策略字段一起回来，改任何一项都整条写回。
+   * 提问配置读取时带回三个策略字段；页面编辑策略时只提交这三个字段。
    * 默认值和 Rust 端 `QuestionSettings::default()` 一致（10 分钟 / 3 次 / 开启），
    * 页面必须原样显示，不能自己另起一套默认。
    */
@@ -411,14 +439,13 @@ describe("GeneralSettings", () => {
     expect(screen.getByLabelText("Question MCP retries")).toHaveValue(3)
 
     fireEvent.change(timeout, { target: { value: "20" } })
-    // 只改一项也要带着另外三项：少写一个字段后端就会把它打回默认值。
+    // 三项策略一起提交，后端会在当前开关上合并这条策略补丁。
     fireEvent.click(
       screen.getByLabelText("Auto-select the first option after timeout")
     )
 
     await waitFor(() =>
-      expect(vi.mocked(setQuestionSettings)).toHaveBeenCalledWith({
-        enabled: true,
+      expect(vi.mocked(updateQuestionPolicy)).toHaveBeenCalledWith({
         wait_timeout_minutes: 20,
         retry_count: 3,
         auto_select_first_on_timeout: false,
@@ -455,13 +482,54 @@ describe("GeneralSettings", () => {
     fireEvent.blur(timeout)
 
     await waitFor(() =>
-      expect(vi.mocked(setQuestionSettings)).toHaveBeenCalledWith({
-        enabled: false,
+      expect(vi.mocked(updateQuestionPolicy)).toHaveBeenCalledWith({
         wait_timeout_minutes: 20,
         retry_count: 3,
         auto_select_first_on_timeout: true,
       })
     )
+  })
+
+  it("订阅注册后重新读取权威提问配置且保留用户策略编辑", async () => {
+    let releaseRegistration: (unsubscribe: () => void) => void = () => {}
+    broadcasts.registration = new Promise((resolve) => {
+      releaseRegistration = resolve
+    })
+    const firstRead = {
+      enabled: true,
+      wait_timeout_minutes: 10,
+      retry_count: 3,
+      auto_select_first_on_timeout: true,
+    }
+    const authoritativeRead = {
+      enabled: false,
+      wait_timeout_minutes: 30,
+      retry_count: 9,
+      auto_select_first_on_timeout: false,
+    }
+    let reads = 0
+    vi.mocked(getQuestionSettings).mockImplementation(async () =>
+      reads++ === 0 ? firstRead : authoritativeRead
+    )
+
+    renderSettings()
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    fireEvent.change(timeout, { target: { value: "20" } })
+
+    // 广播在订阅注册前发生，因此本页收不到它；注册完成后必须重新读取权威记录。
+    await act(async () => {
+      releaseRegistration(broadcasts.unsubscribe)
+    })
+    await waitFor(() =>
+      expect(vi.mocked(getQuestionSettings)).toHaveBeenCalledTimes(2)
+    )
+
+    // 权威重读只协调本页不编辑的 enabled，不能顶掉正在编辑的三个策略字段。
+    expect(timeout).toHaveValue(20)
+    expect(screen.getByLabelText("Question MCP retries")).toHaveValue(3)
+    expect(
+      screen.getByLabelText("Auto-select the first option after timeout")
+    ).toBeChecked()
   })
 
   /** 关闭自动选择就是无限等待：MCP 侧一直等到有人回答为止。此时等待时长和
@@ -495,8 +563,7 @@ describe("GeneralSettings", () => {
     fireEvent.blur(timeout)
 
     await waitFor(() =>
-      expect(vi.mocked(setQuestionSettings)).toHaveBeenLastCalledWith({
-        enabled: true,
+      expect(vi.mocked(updateQuestionPolicy)).toHaveBeenLastCalledWith({
         wait_timeout_minutes: 1440,
         retry_count: 3,
         auto_select_first_on_timeout: true,
@@ -512,7 +579,9 @@ describe("GeneralSettings", () => {
    */
   it("保存失败时恢复提问 MCP（Question MCP）配置并提示错误", async () => {
     vi.mocked(toast.error).mockClear()
-    vi.mocked(setQuestionSettings).mockRejectedValueOnce(new Error("disk full"))
+    vi.mocked(updateQuestionPolicy).mockRejectedValueOnce(
+      new Error("disk full")
+    )
 
     renderSettings()
 

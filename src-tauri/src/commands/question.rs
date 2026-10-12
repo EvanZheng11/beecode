@@ -22,14 +22,14 @@
 //! and immediately re-applies — mirroring the feedback settings flow exactly
 //! (`crate::commands::feedback`).
 
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionError, TransactionTrait};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::question::{
     QuestionConfig, QuestionRuntimeConfig, DEFAULT_QUESTION_RETRY_COUNT,
     DEFAULT_QUESTION_TIMEOUT_MINUTES, MAX_QUESTION_RETRY_COUNT, MAX_QUESTION_TIMEOUT_MINUTES,
 };
-use crate::app_error::AppCommandError;
+use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::db::service::app_metadata_service;
 use crate::web::event_bridge::{emit_event, EventEmitter, QUESTION_SETTINGS_CHANGED_EVENT};
 
@@ -89,37 +89,66 @@ impl QuestionSettings {
     }
 }
 
-/// Read the persisted keys from `app_metadata`, falling back to the default
-/// (enabled, 10 分钟, 3 次, 自动选首项) for a missing or malformed value. Never
-/// errors hard — corrupt persistence is treated as "no preference yet". 每个键
-/// 独立回退，一个键损坏不会影响其他键。
-pub async fn load_question_settings(conn: &DatabaseConnection) -> QuestionSettings {
+/// 只更新 MCP 等待策略的字段集合。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuestionPolicy {
+    pub wait_timeout_minutes: u32,
+    pub retry_count: u32,
+    pub auto_select_first_on_timeout: bool,
+}
+
+/// 从 `app_metadata` 读取一条提问配置。缺失或格式错误的单个字段回退默认值，
+/// 数据库读取错误向字段级写入路径返回，避免把默认值误当成当前记录覆盖其他字段。
+async fn load_question_settings_conn<C: ConnectionTrait>(
+    conn: &C,
+) -> Result<QuestionSettings, AppCommandError> {
     let mut settings = QuestionSettings::default();
-    if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_QUESTION_ENABLED).await {
+    if let Some(raw) = app_metadata_service::get_value_conn(conn, KEY_QUESTION_ENABLED)
+        .await
+        .map_err(AppCommandError::from)?
+    {
         if let Ok(v) = raw.parse::<bool>() {
             settings.enabled = v;
         }
     }
-    if let Ok(Some(raw)) =
-        app_metadata_service::get_value(conn, KEY_QUESTION_WAIT_TIMEOUT_MINUTES).await
+    if let Some(raw) = app_metadata_service::get_value_conn(conn, KEY_QUESTION_WAIT_TIMEOUT_MINUTES)
+        .await
+        .map_err(AppCommandError::from)?
     {
         if let Ok(v) = raw.parse::<u32>() {
             settings.wait_timeout_minutes = v;
         }
     }
-    if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_QUESTION_RETRY_COUNT).await {
+    if let Some(raw) = app_metadata_service::get_value_conn(conn, KEY_QUESTION_RETRY_COUNT)
+        .await
+        .map_err(AppCommandError::from)?
+    {
         if let Ok(v) = raw.parse::<u32>() {
             settings.retry_count = v;
         }
     }
-    if let Ok(Some(raw)) =
-        app_metadata_service::get_value(conn, KEY_QUESTION_AUTO_SELECT_FIRST_ON_TIMEOUT).await
+    if let Some(raw) =
+        app_metadata_service::get_value_conn(conn, KEY_QUESTION_AUTO_SELECT_FIRST_ON_TIMEOUT)
+            .await
+            .map_err(AppCommandError::from)?
     {
         if let Ok(v) = raw.parse::<bool>() {
             settings.auto_select_first_on_timeout = v;
         }
     }
-    settings.normalized()
+    Ok(settings.normalized())
+}
+
+/// 从 `app_metadata` 读取配置；缺失或格式错误的字段回退默认值。
+/// 普通读取保留兼容的尽力行为，字段级写入使用上面的可失败读取路径。
+pub async fn load_question_settings(conn: &DatabaseConnection) -> QuestionSettings {
+    match load_question_settings_conn(conn).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(error = %error, "读取提问配置失败，使用默认值");
+            QuestionSettings::default()
+        }
+    }
 }
 
 /// Pull settings from the DB and push the resulting `QuestionConfig` onto the
@@ -133,18 +162,20 @@ pub async fn apply_persisted_question_config(
     config.set(settings.into_runtime_config()).await;
 }
 
-/// Persist + apply + broadcast. Used by both the Tauri command and the HTTP
-/// handler so the write + re-apply + notify chain lives in exactly one place.
-/// The broadcast lets a conversation view (in another window / WS client)
-/// converge on the new flag — a frontend-only signal would never cross windows.
-pub async fn set_question_settings_core(
-    conn: &DatabaseConnection,
-    config: &QuestionRuntimeConfig,
-    emitter: &EventEmitter,
-    desired: QuestionSettings,
-) -> Result<QuestionSettings, AppCommandError> {
-    // 先规范化再落库：UI 传入的越界值不会写进 app_metadata，也不会进运行时。
-    let desired = desired.normalized();
+enum QuestionSettingsUpdate {
+    Full(QuestionSettings),
+    Enabled(bool),
+    Policy(QuestionPolicy),
+}
+
+/// 同一进程内的提问配置写入必须按顺序执行；锁覆盖读取、合并、事务和广播前的
+/// 规范化，避免两个设置窗口各自拿旧快照写回。
+static QUESTION_SETTINGS_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn write_question_settings<C: ConnectionTrait>(
+    conn: &C,
+    desired: &QuestionSettings,
+) -> Result<(), AppCommandError> {
     app_metadata_service::upsert_value(conn, KEY_QUESTION_ENABLED, &desired.enabled.to_string())
         .await
         .map_err(AppCommandError::from)?;
@@ -169,6 +200,45 @@ pub async fn set_question_settings_core(
     )
     .await
     .map_err(AppCommandError::from)?;
+    Ok(())
+}
+
+async fn update_question_settings_core(
+    conn: &DatabaseConnection,
+    config: &QuestionRuntimeConfig,
+    emitter: &EventEmitter,
+    update: QuestionSettingsUpdate,
+) -> Result<QuestionSettings, AppCommandError> {
+    let _write_guard = QUESTION_SETTINGS_WRITE_LOCK.lock().await;
+    let desired = conn
+        .transaction::<_, QuestionSettings, AppCommandError>(move |txn| {
+            Box::pin(async move {
+                let mut desired = load_question_settings_conn(txn).await?;
+                match update {
+                    QuestionSettingsUpdate::Full(settings) => desired = settings,
+                    QuestionSettingsUpdate::Enabled(enabled) => desired.enabled = enabled,
+                    QuestionSettingsUpdate::Policy(policy) => {
+                        desired.wait_timeout_minutes = policy.wait_timeout_minutes;
+                        desired.retry_count = policy.retry_count;
+                        desired.auto_select_first_on_timeout =
+                            policy.auto_select_first_on_timeout;
+                    }
+                }
+                desired = desired.normalized();
+                write_question_settings(txn, &desired).await?;
+                Ok(desired)
+            })
+        })
+        .await
+        .map_err(|error: TransactionError<AppCommandError>| match error {
+            TransactionError::Connection(error) => AppCommandError::new(
+                AppErrorCode::DatabaseError,
+                "Database transaction failed",
+            )
+            .with_detail(error.to_string()),
+            TransactionError::Transaction(error) => error,
+        })?;
+
     tracing::debug!(
         enabled = desired.enabled,
         wait_timeout_minutes = desired.wait_timeout_minutes,
@@ -179,6 +249,55 @@ pub async fn set_question_settings_core(
     config.set(desired.clone().into_runtime_config()).await;
     emit_event(emitter, QUESTION_SETTINGS_CHANGED_EVENT, &desired);
     Ok(desired)
+}
+
+/// 持久化、应用并广播完整的规范化记录。现有调用方继续使用整条配置接口，
+/// 新的设置编辑器使用下面的字段级接口。
+pub async fn set_question_settings_core(
+    conn: &DatabaseConnection,
+    config: &QuestionRuntimeConfig,
+    emitter: &EventEmitter,
+    desired: QuestionSettings,
+) -> Result<QuestionSettings, AppCommandError> {
+    update_question_settings_core(
+        conn,
+        config,
+        emitter,
+        QuestionSettingsUpdate::Full(desired),
+    )
+    .await
+}
+
+/// 只更新提问开关，并返回合并后的完整规范化记录。
+pub async fn update_question_enabled_core(
+    conn: &DatabaseConnection,
+    config: &QuestionRuntimeConfig,
+    emitter: &EventEmitter,
+    enabled: bool,
+) -> Result<QuestionSettings, AppCommandError> {
+    update_question_settings_core(
+        conn,
+        config,
+        emitter,
+        QuestionSettingsUpdate::Enabled(enabled),
+    )
+    .await
+}
+
+/// 只更新三项 MCP 等待策略，并返回合并后的完整规范化记录。
+pub async fn update_question_policy_core(
+    conn: &DatabaseConnection,
+    config: &QuestionRuntimeConfig,
+    emitter: &EventEmitter,
+    policy: QuestionPolicy,
+) -> Result<QuestionSettings, AppCommandError> {
+    update_question_settings_core(
+        conn,
+        config,
+        emitter,
+        QuestionSettingsUpdate::Policy(policy),
+    )
+    .await
 }
 
 // -------- Tauri commands -----------------------------------------------------
@@ -212,6 +331,44 @@ pub async fn set_question_settings(
     #[cfg(not(feature = "tauri-runtime"))]
     {
         let _ = settings;
+        Err(AppCommandError::configuration_invalid("tauri-only command"))
+    }
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn update_question_enabled(
+    #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
+    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
+    #[cfg(feature = "tauri-runtime")] config: tauri::State<'_, QuestionRuntimeConfig>,
+    enabled: bool,
+) -> Result<QuestionSettings, AppCommandError> {
+    #[cfg(feature = "tauri-runtime")]
+    {
+        let emitter = EventEmitter::Tauri(app);
+        update_question_enabled_core(&db.conn, &config, &emitter, enabled).await
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        let _ = enabled;
+        Err(AppCommandError::configuration_invalid("tauri-only command"))
+    }
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn update_question_policy(
+    #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
+    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, crate::db::AppDatabase>,
+    #[cfg(feature = "tauri-runtime")] config: tauri::State<'_, QuestionRuntimeConfig>,
+    policy: QuestionPolicy,
+) -> Result<QuestionSettings, AppCommandError> {
+    #[cfg(feature = "tauri-runtime")]
+    {
+        let emitter = EventEmitter::Tauri(app);
+        update_question_policy_core(&db.conn, &config, &emitter, policy).await
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        let _ = policy;
         Err(AppCommandError::configuration_invalid("tauri-only command"))
     }
 }
@@ -292,6 +449,43 @@ mod tests {
         assert_eq!(saved.wait_timeout_minutes, 1);
         assert_eq!(saved.retry_count, 10);
         assert!(!config.snapshot().await.auto_select_first_on_timeout);
+    }
+
+    /// 两个字段级写入交错执行时，最终记录必须同时保留双方更新。
+    #[tokio::test]
+    async fn field_updates_merge_without_losing_each_other() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let config = QuestionRuntimeConfig::new();
+        set_question_settings_core(
+            &db.conn,
+            &config,
+            &EventEmitter::Noop,
+            QuestionSettings::default(),
+        )
+        .await
+        .unwrap();
+
+        let (enabled, policy) = tokio::join!(
+            update_question_enabled_core(&db.conn, &config, &EventEmitter::Noop, false),
+            update_question_policy_core(
+                &db.conn,
+                &config,
+                &EventEmitter::Noop,
+                QuestionPolicy {
+                    wait_timeout_minutes: 45,
+                    retry_count: 7,
+                    auto_select_first_on_timeout: false,
+                },
+            ),
+        );
+        assert!(!enabled.unwrap().enabled);
+        assert_eq!(policy.unwrap().wait_timeout_minutes, 45);
+
+        let saved = load_question_settings(&db.conn).await;
+        assert!(!saved.enabled);
+        assert_eq!(saved.wait_timeout_minutes, 45);
+        assert_eq!(saved.retry_count, 7);
+        assert!(!saved.auto_select_first_on_timeout);
     }
 
     /// 保存后重新读取得到同一组值；已落库的值损坏时按字段回退默认值。
