@@ -1761,6 +1761,16 @@
     "restartRequired": "Salvo. Reinicie o aplicativo para aplicar a alteração.",
     "restartNow": "Reiniciar agora",
     "restartFailed": "Falha ao reiniciar: {message}",
+    "questionMcpTitle": "Tempos limite das perguntas",
+    "questionMcpDescription": "Quanto tempo a ferramenta de perguntas espera a sua resposta, se uma pergunta expirada é feita de novo e o que acontece quando a espera acaba.",
+    "questionMcpWaitMinutes": "Tempo de espera por pergunta",
+    "questionMcpWaitHint": "Quanto tempo uma pergunta espera a sua resposta antes de contar como expirada (1-1440 minutos).",
+    "questionMcpRetryCount": "Novas tentativas após o tempo limite",
+    "questionMcpRetryHint": "Quantas vezes uma pergunta expirada é feita de novo (0-10). 0 desliga as tentativas.",
+    "questionMcpAutoSelect": "Selecionar a primeira opção após o tempo limite",
+    "questionMcpAutoSelectHint": "Quando a espera e as tentativas acabam, responde-se com a primeira opção para o agente continuar.",
+    "questionMcpInfiniteWait": "A seleção automática está desligada: uma pergunta sem resposta espera indefinidamente, e o tempo de espera e as tentativas acima não têm efeito.",
+    "questionMcpSaveFailed": "Falha ao salvar as configurações das perguntas: {message}",
     "loadFailed": "Falha ao carregar: {message}"
   },
   "CollaborationSettings": {

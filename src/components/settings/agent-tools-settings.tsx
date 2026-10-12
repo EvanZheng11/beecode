@@ -47,6 +47,7 @@ import { subscribe } from "@/lib/platform"
 import {
   BROWSER_TOOLS_SETTINGS_CHANGED_EVENT,
   CHAT_AUTHORING_SETTINGS_CHANGED_EVENT,
+  QUESTION_SETTINGS_CHANGED_EVENT,
 } from "@/lib/types"
 import {
   getComputerToolsSettings,
@@ -156,7 +157,7 @@ export function AgentToolsSettingsSection() {
    * while they were in flight, yields that record's fields to the broadcast —
    * that read is older than it. A broadcast about one record says nothing
    * about another's read. */
-  const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0 })
+  const remoteGenRef = useRef({ chat: 0, browser: 0, computer: 0, question: 0 })
   /** 最近一次读到的提问整条配置（含 MCP 等待策略），保存时用它补齐只改开关的那次写入。 */
   const questionSettingsRef = useRef<QuestionSettings | null>(null)
 
@@ -184,7 +185,11 @@ export function AgentToolsSettingsSection() {
       else failures.push(toErrorMessage(feedback.reason))
       if (question.status === "fulfilled") {
         next.question = question.value.enabled
-        questionSettingsRef.current = question.value
+        // 广播若落在这次读取之前，广播才是新的事实：整条记录（含等待策略）
+        // 以它为准，否则下一次保存开关会把别处刚改的时长写回旧值。
+        if (remoteGenRef.current.question === gen.question) {
+          questionSettingsRef.current = question.value
+        }
       } else failures.push(toErrorMessage(question.reason))
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
@@ -215,6 +220,7 @@ export function AgentToolsSettingsSection() {
           ? { browserTools: prev.browserTools, browserEval: prev.browserEval }
           : {}),
         ...(moved.computer !== gen.computer ? { computer: prev.computer } : {}),
+        ...(moved.question !== gen.question ? { question: prev.question } : {}),
       })
       setValues(keepBroadcast)
       setBaseline(keepBroadcast)
@@ -339,6 +345,42 @@ export function AgentToolsSettingsSection() {
             : prev
         )
         setBaseline((prev) => ({ ...prev, computer: remote.enabled }))
+      }
+    )
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }, [])
+
+  /**
+   * 提问记录同样是两个编辑者：这块面板写开关，常规设置页写 MCP 等待策略，两边
+   * 都整条记录写回。没有这次收敛，一边的保存会静默打回另一边刚写好的值 —— 而
+   * 等待策略在这块面板上根本不显示，用户看不到自己被回退的改动。
+   */
+  useEffect(() => {
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<QuestionSettings>(
+      QUESTION_SETTINGS_CHANGED_EVENT,
+      (remote) => {
+        remoteGenRef.current.question += 1
+        // 等待策略只由常规设置页写：整条以广播为准，保存开关时才能原样写回。
+        // 开关本身跟随广播，除非用户已经动过它（那他的编辑在保存时胜出）。
+        questionSettingsRef.current = remote
+        const current = valuesRef.current
+        const base = baselineRef.current
+        setValues((prev) =>
+          current.question === base.question
+            ? { ...prev, question: remote.enabled }
+            : prev
+        )
+        setBaseline((prev) => ({ ...prev, question: remote.enabled }))
       }
     )
       .then((fn) => {

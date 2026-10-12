@@ -1761,6 +1761,16 @@
     "restartRequired": "Guardado. Reinicia la aplicación para aplicar el cambio.",
     "restartNow": "Reiniciar ahora",
     "restartFailed": "No se pudo reiniciar: {message}",
+    "questionMcpTitle": "Tiempos de espera de las preguntas",
+    "questionMcpDescription": "Cuánto espera la herramienta de preguntas tu respuesta, si una pregunta agotada se repite y qué ocurre cuando la espera se agota.",
+    "questionMcpWaitMinutes": "Tiempo de espera por pregunta",
+    "questionMcpWaitHint": "Cuánto espera una pregunta tu respuesta antes de contar como agotada (1-1440 minutos).",
+    "questionMcpRetryCount": "Reintentos tras el tiempo de espera",
+    "questionMcpRetryHint": "Cuántas veces se repite una pregunta agotada (0-10). 0 desactiva los reintentos.",
+    "questionMcpAutoSelect": "Seleccionar la primera opción al agotarse",
+    "questionMcpAutoSelectHint": "Cuando se agotan la espera y los reintentos, se responde con la primera opción para que el agente continúe.",
+    "questionMcpInfiniteWait": "La selección automática está desactivada: una pregunta sin respuesta espera indefinidamente y el tiempo de espera y los reintentos de arriba no tienen efecto.",
+    "questionMcpSaveFailed": "No se pudo guardar la configuración de las preguntas: {message}",
     "loadFailed": "Error al cargar: {message}"
   },
   "CollaborationSettings": {

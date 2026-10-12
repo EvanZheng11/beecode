@@ -1761,6 +1761,16 @@
     "restartRequired": "저장되었습니다. 변경 사항을 적용하려면 앱을 다시 시작하세요.",
     "restartNow": "지금 다시 시작",
     "restartFailed": "다시 시작 실패: {message}",
+    "questionMcpTitle": "질문 시간 초과",
+    "questionMcpDescription": "질문 도구가 답변을 기다리는 시간, 시간 초과 후 질문을 다시 하는지, 기다림을 모두 쓴 뒤의 동작을 정합니다.",
+    "questionMcpWaitMinutes": "한 번에 기다리는 시간",
+    "questionMcpWaitHint": "질문 하나가 답변을 기다리는 최대 시간(1~1440분).",
+    "questionMcpRetryCount": "시간 초과 후 다시 묻는 횟수",
+    "questionMcpRetryHint": "시간이 초과된 질문을 다시 묻는 횟수(0~10회). 0이면 다시 묻지 않습니다.",
+    "questionMcpAutoSelect": "시간 초과 후 첫 번째 선택지 자동 선택",
+    "questionMcpAutoSelectHint": "기다림과 다시 묻기를 모두 쓰면 첫 번째 선택지로 답해 에이전트가 계속 진행합니다.",
+    "questionMcpInfiniteWait": "자동 선택이 꺼져 있어 답이 없는 질문은 무한히 기다립니다. 위의 대기 시간과 다시 묻는 횟수는 적용되지 않습니다.",
+    "questionMcpSaveFailed": "질문 설정을 저장하지 못했습니다: {message}",
     "loadFailed": "불러오기 실패: {message}"
   },
   "CollaborationSettings": {

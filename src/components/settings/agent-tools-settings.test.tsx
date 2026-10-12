@@ -38,6 +38,7 @@ vi.mock("@/lib/platform", () => ({
 const authoringHandler = () => handlers.get("chat-authoring-settings://changed")
 const browserToolsHandler = () =>
   handlers.get("browser-tools-settings://changed")
+const questionHandler = () => handlers.get("question-settings://changed")
 const computerToolsHandler = () =>
   handlers.get("computer-tools-settings://changed")
 
@@ -425,6 +426,39 @@ describe("AgentToolsSettingsSection", () => {
         // Clamped by the panel exactly as the backend clamps it: the row
         // shows off while the group is off, and sends what it shows.
         eval: false,
+      })
+    )
+  })
+
+  /** 提问配置是一整条记录（开关 + 等待策略），常规设置页有第二个编辑者。
+   *  别处刚把等待时长改过，本窗口保存开关时必须跟着广播走：拿旧快照整条写回
+   *  会把用户刚改的时长/次数打回旧值，而他在这块面板上看不到这件事。 */
+  it("adopts a remote question wait-policy write instead of reverting it on save", async () => {
+    primeBackend()
+    renderWithIntl()
+    await waitFor(() =>
+      expect(screen.getByLabelText(LABELS.question)).toBeChecked()
+    )
+
+    // 另一个窗口（常规设置页）把等待时长改成 20 分钟、重提次数改成 5。
+    act(() =>
+      questionHandler()?.({
+        enabled: true,
+        wait_timeout_minutes: 20,
+        retry_count: 5,
+        auto_select_first_on_timeout: false,
+      })
+    )
+
+    fireEvent.click(screen.getByLabelText(LABELS.question))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(mockSetQuestion).toHaveBeenCalledWith({
+        enabled: false,
+        wait_timeout_minutes: 20,
+        retry_count: 5,
+        auto_select_first_on_timeout: false,
       })
     )
   })

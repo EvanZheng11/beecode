@@ -44,6 +44,14 @@ vi.mock("@/lib/api", () => ({
   updateSystemRenderingSettings: vi.fn(async (v: unknown) => v),
   updateSystemTerminalSettings: vi.fn(async (v: unknown) => v),
   probeTerminalShellPath: vi.fn(async () => true),
+  // 提问配置带 MCP 等待策略，读取和保存都走整条记录（默认 10 分钟 / 3 次 / 开启）。
+  getQuestionSettings: vi.fn(async () => ({
+    enabled: true,
+    wait_timeout_minutes: 10,
+    retry_count: 3,
+    auto_select_first_on_timeout: true,
+  })),
+  setQuestionSettings: vi.fn(async (v: unknown) => v),
   getSystemCloseBehaviorSettings: vi.fn(async () => ({
     behavior: "ask" as const,
     tray_available: true,
@@ -82,7 +90,9 @@ import { toast } from "sonner"
 
 import {
   getAvailableTerminalShells,
+  getQuestionSettings,
   getSystemTerminalSettings,
+  setQuestionSettings,
   updateSystemTerminalSettings,
 } from "@/lib/api"
 import { GeneralSettings } from "./general-settings"
@@ -112,6 +122,8 @@ function shellsResolving(path: string) {
 describe("GeneralSettings", () => {
   beforeEach(() => {
     platform.current = "windows"
+    vi.mocked(getQuestionSettings).mockClear()
+    vi.mocked(setQuestionSettings).mockClear()
   })
 
   it("mounts every section and wires each row's label to its control", async () => {
@@ -137,6 +149,7 @@ describe("GeneralSettings", () => {
       "Default Terminal",
       "Colorize command output",
       "Disable hardware acceleration",
+      "Question timeouts",
       "Desktop notifications",
       "Notification sounds",
     ]) {
@@ -362,5 +375,97 @@ describe("GeneralSettings", () => {
     expect(
       screen.queryByLabelText("Disable hardware acceleration")
     ).not.toBeInTheDocument()
+  })
+
+  /**
+   * 提问配置是整条记录：读取时三个策略字段一起回来，改任何一项都整条写回。
+   * 默认值和 Rust 端 `QuestionSettings::default()` 一致（10 分钟 / 3 次 / 开启），
+   * 页面必须原样显示，不能自己另起一套默认。
+   */
+  it("加载并保存提问 MCP（Question MCP）超时配置", async () => {
+    renderSettings()
+
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    expect(timeout).toHaveValue(10)
+    expect(screen.getByLabelText("Question MCP retries")).toHaveValue(3)
+
+    fireEvent.change(timeout, { target: { value: "20" } })
+    // 只改一项也要带着另外三项：少写一个字段后端就会把它打回默认值。
+    fireEvent.click(
+      screen.getByLabelText("Auto-select the first option after timeout")
+    )
+
+    await waitFor(() =>
+      expect(vi.mocked(setQuestionSettings)).toHaveBeenCalledWith({
+        enabled: true,
+        wait_timeout_minutes: 20,
+        retry_count: 3,
+        auto_select_first_on_timeout: false,
+      })
+    )
+  })
+
+  /** 关闭自动选择就是无限等待：MCP 侧一直等到有人回答为止。此时等待时长和
+   *  重提次数不再起作用，两个输入框停用，并在区块里说明原因；值留在原处，
+   *  重新打开开关时原样恢复，不必重填。 */
+  it("关闭自动选择时显示提问 MCP（Question MCP）无限等待说明", async () => {
+    renderSettings()
+
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    const retries = screen.getByLabelText("Question MCP retries")
+    fireEvent.change(timeout, { target: { value: "20" } })
+
+    fireEvent.click(
+      screen.getByLabelText("Auto-select the first option after timeout")
+    )
+
+    expect(await screen.findByText(/wait indefinitely/i)).toBeInTheDocument()
+    expect(timeout).toBeDisabled()
+    expect(retries).toBeDisabled()
+    // 值没有被清掉：再次打开自动选择时，屏幕上还是用户填的那个数。
+    expect(timeout).toHaveValue(20)
+  })
+
+  /** 输入框允许越界，落到后端的值不允许：后端会收敛，界面也要显示收敛后的值，
+   *  否则屏幕上的数字和真正生效的策略对不上。 */
+  it("把提问 MCP（Question MCP）等待时长收敛到后端区间", async () => {
+    renderSettings()
+
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    fireEvent.change(timeout, { target: { value: "99999" } })
+    fireEvent.blur(timeout)
+
+    await waitFor(() =>
+      expect(vi.mocked(setQuestionSettings)).toHaveBeenLastCalledWith({
+        enabled: true,
+        wait_timeout_minutes: 1440,
+        retry_count: 3,
+        auto_select_first_on_timeout: true,
+      })
+    )
+    await waitFor(() => expect(timeout).toHaveValue(1440))
+  })
+
+  /**
+   * 保存失败时界面必须退回最近一次成功的值，并说明失败原因：停在后端没接受
+   * 的状态，用户会以为策略已经生效——等待时长这种"看不见"的配置尤其危险，
+   * 下一次提问超时才知道没生效。
+   */
+  it("保存失败时恢复提问 MCP（Question MCP）配置并提示错误", async () => {
+    vi.mocked(toast.error).mockClear()
+    vi.mocked(setQuestionSettings).mockRejectedValueOnce(new Error("disk full"))
+
+    renderSettings()
+
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    fireEvent.change(timeout, { target: { value: "20" } })
+    fireEvent.blur(timeout)
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        expect.stringContaining("disk full")
+      )
+    )
+    await waitFor(() => expect(timeout).toHaveValue(10))
   })
 })

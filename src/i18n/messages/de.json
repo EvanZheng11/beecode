@@ -1761,6 +1761,16 @@
     "restartRequired": "Gespeichert. Starten Sie die App neu, damit die Änderung wirksam wird.",
     "restartNow": "Jetzt neu starten",
     "restartFailed": "Neustart fehlgeschlagen: {message}",
+    "questionMcpTitle": "Zeitlimits für Fragen",
+    "questionMcpDescription": "Wie lange das Frage-Tool auf deine Antwort wartet, ob eine abgelaufene Frage erneut gestellt wird und was passiert, wenn die Wartezeit aufgebraucht ist.",
+    "questionMcpWaitMinutes": "Wartezeit pro Frage",
+    "questionMcpWaitHint": "Wie lange eine Frage auf deine Antwort wartet, bevor sie als abgelaufen gilt (1-1440 Minuten).",
+    "questionMcpRetryCount": "Wiederholungen nach Zeitablauf",
+    "questionMcpRetryHint": "Wie oft eine abgelaufene Frage erneut gestellt wird (0-10). 0 schaltet die Wiederholungen ab.",
+    "questionMcpAutoSelect": "Nach Zeitablauf die erste Option automatisch wählen",
+    "questionMcpAutoSelectHint": "Sind Wartezeit und Wiederholungen aufgebraucht, wird mit der ersten Option geantwortet, damit der Agent weitermachen kann.",
+    "questionMcpInfiniteWait": "Die automatische Auswahl ist aus: Eine unbeantwortete Frage wartet unbegrenzt, die Wartezeit und die Wiederholungen oben haben dann keine Wirkung.",
+    "questionMcpSaveFailed": "Frage-Einstellungen konnten nicht gespeichert werden: {message}",
     "loadFailed": "Laden fehlgeschlagen: {message}"
   },
   "CollaborationSettings": {

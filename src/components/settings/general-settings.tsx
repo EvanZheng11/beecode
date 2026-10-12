@@ -1,18 +1,27 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
+  CheckCheck,
   Cpu,
   FolderCog,
+  Infinity as InfinityIcon,
   Loader2,
+  MessageCircleQuestion,
   Palette,
   RefreshCw,
+  RotateCcw,
   SquareTerminal,
+  Timer,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import {
+  SettingCard,
+  SettingNote,
+  SettingRow,
+} from "@/components/shared/setting-card"
 import {
   SettingsError,
   SettingsSection,
@@ -30,11 +39,14 @@ import {
 import { Switch } from "@/components/ui/switch"
 import {
   getAvailableTerminalShells,
+  getQuestionSettings,
   getSystemRenderingSettings,
   getSystemTerminalSettings,
   probeTerminalShellPath,
+  setQuestionSettings,
   updateSystemRenderingSettings,
   updateSystemTerminalSettings,
+  type QuestionSettings,
 } from "@/lib/api"
 import { isDesktop } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
@@ -48,6 +60,26 @@ import { NotificationSoundSettingsSection } from "@/components/settings/notifica
 
 const TERMINAL_SHELL_OPTION_SYSTEM = "system"
 const TERMINAL_SHELL_OPTION_CUSTOM = "custom"
+
+// 提问的 MCP 等待策略：单次等待 1–1440 分钟，超时后最多重提 10 次（0 表示不重提）。
+// 后端保存和读取走同一套边界（`QuestionSettings::normalized`），这里先收敛一次，
+// 免得屏幕上显示的数字和真正生效的值对不上。
+const QUESTION_WAIT_MINUTES_MIN = 1
+const QUESTION_WAIT_MINUTES_MAX = 1440
+const QUESTION_RETRY_COUNT_MIN = 0
+const QUESTION_RETRY_COUNT_MAX = 10
+
+/// 输入框里的数字收敛到后端接受的区间。空输入（NaN）回退到已保存的值：那一位
+/// 用户没打算改，把空的输入框当成 0 会静默改掉一个他没碰过的设置。
+function clampQuestionNumber(
+  raw: number,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  if (!Number.isFinite(raw)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(raw)))
+}
 
 /// Pick which dropdown row matches a stored `default_shell` value:
 /// - null  → "system"
@@ -114,6 +146,16 @@ export function GeneralSettings() {
   >(undefined)
   const [colorizeCommandOutput, setColorizeCommandOutput] = useState(false)
 
+  // 提问配置（MCP 等待策略）是一整条记录：等待时长、重提次数、超时后是否自动
+  // 选第一个选项随开关一起读写。读取失败时保持 null —— 三个控件都不可操作，
+  // 免得用一个臆测的整条配置覆盖掉用户已经存好的策略。
+  const [questionDraft, setQuestionDraft] = useState<QuestionSettings | null>(
+    null
+  )
+  /// 最近一次读到或保存成功的提问配置，保存失败时用它把控件收回去。
+  const questionSettingsRef = useRef<QuestionSettings | null>(null)
+  const [savingQuestion, setSavingQuestion] = useState(false)
+
   const [disableHwAccel, setDisableHwAccel] = useState(false)
   const [savingRendering, setSavingRendering] = useState(false)
   const [persistedDisableHwAccel, setPersistedDisableHwAccel] = useState(false)
@@ -128,15 +170,18 @@ export function GeneralSettings() {
     setLoadError(null)
 
     try {
-      const [terminalSettings, terminalShells, renderingSettings] =
+      const [terminalSettings, terminalShells, renderingSettings, question] =
         await Promise.all([
           getSystemTerminalSettings(),
           getAvailableTerminalShells(),
           renderingSettingsLoadable
             ? getSystemRenderingSettings()
             : Promise.resolve(null),
+          getQuestionSettings(),
         ])
 
+      setQuestionDraft(question)
+      questionSettingsRef.current = question
       setAvailableShells(terminalShells)
       setStoredDefaultShell(terminalSettings.default_shell)
       setColorizeCommandOutput(terminalSettings.colorize_command_output)
@@ -270,6 +315,47 @@ export function GeneralSettings() {
       }
     },
     [storedDefaultShell, t]
+  )
+
+  /// 保存整条提问配置。四个字段一起写，所以输入框里的数字先转成整数并收敛到
+  /// 后端区间；成功后以后端返回的记录为准（界面显示的就是真正生效的值），失败
+  /// 则退回最近一次成功的值并说明原因 —— 停在后端没接受的状态，用户会以为等待
+  /// 策略已经生效，下一次提问超时才知道没有。
+  const persistQuestionSettings = useCallback(
+    async (next: QuestionSettings) => {
+      const stored = questionSettingsRef.current
+      // 还没读到过整条配置（读取失败）：不写，避免用臆测的值覆盖。
+      if (!stored) return
+      const payload: QuestionSettings = {
+        enabled: next.enabled,
+        wait_timeout_minutes: clampQuestionNumber(
+          next.wait_timeout_minutes,
+          stored.wait_timeout_minutes,
+          QUESTION_WAIT_MINUTES_MIN,
+          QUESTION_WAIT_MINUTES_MAX
+        ),
+        retry_count: clampQuestionNumber(
+          next.retry_count,
+          stored.retry_count,
+          QUESTION_RETRY_COUNT_MIN,
+          QUESTION_RETRY_COUNT_MAX
+        ),
+        auto_select_first_on_timeout: next.auto_select_first_on_timeout,
+      }
+      setSavingQuestion(true)
+      try {
+        const applied = await setQuestionSettings(payload)
+        questionSettingsRef.current = applied
+        setQuestionDraft(applied)
+      } catch (err) {
+        setQuestionDraft(stored)
+        const message = toErrorMessage(err)
+        toast.error(t("questionMcpSaveFailed", { message }))
+      } finally {
+        setSavingQuestion(false)
+      }
+    },
+    [t]
   )
 
   const onShellSelectChange = useCallback(
@@ -512,6 +598,118 @@ export function GeneralSettings() {
             )}
           </SettingsSection>
         )}
+
+        {/* 提问在 MCP 侧等多久：先按等待时长等，超时后重提，等待和重提都用尽
+            时才看要不要自动选第一个选项。关闭自动选择等于无限等待，时长和次数
+            随之失效 —— 但值留在控件里，重新打开时原样恢复。 */}
+        <SettingsSection
+          icon={MessageCircleQuestion}
+          title={t("questionMcpTitle")}
+          description={t("questionMcpDescription")}
+        >
+          {questionDraft ? (
+            <SettingCard>
+              <SettingRow
+                icon={Timer}
+                title={t("questionMcpWaitMinutes")}
+                description={t("questionMcpWaitHint")}
+                htmlFor="question-mcp-wait-minutes"
+                control={
+                  <Input
+                    id="question-mcp-wait-minutes"
+                    type="number"
+                    min={QUESTION_WAIT_MINUTES_MIN}
+                    max={QUESTION_WAIT_MINUTES_MAX}
+                    value={
+                      Number.isNaN(questionDraft.wait_timeout_minutes)
+                        ? ""
+                        : questionDraft.wait_timeout_minutes
+                    }
+                    onChange={(event) =>
+                      setQuestionDraft({
+                        ...questionDraft,
+                        // 空输入存 NaN：离开输入框时回退到已保存的值，把 ""
+                        // 当成 0 会静默改成 1 分钟，用户没改过的那位也一起动。
+                        wait_timeout_minutes:
+                          event.target.value === ""
+                            ? NaN
+                            : Number(event.target.value),
+                      })
+                    }
+                    onBlur={() => void persistQuestionSettings(questionDraft)}
+                    disabled={
+                      savingQuestion ||
+                      !questionDraft.auto_select_first_on_timeout
+                    }
+                    className="h-8 w-24 bg-background text-xs"
+                  />
+                }
+              />
+              <SettingRow
+                icon={RotateCcw}
+                title={t("questionMcpRetryCount")}
+                description={t("questionMcpRetryHint")}
+                htmlFor="question-mcp-retry-count"
+                control={
+                  <Input
+                    id="question-mcp-retry-count"
+                    type="number"
+                    min={QUESTION_RETRY_COUNT_MIN}
+                    max={QUESTION_RETRY_COUNT_MAX}
+                    value={
+                      Number.isNaN(questionDraft.retry_count)
+                        ? ""
+                        : questionDraft.retry_count
+                    }
+                    onChange={(event) =>
+                      setQuestionDraft({
+                        ...questionDraft,
+                        retry_count:
+                          event.target.value === ""
+                            ? NaN
+                            : Number(event.target.value),
+                      })
+                    }
+                    onBlur={() => void persistQuestionSettings(questionDraft)}
+                    disabled={
+                      savingQuestion ||
+                      !questionDraft.auto_select_first_on_timeout
+                    }
+                    className="h-8 w-24 bg-background text-xs"
+                  />
+                }
+              />
+              <SettingRow
+                icon={CheckCheck}
+                title={t("questionMcpAutoSelect")}
+                description={t("questionMcpAutoSelectHint")}
+                htmlFor="question-mcp-auto-select"
+                control={
+                  <Switch
+                    id="question-mcp-auto-select"
+                    checked={questionDraft.auto_select_first_on_timeout}
+                    disabled={savingQuestion}
+                    onCheckedChange={(next) => {
+                      // 开关的保存带上没提交的输入框：改完时长直接点开关是
+                      // 一次操作，不该丢掉刚填的数字。
+                      const draft = {
+                        ...questionDraft,
+                        auto_select_first_on_timeout: next,
+                      }
+                      setQuestionDraft(draft)
+                      void persistQuestionSettings(draft)
+                    }}
+                  />
+                }
+              />
+            </SettingCard>
+          ) : null}
+          {questionDraft && !questionDraft.auto_select_first_on_timeout ? (
+            <SettingNote icon={InfinityIcon}>
+              {t("questionMcpInfiniteWait")}
+            </SettingNote>
+          ) : null}
+        </SettingsSection>
 
         <CloseBehaviorSettingsSection />
 
