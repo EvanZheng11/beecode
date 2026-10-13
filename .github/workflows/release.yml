@@ -490,13 +490,20 @@ jobs:
           #    lib 测试带 tauri-runtime，tauri-build 检查前端 out/ 目录，先建好。
           mkdir -p out
           ( cd src-tauri && cargo test --features test-utils --lib --no-run 2>&1 | tee "$work/cargo-no-run.log" )
-          harness="$(sed -n 's/^ *Executable.*(\(.*\))$/\1/p' "$work/cargo-no-run.log" | head -1)"
+          # cargo 在 CI 的 Cargo.term.color=always 下会给 "Executable" 也加 ANSI 颜色码
+          # （ESC[1m ESC[92m ... ESC[0m），旧写法 ^ *Executable 匹配不到，harness 会是空值，
+          # case 再把它拼成 $PWD/src-tauri/ 目录 —— 而目录能通过 [ -x ]，于是 cp 报
+          # "cp: .../src-tauri/ is a directory (not copied)"（run38382839821）。
+          # 先删掉 ANSI CSI 颜色码再解析：用字面 ESC（$'...' 由 bash 展开），不依赖 GNU 扩展；
+          # 门禁同时要求「是文件且可执行」，失败时打印 cargo 日志尾部，绝不拼空路径去 cp。
+          harness="$(sed $'s/\033\\[[0-9;]*m//g' "$work/cargo-no-run.log" | sed -n -E 's/^ *Executable .* \((.*)\)$/\1/p' | head -1)"
           case "$harness" in
             /*) ;;
             *) harness="$PWD/src-tauri/$harness" ;;
           esac
-          if [ ! -x "$harness" ]; then
-            echo "::error::找不到测试 harness：$harness"
+          if [ ! -f "$harness" ] || [ ! -x "$harness" ]; then
+            echo "::error::找不到测试 harness（解析结果：${harness:-<空>}）；cargo 日志尾部："
+            tail -n 20 "$work/cargo-no-run.log"
             exit 1
           fi
           cp "$harness" "$work/harness-trusted"
