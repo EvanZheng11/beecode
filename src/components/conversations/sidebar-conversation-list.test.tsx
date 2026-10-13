@@ -130,7 +130,10 @@ vi.mock("virtua", () => ({
       scrollTo: () => {},
       scrollBy: () => {},
     }))
-    return <>{data.map((row, i) => children(row, i))}</>
+    // 内容根节点带稳定标记，供后续几何/边界断言定位虚拟列表内容容器。
+    return (
+      <div data-virtua-content>{data.map((row, i) => children(row, i))}</div>
+    )
   },
 }))
 
@@ -167,14 +170,21 @@ vi.mock("@/components/ui/scroll-area", () => ({
   ScrollArea: ({
     children,
     onViewportRef,
+    className,
   }: {
     children?: ReactNode
     onViewportRef?: (el: HTMLElement | null) => void
+    className?: string
   }) => {
     useEffect(() => {
       onViewportRef?.(document.createElement("div"))
     }, [onViewportRef])
-    return <>{children}</>
+    // 保留滚动容器标记与 className，供后续断言浮层是它的兄弟节点、内容无新增占位。
+    return (
+      <div data-sidebar-scroll-area className={className}>
+        {children}
+      </div>
+    )
   },
 }))
 
@@ -653,6 +663,28 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
   function headerCount(folderId: number): number {
     return document.querySelectorAll(`[data-folder-id="${folderId}"]`).length
   }
+
+  it("列表顶部只显示真实段落标题", () => {
+    virtuaCtl.scrollOffset = 0
+    const { getAllByText, getByRole } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    // 滚动偏移为 0：段落标题只有真实行一份，没有被浮层复制，也没有被抑制隐藏。
+    for (const label of ["Folders", "Chat", "Recent"]) {
+      const titles = getAllByText(label)
+      expect(titles).toHaveLength(1)
+      expect(titles[0].closest('[aria-hidden="true"]')).toBeNull()
+    }
+    // 真实标题本身仍是可访问的折叠开关。
+    for (const label of ["Folders", "Chat", "Recent"]) {
+      expect(getByRole("button", { name: label })).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      )
+    }
+  })
 
   it("hides the overlay at the top of the list", () => {
     virtuaCtl.scrollOffset = 0

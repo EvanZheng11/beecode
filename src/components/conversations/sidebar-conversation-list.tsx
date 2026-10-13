@@ -135,6 +135,7 @@ import {
   worktreeChildrenByParent,
   worktreeHeaderAlias,
   type DragSlot,
+  type SectionHeaderRow,
   type SidebarEntry,
   type SidebarLayout,
   type SidebarRow,
@@ -2785,61 +2786,75 @@ export function SidebarConversationList({
     )
   }
 
+  // 段落标题的唯一构建器：真实行与段落浮层共用同一批 props 和回调，
+  // 保证浮层副本与真实行行为一致（折叠、新建、四个文件夹操作、最近过滤）。
+  // 默认真实行：带顶部空隙（与上方段落拉开距离）；浮层传 `topGap: false`，
+  // 否则置顶时顶部会露出 12px 透明缝。`suppressed` 目前仅在段落浮层可见时
+  // 由任务 3 的吸顶状态传入。
+  const sectionHeaderElement = (
+    row: SectionHeaderRow,
+    {
+      topGap = true,
+      suppressed = false,
+    }: { topGap?: boolean; suppressed?: boolean } = {}
+  ) => (
+    <SidebarSectionHeader
+      section={row.section}
+      expanded={row.expanded}
+      onToggle={toggleSection}
+      // The chats section gets an always-visible New-chat button (its primary
+      // entry point, reachable even when empty). `openChatModeTab` is a stable
+      // context callback, so the memo holds. Recent gets the same
+      // affordance, but starting a conversation in the ACTIVE FOLDER — the
+      // section spans folders and chats alike, and the folder is where a
+      // "continue where I left off" list lands you.
+      onNewChat={
+        row.section === "chats"
+          ? openChatModeTab
+          : row.section === "recent"
+            ? handleNewConversation
+            : undefined
+      }
+      // The folders section gets two right-edge hover actions mirroring the
+      // top-of-page NewFolderDropdown: Open Folder and Clone Repository.
+      // Both handlers are stable, so the memo holds.
+      onOpenFolder={
+        row.section === "folders" ? handleOpenFolderAction : undefined
+      }
+      onCloneRepository={
+        row.section === "folders" ? handleOpenCloneDialog : undefined
+      }
+      // Global "Import local sessions" entry (no folder anchor) — opens
+      // the same picker window as the folder context-menu item. Stable
+      // callback, so the memo holds.
+      onImportSessions={
+        row.section === "folders" ? handleOpenImportWindow : undefined
+      }
+      // "New group" — the one action in this cluster that organises the
+      // list rather than adding to it. Stable callback, so the memo holds.
+      onNewFolderGroup={
+        row.section === "folders" ? openNewGroupDialog : undefined
+      }
+      // Recent's kind filter (All / Chat / Folders). Stable callback, so
+      // the memo holds; the value only changes when the user picks another one.
+      recentFilter={row.section === "recent" ? recentFilter : undefined}
+      onRecentFilterChange={
+        row.section === "recent" ? changeRecentFilter : undefined
+      }
+      topGap={topGap}
+      suppressed={suppressed}
+    />
+  )
+
   const renderRow = (row: SidebarRow) => {
     if (row.kind === "section") {
       // Section headers are not folder-scoped, so they skip themeWrap.
-      return (
-        <SidebarSectionHeader
-          section={row.section}
-          expanded={row.expanded}
-          onToggle={toggleSection}
-          // The chats section gets an always-visible New-chat button (its primary
-          // entry point, reachable even when empty). `openChatModeTab` is a stable
-          // context callback, so the memo holds. Recent gets the same
-          // affordance, but starting a conversation in the ACTIVE FOLDER — the
-          // section spans folders and chats alike, and the folder is where a
-          // "continue where I left off" list lands you.
-          onNewChat={
-            row.section === "chats"
-              ? openChatModeTab
-              : row.section === "recent"
-                ? handleNewConversation
-                : undefined
-          }
-          // The folders section gets two right-edge hover actions mirroring the
-          // top-of-page NewFolderDropdown: Open Folder and Clone Repository.
-          // Both handlers are stable, so the memo holds.
-          onOpenFolder={
-            row.section === "folders" ? handleOpenFolderAction : undefined
-          }
-          onCloneRepository={
-            row.section === "folders" ? handleOpenCloneDialog : undefined
-          }
-          // Global "Import local sessions" entry (no folder anchor) — opens
-          // the same picker window as the folder context-menu item. Stable
-          // callback, so the memo holds.
-          onImportSessions={
-            row.section === "folders" ? handleOpenImportWindow : undefined
-          }
-          // "New group" — the one action in this cluster that organises the
-          // list rather than adding to it. Stable callback, so the memo holds.
-          onNewFolderGroup={
-            row.section === "folders" ? openNewGroupDialog : undefined
-          }
-          // Recent's kind filter (All / Chat / Folders). Stable callback, so
-          // the memo holds; the value only changes when the user picks another one.
-          recentFilter={row.section === "recent" ? recentFilter : undefined}
-          onRecentFilterChange={
-            row.section === "recent" ? changeRecentFilter : undefined
-          }
-          // Every section header carries a top gap: it separates "Folders" from
-          // the "Pinned" section above it, and — now that a fixed New chat /
-          // Search region sits above the scrolled list — gives the first section
-          // (Pinned, or Folders when nothing is pinned) the same breathing room
-          // below that region instead of butting right up against it.
-          topGap
-        />
-      )
+      // Every section header carries a top gap: it separates "Folders" from
+      // the "Pinned" section above it, and — now that a fixed New chat /
+      // Search region sits above the scrolled list — gives the first section
+      // (Pinned, or Folders when nothing is pinned) the same breathing room
+      // below that region instead of butting right up against it.
+      return sectionHeaderElement(row)
     }
     if (row.kind === "folder-group") {
       const group = folderGroups.find((g) => g.id === row.groupId)
