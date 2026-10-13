@@ -1334,11 +1334,11 @@ mod tauri_app {
                     use tauri_plugin_deep_link::DeepLinkExt;
                     let handle = app.handle().clone();
                     let _ = app.deep_link().on_open_url(move |event| {
+                        let urls = event.urls();
                         #[cfg(target_os = "macos")]
-                        crate::macos::opened_paths::handle_opened_urls(&handle, event.urls());
-                        let urls: Vec<String> =
-                            event.urls().iter().map(|url| url.to_string()).collect();
-                        crate::deep_link::handle_raw_urls(&handle, &urls);
+                        crate::macos::opened_paths::handle_opened_urls(&handle, &urls);
+                        let raw_urls: Vec<String> = urls.iter().map(|url| url.to_string()).collect();
+                        crate::deep_link::handle_raw_urls(&handle, &raw_urls);
                     });
                     // The Linux bundler writes a `.desktop` whose `Exec` has no
                     // `%u` field code (tauri#16014), so an installed deb/rpm/
