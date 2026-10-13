@@ -823,6 +823,16 @@ export function mergeConsecutiveAssistantTurns(
   return result
 }
 
+/**
+ * 用户消息操作按钮（创建任务/复制）的可见性与命中规则，两个按钮共用同一份：
+ * - 默认隐藏且不参与命中测试，透明按钮不能拦截文本长按选择；
+ * - 桌面端 hover 或键盘聚焦时显示并恢复命中；
+ * - 无 hover 能力的设备（移动端）始终显示且可点击。
+ * 供测试导出。
+ */
+export const USER_MESSAGE_ACTION_VISIBILITY_CLASS =
+  "opacity-0 pointer-events-none transition-opacity self-end group-hover/user-msg:opacity-100 group-hover/user-msg:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto"
+
 const UserMessageCopyButton = memo(function UserMessageCopyButton({
   parts,
 }: {
@@ -856,7 +866,7 @@ const UserMessageCopyButton = memo(function UserMessageCopyButton({
   return (
     <MessageAction
       tooltip={isCopied ? t("copied") : t("copyMessage")}
-      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      className={USER_MESSAGE_ACTION_VISIBILITY_CLASS}
       onClick={handleCopy}
       size="icon-xs"
     >
@@ -879,7 +889,7 @@ const UserMessageTaskButton = memo(function UserMessageTaskButton({
   return (
     <MessageAction
       tooltip={t("createFromMessage")}
-      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      className={USER_MESSAGE_ACTION_VISIBILITY_CLASS}
       onClick={createTask}
       size="icon-xs"
     >

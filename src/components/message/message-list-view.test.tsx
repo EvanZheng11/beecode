@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  USER_MESSAGE_ACTION_VISIBILITY_CLASS,
   advanceReplyFold,
   compactionOnlyPart,
   dedupeCompactionItems,
@@ -862,6 +863,43 @@ describe("compactionOnlyPart", () => {
     })
     expect(compactionOnlyPart(compactionGroup("output-available"))?.state).toBe(
       "output-available"
+    )
+  })
+})
+
+describe("用户消息操作按钮的可见性与命中规则", () => {
+  // 隐藏状态的按钮必须是 opacity-0 —— 透明但仍然命中的按钮会拦截触摸，
+  // 移动端长按文本时选择不了；所以隐藏时必须同时 pointer-events-none。
+  it("隐藏状态不参与命中测试，避免透明按钮拦截文本选择", () => {
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain("opacity-0")
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "pointer-events-none"
+    )
+  })
+
+  // 隐藏归隐藏，桌面端 hover 或键盘聚焦时按钮必须显示且可点击。
+  it("桌面端 hover/聚焦时显示并恢复命中", () => {
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "group-hover/user-msg:opacity-100"
+    )
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "group-hover/user-msg:pointer-events-auto"
+    )
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "focus-visible:opacity-100"
+    )
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "focus-visible:pointer-events-auto"
+    )
+  })
+
+  // 移动端没有 hover，媒体查询必须让按钮默认可见且可点击。
+  it("无 hover 能力的设备默认显示且可点击", () => {
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "[@media(hover:none)]:opacity-100"
+    )
+    expect(USER_MESSAGE_ACTION_VISIBILITY_CLASS).toContain(
+      "[@media(hover:none)]:pointer-events-auto"
     )
   })
 })
