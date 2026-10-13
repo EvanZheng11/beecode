@@ -91,7 +91,7 @@ jobs:
           git cat-file -e "$SOURCE_REF^{commit}"
           printf 'source_ref=%s\ntag=%s\nprerelease=%s\n' "$SOURCE_REF" "$TAG" "$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "源码：$SOURCE_REF；标签：${TAG:-无，仅构建 Artifacts}；预发布：$PRERELEASE"
-          echo "免费包不支持签名自动更新；macOS 为 Ad-hoc 签名，可能出现 Gatekeeper 提示，computer-use 已关闭。SHA256 仅用于完整性校验，不是身份认证签名。"
+          echo "免费包不支持签名自动更新；macOS 使用自签名代码签名证书，computer-use 双向验签保留，未经 Apple 公证，首次打开可能出现 Gatekeeper 提示。SHA256 仅用于完整性校验，不是身份认证签名。"
 
       - id: release
         name: 创建或复用草稿发布
@@ -116,8 +116,8 @@ jobs:
             const releaseBody = [
               commit.commit.message?.trim() || "无提交说明。",
               "## 免费安装包限制",
-              "本发布仅依赖 GITHUB_TOKEN，不提供 Developer ID 签名或 Apple 公证。macOS 使用 Ad-hoc 签名，Gatekeeper 可能阻止首次打开，请仅在确认来源后手动允许。",
-              "免费桌面和服务器包不支持签名自动更新，请手动下载并安装。macOS 免费包的 computer-use 已通过永不匹配的双向验签条件关闭，其他功能保留。",
+              "本发布不提供 Apple Developer ID 签名或 Apple 公证。macOS 使用仓库 Secrets 导入的自签名代码签名证书签名；该证书不在 Apple 信任链内，首次打开可能被 Gatekeeper 阻止，请仅在确认来源后手动允许。",
+              "免费桌面和服务器包不支持签名自动更新，请手动下载并安装。macOS 保留 computer-use：主程序、codeg-server 与 computer-helper 用同一张自签名证书做双向验签（按证书 SHA-1 指纹匹配），不回退到无验签模式。",
               "SHA256SUMS 和 .sha256 仅供完整性校验，不是身份认证签名。",
               "将对应目标的安装包与 SHA256SUMS-<target>.txt 下载到同一目录，执行 sha256sum -c SHA256SUMS-<target>.txt（macOS 可用 shasum -a 256 -c）。Actions Artifact 解压后也可在根目录校验。",
             ].join("\n\n");
@@ -315,18 +315,52 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # 免费包必须拒绝所有 computer-use 对端，不能进入无验签的开发模式。
-      - name: 关闭免费包的 computer-use（macOS）
+      # macOS：导入自签名代码签名证书（Secrets 里的 base64 P12），后续步骤用
+      # 同一张证书签名主程序与 computer-use helper。缺少 Secrets 会在这一步
+      # 直接失败（中文日志），不会降级为无验签或关闭 computer-use。
+      - name: 导入自签名代码签名证书（macOS）
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          CODEG_MACOS_SIGNING_P12: ${{ secrets.CODEG_MACOS_SIGNING_P12 }}
+          CODEG_MACOS_SIGNING_PASSWORD: ${{ secrets.CODEG_MACOS_SIGNING_PASSWORD }}
+        run: bash scripts/import-macos-self-signed-certificate.sh
+
+      # 自签名证书没有 TeamIdentifier：验签锚定用证书 SHA-1 指纹写法（identity
+      # 查找与 requirement 都是 SHA-1，签名 CodeDirectory 仍是 SHA-256）；
+      # 绝不写 CODEG_COMPUTER_TEAM_ID。
+      - name: 配置 computer-use 双向验签条件（macOS）
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
         run: |
           set -euo pipefail
-          csreq -r '=never' -t
-          echo 'CODEG_COMPUTER_PEER_REQUIREMENT=never' >> "$GITHUB_ENV"
-          echo 'CODEG_COMPUTER_HELPER_REQUIREMENT=never' >> "$GITHUB_ENV"
-          # 满足编译期成对约束；该占位值不是有效 Team ID，内核启动约束也拒绝匹配。
-          echo 'CODEG_COMPUTER_TEAM_ID=FREE-DISABLED' >> "$GITHUB_ENV"
-          echo '免费 macOS 包的 computer-use 已关闭，双向验签永不匹配。'
+          sha1="${CODEG_COMPUTER_CERT_SHA1:-}"
+          if ! printf '%s' "$sha1" | grep -Eq '^[0-9A-F]{40}$'; then
+            echo "::error::CODEG_COMPUTER_CERT_SHA1 不是 40 位十六进制 SHA-1（导入脚本未正常导出）。"
+            exit 1
+          fi
+          helper_req="identifier \"app.codeg.computer-helper\" and certificate leaf = H\"$sha1\""
+          peer_req="(identifier \"app.codeg\" or identifier \"codeg-server\") and certificate leaf = H\"$sha1\""
+          csreq -r="$helper_req" -t >/dev/null
+          csreq -r="$peer_req" -t >/dev/null
+          echo "CODEG_COMPUTER_HELPER_REQUIREMENT=$helper_req" >> "$GITHUB_ENV"
+          echo "CODEG_COMPUTER_PEER_REQUIREMENT=$peer_req" >> "$GITHUB_ENV"
+          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：$sha1）："
+          echo "  helper: $helper_req"
+          echo "  peers : $peer_req"
+
+      # 导入 / 清理脚本的门禁测试：归属校验（拒绝路径穿越、多层目录、符号链接、
+      # 文件名不符）、列表读改写只增删本 job 的条目（并行导入 / 清理时别人的与
+      # 用户自己的条目必须保留）、导入失败回滚、以及全局 mkdir 锁。用真实
+      # security / codesign 跑；只动本脚本自己的临时 keychain，不碰 TCC。
+      - name: 自签名 keychain 导入/清理门禁测试（macOS）
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          CODEG_MACOS_SIGNING_P12: ${{ secrets.CODEG_MACOS_SIGNING_P12 }}
+          CODEG_MACOS_SIGNING_PASSWORD: ${{ secrets.CODEG_MACOS_SIGNING_PASSWORD }}
+          CODEG_TEST_REQUIRE_IMPORT: "1"
+        run: bash scripts/test-import-macos-self-signed-certificate.sh
 
       # Build the sidecars — the `codeg-mcp` companion and the
       # `codeg-computer-helper` computer-use executor — for the matrix target
@@ -368,8 +402,187 @@ jobs:
                 exit 1
               fi
               ls -la "$helper"
+              # staging 已显式签名（identifier 写死 + hardened runtime）：bundler 重签
+              # 不保留自定义 identifier，这里先确认，别等到打包后才失败。
+              mcp="src-tauri/binaries/codeg-mcp-${{ matrix.target }}"
+              for pair in "$mcp:codeg-mcp" "$helper:app.codeg.computer-helper"; do
+                path="${pair%:*}"
+                ident="${pair#*:}"
+                info="$(codesign -dv "$path" 2>&1)"
+                if ! printf '%s\n' "$info" | grep -qx "Identifier=$ident"; then
+                  echo "FATAL: $path 的签名标识不是 $ident"
+                  exit 1
+                fi
+                if ! printf '%s\n' "$info" | grep -qE '^CodeDirectory .*\(runtime\)'; then
+                  echo "FATAL: $path 缺少 hardened runtime（签名 flags 里没有 runtime）"
+                  exit 1
+                fi
+              done
               ;;
           esac
+
+      # I5 门禁：证书模式下的两项运行时验证 —— (1) 内核在 exec 处拒绝不合规镜像，
+      # (2) 签名之后 主程序 ↔ helper 的双向握手。用本次 CI 证书签出的无副作用
+      # fixture 与定向测试 harness、以及 staging 阶段签名过的真实 helper 实测；
+      # 只在原生 arm64 macOS 矩阵跑（x64 仍保留原有签名 / 结构门禁）。最耗时的
+      # 是 debug 测试编译（cargo test --no-run），一次完成。
+      #
+      # SIP：只有 `csrutil` 显示 enabled 时内核才保持 launch requirement；否则测试
+      # 打印 NOT-VERIFIED，这一步把它写进 step summary 的「内核拒绝未验证」，绝不当
+      # 成通过。双向握手与 SIP 无关，必须实际通过。
+      - name: 证书模式内核约束与双向握手实测（macOS arm64）
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "宿主：$(uname -srm)，macOS $(sw_vers -productVersion)"
+          sip="$(csrutil status 2>&1 || true)"
+          printf '%s\n' "$sip"
+          if printf '%s' "$sip" | grep -q 'status: enabled'; then
+            sip_state="enabled"
+          else
+            sip_state="disabled"
+          fi
+
+          work="$RUNNER_TEMP/codeg-selfsigned-tests"
+          rm -rf "$work"
+          mkdir -p "$work"
+
+          # 1) 无副作用原生 fixture：只在 CODEG_TEST_FIXTURE_MARKER 指向的临时文件里
+          #    写几个字节，不碰 TCC / 屏幕 / 鼠标。两份内容不同、同一张证书、同一个
+          #    identifier —— 用来验证「验签之后文件被替换」在 exec 处被拒绝。
+          cat > "$work/fixture.c" <<'EOF'
+          #include <fcntl.h>
+          #include <stdlib.h>
+          #include <unistd.h>
+
+          #ifndef CODEG_FIXTURE_TAG
+          #define CODEG_FIXTURE_TAG "primary"
+          #endif
+
+          static const char tag[] = CODEG_FIXTURE_TAG;
+
+          int main(void) {
+            const char *marker = getenv("CODEG_TEST_FIXTURE_MARKER");
+            if (marker != (const char *)0) {
+              int fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+              if (fd >= 0) {
+                ssize_t written = write(fd, tag, sizeof tag - 1);
+                (void)written;
+                close(fd);
+              }
+            }
+            return 0;
+          }
+          EOF
+          clang -O0 -o "$work/fixture-primary" "$work/fixture.c" -DCODEG_FIXTURE_TAG='"primary"'
+          clang -O0 -o "$work/fixture-other" "$work/fixture.c" -DCODEG_FIXTURE_TAG='"other-fixture"'
+          for fixture in "$work/fixture-primary" "$work/fixture-other"; do
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" --keychain "$CODEG_MACOS_KEYCHAIN" \
+              -i app.codeg.computer-helper --options runtime --digest-algorithm=sha256 \
+              --timestamp=none "$fixture"
+            codesign --verify --strict "$fixture"
+          done
+
+          # 2) 定向测试 harness：编译 lib 测试（不运行），再签两份 ——
+          #    a) 同一张证书 + identifier app.codeg + hardened runtime：helper 信任的 parent；
+          #    b) 同一份可执行文件、去掉证书签名（Adhoc）：helper 必须拒绝的 parent。
+          #    lib 测试带 tauri-runtime，tauri-build 检查前端 out/ 目录，先建好。
+          mkdir -p out
+          ( cd src-tauri && cargo test --features test-utils --lib --no-run 2>&1 | tee "$work/cargo-no-run.log" )
+          harness="$(sed -n 's/^ *Executable.*(\(.*\))$/\1/p' "$work/cargo-no-run.log" | head -1)"
+          case "$harness" in
+            /*) ;;
+            *) harness="$PWD/src-tauri/$harness" ;;
+          esac
+          if [ ! -x "$harness" ]; then
+            echo "::error::找不到测试 harness：$harness"
+            exit 1
+          fi
+          cp "$harness" "$work/harness-trusted"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --keychain "$CODEG_MACOS_KEYCHAIN" \
+            -i app.codeg --options runtime --digest-algorithm=sha256 --timestamp=none "$work/harness-trusted"
+          codesign --verify --strict "$work/harness-trusted"
+          cp "$harness" "$work/harness-adhoc"
+          codesign --force --sign - "$work/harness-adhoc"
+          echo "测试 harness：$harness"
+          codesign -dv "$work/harness-trusted" 2>&1 | grep -E '^(Identifier|CodeDirectory)' || true
+
+          helper="src-tauri/binaries/codeg-computer-helper.app/Contents/MacOS/codeg-computer-helper"
+          if [ ! -x "$helper" ]; then
+            echo "::error::staging 的 helper 不存在：$helper"
+            exit 1
+          fi
+
+          # 3) 内核约束：正例真的 exec；错 cdhash 与「验签后被替换」在 exec 处被拒
+          kernel_log="$work/kernel.log"
+          set +e
+          CODEG_TEST_SELF_SIGNED_BIN="$work/fixture-primary" \
+          CODEG_TEST_SELF_SIGNED_OTHER_BIN="$work/fixture-other" \
+          CODEG_TEST_SELF_SIGNED_SHA1="$CODEG_COMPUTER_CERT_SHA1" \
+            "$harness" --ignored --nocapture --test-threads=1 \
+            computer::spawn::tests::a_certificate_launch_requirement_holds_at_exec \
+            >"$kernel_log" 2>&1
+          kernel_rc=$?
+          set -e
+          cat "$kernel_log"
+          if [ "$kernel_rc" -ne 0 ]; then
+            echo "::error::内核约束测试失败（rc=$kernel_rc）"
+            exit 1
+          fi
+
+          # 4) 双向握手：签成 app.codeg 的 parent 必须被验成 Verified；无证书（Adhoc）
+          #    的 parent 必须被拒。只握手与关闭，不发任何 op，不触发 TCC。
+          peer_log="$work/peer.log"
+          refused_log="$work/peer-refused.log"
+          if ! CODEG_TEST_HELPER="$helper" CODEG_TEST_PEER=verified \
+            "$work/harness-trusted" --ignored --nocapture --test-threads=1 \
+            computer::local::tests::a_signed_helper_verifies_a_signed_codeg_parent \
+            >"$peer_log" 2>&1; then
+            cat "$peer_log"
+            echo "::error::签名后双向握手（正例）失败"
+            exit 1
+          fi
+          cat "$peer_log"
+          if ! CODEG_TEST_HELPER="$helper" CODEG_TEST_PEER=refused \
+            "$work/harness-adhoc" --ignored --nocapture --test-threads=1 \
+            computer::local::tests::a_signed_helper_verifies_a_signed_codeg_parent \
+            >"$refused_log" 2>&1; then
+            cat "$refused_log"
+            echo "::error::签名后双向握手（负例：无证书的 parent 必须被拒）失败"
+            exit 1
+          fi
+          cat "$refused_log"
+
+          # 5) 结论与条件写进 step summary（宿主 arch / SIP 状态 / 每项的证据）
+          {
+            echo "### 自签名 computer-use 运行时实测"
+            echo ""
+            echo "- 宿主：\`$(uname -m)\`，macOS \`$(sw_vers -productVersion)\`，target \`${{ matrix.target }}\`"
+            echo "- \`csrutil status\`：**$sip_state**"
+            if grep -q 'codeg-kernel-constraint: VERIFIED' "$kernel_log"; then
+              echo "- 内核拒绝不合规镜像：**已验证**（正例 exec 成功；错 cdhash 与「验签后被替换」都在 exec 处 SIGKILL，无任何副作用）"
+            elif grep -q 'NOT-VERIFIED reason=sip-disabled' "$kernel_log"; then
+              echo "- 内核拒绝不合规镜像：**内核拒绝未验证** —— runner 的 SIP 为 disabled，内核不保持 launch requirement。这不是通过，也没有伪装成通过；请按真实 runner 的 SIP 状态判断交付。"
+            else
+              echo "::error::内核约束测试没有报告结果"
+              exit 1
+            fi
+            if grep -q 'codeg-signed-handshake: VERIFIED' "$peer_log"; then
+              echo "- 签名后双向握手（同一证书签成 app.codeg 的 parent）：**已验证** PeerCheck::Verified"
+            else
+              echo "::error::签名后双向握手没有报告 VERIFIED"
+              exit 1
+            fi
+            if grep -q 'codeg-signed-handshake: REFUSED' "$refused_log"; then
+              echo "- 签名后双向握手（无证书 / 另一张证书的 parent）：**已拒绝** EXIT_PEER_REFUSED"
+            else
+              echo "::error::无证书的 parent 没有被 helper 拒绝"
+              exit 1
+            fi
+            echo ""
+            echo "fixture 与 harness 都由本次 CI 证书签出；helper 是 staging 阶段签名过的真实产物；测试只握手 / 关闭，未触发 TCC 权限，未做屏幕或鼠标动作。"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build and upload to draft release (Linux arm64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -442,7 +655,12 @@ jobs:
           includeUpdaterJson: false
           retryAttempts: 2
 
-      - name: 构建 Ad-hoc 免费安装包（macOS）
+      # 签名身份取导入脚本写入 GITHUB_ENV 的 APPLE_SIGNING_IDENTITY（证书
+      # SHA-1）；staged codeg-mcp 与 helper.app 已用同一证书预签（identifier 写死、
+      # 带 hardened runtime）—— bundler 会重签侧车与最外层 bundle，但不重签嵌套
+      # helper（先内后外）；DMG 之后不再改动 app。hardenedRuntime 显式开启（不依赖
+      # 配置默认值），门禁要求主程序也带 runtime flag。
+      - name: 构建自签名免费安装包（macOS）
         if: contains(matrix.target, 'apple-darwin')
         uses: tauri-apps/tauri-action@v0.6.1
         env:
@@ -451,7 +669,6 @@ jobs:
           # do not fall back to the runner host triple.
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: "-"
         with:
           releaseId: ${{ needs.create-draft-release.outputs.release_id }}
           tagName: ${{ needs.create-draft-release.outputs.tag }}
@@ -459,12 +676,12 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"hardenedRuntime":true}}}'
           includeUpdaterJson: false
           retryAttempts: 2
 
-      # 保留包结构、严格签名、无权限扩展及符号黑名单门禁；免费模式应拒绝 computer-use。
-      - name: 检查免费包签名、结构与符号（macOS）
+      # 保留包结构、严格签名、无权限扩展、hardened runtime 及符号黑名单门禁；证书模式按 SHA-1 指纹双向验签通过。
+      - name: 检查自签名包签名、结构与符号（macOS）
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
         run: |
@@ -495,23 +712,40 @@ jobs:
           for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$helper_app"; do
             name="$(basename "$path")"
             codesign --verify --strict "$path"
+            if ! codesign -dv "$path" 2>&1 | grep -qE '^CodeDirectory .*\(runtime\)'; then
+              echo "FATAL: $name 缺少 hardened runtime（签名 flags 里没有 runtime）"
+              codesign -dv "$path" || true
+              exit 1
+            fi
             if codesign -d --entitlements - --xml "$path" 2>/dev/null | grep -q '<key>'; then
               echo "FATAL: $name carries entitlements; codeg's executables must carry none"
               codesign -d --entitlements - "$path" || true
               exit 1
             fi
           done
-          if [ "$CODEG_COMPUTER_PEER_REQUIREMENT" != never ] || \
-             [ "$CODEG_COMPUTER_HELPER_REQUIREMENT" != never ] || \
-             [ "$CODEG_COMPUTER_TEAM_ID" != FREE-DISABLED ]; then
-            echo '::error::免费包的 computer-use 禁用条件缺失'
+          # 证书模式锚必须存在且格式有效：40 位 SHA-1 + 两份锚定同一证书的
+          # requirement；绝不回退到关闭模式（never）。
+          sha1="${CODEG_COMPUTER_CERT_SHA1:-}"
+          if ! printf '%s' "$sha1" | grep -Eq '^[0-9A-F]{40}$'; then
+            echo '::error::CODEG_COMPUTER_CERT_SHA1 缺失或不是 40 位十六进制 SHA-1'
             exit 1
           fi
-          if codesign --verify --strict -R="$CODEG_COMPUTER_PEER_REQUIREMENT" "$app/Contents/MacOS/codeg" || \
-             codesign --verify --strict -R="$CODEG_COMPUTER_HELPER_REQUIREMENT" "$helper_app"; then
-            echo '::error::免费包的永不匹配条件意外通过'
-            exit 1
-          fi
+          for req_var in CODEG_COMPUTER_PEER_REQUIREMENT CODEG_COMPUTER_HELPER_REQUIREMENT; do
+            req="${!req_var:-}"
+            if [ "$req" = never ] || [ -z "$req" ]; then
+              echo "::error::$req_var 缺失或仍是关闭模式"
+              exit 1
+            fi
+            if ! printf '%s' "$req" | grep -qF "H\"$sha1\""; then
+              echo "::error::$req_var 未锚定到本次证书 SHA-1 指纹"
+              exit 1
+            fi
+          done
+          codesign --verify --strict -R="$CODEG_COMPUTER_PEER_REQUIREMENT" "$app/Contents/MacOS/codeg"
+          codesign --verify --strict -R="$CODEG_COMPUTER_HELPER_REQUIREMENT" "$helper_app"
+          # codeg-mcp 也必须用同一张证书（标识 codeg-mcp + 证书叶子哈希）。
+          req_mcp="identifier \"codeg-mcp\" and certificate leaf = H\"$sha1\""
+          codesign --verify --strict -R="$req_mcp" "$app/Contents/MacOS/codeg-mcp"
           deny='^_(CGEventPost|CGEventPostToPid|CGEventPostToPSN|CGEventTapCreate|CGEventTapCreateForPid|CGEventTapCreateForPSN|CGWindowListCreateImage|CGWindowListCreateImageFromArray|CGDisplayCreateImage|CGDisplayCreateImageForRect|CGDisplayStreamCreate|CGDisplayStreamCreateWithDispatchQueue|CGRequestScreenCaptureAccess|CGRequestPostEventAccess|AXIsProcessTrustedWithOptions|AXUIElement[A-Za-z]*|AXObserver[A-Za-z]*)$|^_OBJC_CLASS_\$_SC(ShareableContent|Stream|ScreenshotManager|ContentFilter|ContentSharingPicker)$'
           for bin in codeg codeg-mcp; do
             hits="$(nm -u "$app/Contents/MacOS/$bin" | grep -E "$deny" || true)"
@@ -524,7 +758,8 @@ jobs:
               exit 1
             fi
           done
-          echo '免费包严格签名、结构和符号检查通过；computer-use 已关闭。Ad-hoc 包未经公证，可能出现 Gatekeeper 提示。'
+          codesign -dv "$app/Contents/MacOS/codeg" 2>&1 | grep -E '^(Identifier|TeamIdentifier)=' || true
+          echo '自签名包严格签名、结构和符号检查通过；computer-use 双向验签按同一张自签名证书匹配。包未经 Apple 公证，可能出现 Gatekeeper 提示。'
 
       - name: 生成桌面安装包 SHA256SUMS（Unix）
         if: runner.os != 'Windows'
@@ -611,6 +846,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           gh release upload "$TAG" "src-tauri/target/$TARGET/release/bundle/installers/SHA256SUMS-$TARGET.txt" --clobber
+
+      # cleanup 在 always() 阶段还原 keychain 搜索列表并删除本 job 的临时
+      # keychain；失败路径也要执行。清理本身不需要 secrets。
+      - name: 清理临时签名 keychain（macOS）
+        if: always() && contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: bash scripts/import-macos-self-signed-certificate.sh cleanup
 
   build-server:
     needs: create-draft-release
@@ -711,16 +953,33 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: 关闭免费服务器包的 computer-use（macOS）
+      # macOS 服务器包同样先导入自签名证书，再生成 computer-use 双向验签
+      # 条件（编译期锚定）。缺少 Secrets 在导入步直接失败（中文日志）。
+      - name: 导入自签名代码签名证书（macOS 服务器）
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          CODEG_MACOS_SIGNING_P12: ${{ secrets.CODEG_MACOS_SIGNING_P12 }}
+          CODEG_MACOS_SIGNING_PASSWORD: ${{ secrets.CODEG_MACOS_SIGNING_PASSWORD }}
+        run: bash scripts/import-macos-self-signed-certificate.sh
+
+      - name: 配置 computer-use 双向验签条件（macOS 服务器）
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
         run: |
           set -euo pipefail
-          csreq -r '=never' -t
-          echo 'CODEG_COMPUTER_PEER_REQUIREMENT=never' >> "$GITHUB_ENV"
-          echo 'CODEG_COMPUTER_HELPER_REQUIREMENT=never' >> "$GITHUB_ENV"
-          echo 'CODEG_COMPUTER_TEAM_ID=FREE-DISABLED' >> "$GITHUB_ENV"
-          echo '免费 macOS 服务器包的 computer-use 已关闭。'
+          sha1="${CODEG_COMPUTER_CERT_SHA1:-}"
+          if ! printf '%s' "$sha1" | grep -Eq '^[0-9A-F]{40}$'; then
+            echo "::error::CODEG_COMPUTER_CERT_SHA1 不是 40 位十六进制 SHA-1（导入脚本未正常导出）。"
+            exit 1
+          fi
+          helper_req="identifier \"app.codeg.computer-helper\" and certificate leaf = H\"$sha1\""
+          peer_req="(identifier \"app.codeg\" or identifier \"codeg-server\") and certificate leaf = H\"$sha1\""
+          csreq -r="$helper_req" -t >/dev/null
+          csreq -r="$peer_req" -t >/dev/null
+          echo "CODEG_COMPUTER_HELPER_REQUIREMENT=$helper_req" >> "$GITHUB_ENV"
+          echo "CODEG_COMPUTER_PEER_REQUIREMENT=$peer_req" >> "$GITHUB_ENV"
+          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：$sha1）。"
 
       - name: Build server + codeg-mcp companion + computer-use helper
         working-directory: src-tauri
@@ -729,12 +988,51 @@ jobs:
         # `--no-default-features --target` flags as the server so it shares
         # the cross-compile env (Linux arm64) without dragging in tauri
         # runtime deps. Each binary target needs its own feature (Cargo.toml).
-        # helper 保持随服务器分发；免费 macOS 包已在编译前拒绝 computer-use，
-        # 其他平台仍仅在桌面会话设置 CODEG_COMPUTER_USE=1 时启用。
+        # helper 保持随服务器分发；macOS 在编译期锚定自签名证书的双向验签
+        # 条件（computer-use 保留），其他平台仍仅在桌面会话设置
+        # CODEG_COMPUTER_USE=1 时启用。
         run: |
           cargo build --release --bin codeg-server --no-default-features --features server-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-computer-helper --no-default-features --features computer-helper --target ${{ matrix.target }}
+
+      # cargo 产物先用同一张自签名证书严格签名，再打包/上传；helper 的签名
+      # 标识必须是 helper 编译期验签条件里的 app.codeg.computer-helper。
+      - name: 用自签名证书严格签服务器二进制（macOS）
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="src-tauri/target/${{ matrix.target }}/release"
+          sha1="$CODEG_COMPUTER_CERT_SHA1"
+          if ! printf '%s' "$sha1" | grep -Eq '^[0-9A-F]{40}$'; then
+            echo '::error::CODEG_COMPUTER_CERT_SHA1 缺失或不是 40 位十六进制 SHA-1'
+            exit 1
+          fi
+          # 证书模式：hardened runtime + SHA-256 CodeDirectory（identifier 显式写死）。
+          sign=(--force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --digest-algorithm=sha256)
+          codesign "${sign[@]}" -i codeg-server "$dir/codeg-server"
+          codesign "${sign[@]}" -i codeg-mcp "$dir/codeg-mcp"
+          codesign "${sign[@]}" -i app.codeg.computer-helper "$dir/codeg-computer-helper"
+          codesign --verify --strict -R="$CODEG_COMPUTER_PEER_REQUIREMENT" "$dir/codeg-server"
+          req_mcp="identifier \"codeg-mcp\" and certificate leaf = H\"$sha1\""
+          codesign --verify --strict -R="$req_mcp" "$dir/codeg-mcp"
+          codesign --verify --strict -R="$CODEG_COMPUTER_HELPER_REQUIREMENT" "$dir/codeg-computer-helper"
+          # 三个二进制都验签名标识与 hardened runtime；标识不对或缺 runtime 不得发出。
+          for pair in codeg-server:codeg-server codeg-mcp:codeg-mcp codeg-computer-helper:app.codeg.computer-helper; do
+            bin="${pair%%:*}"
+            ident="${pair#*:}"
+            info="$(codesign -dv "$dir/$bin" 2>&1)"
+            if ! printf '%s\n' "$info" | grep -qx "Identifier=$ident"; then
+              echo "::error::$bin 的签名标识不是 $ident"
+              exit 1
+            fi
+            if ! printf '%s\n' "$info" | grep -qE '^CodeDirectory .*\(runtime\)'; then
+              echo "::error::$bin 缺少 hardened runtime（签名 flags 里没有 runtime）"
+              exit 1
+            fi
+          done
+          echo 'codeg-server / codeg-mcp / codeg-computer-helper 已用自签名证书签名并通过严格验签。'
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -851,6 +1149,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.create-draft-release.outputs.tag }}
         run: gh release upload "$env:TAG" "dist/${{ matrix.artifact }}.zip" "dist/${{ matrix.artifact }}.zip.sha256" --clobber
+
+      # cleanup 在 always() 阶段还原 keychain 搜索列表并删除本 job 的临时
+      # keychain；失败路径也要执行。
+      - name: 清理临时签名 keychain（macOS 服务器）
+        if: always() && contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: bash scripts/import-macos-self-signed-certificate.sh cleanup
 
   build-docker:
     needs:
@@ -980,4 +1285,4 @@ jobs:
               prerelease,
             });
 
-            core.info(`已发布免费安装包 #${releaseId}；不支持签名自动更新，macOS computer-use 已关闭。`);
+            core.info(`已发布免费安装包 #${releaseId}；不支持签名自动更新，macOS 用自签名证书签名并保留 computer-use 双向验签。`);

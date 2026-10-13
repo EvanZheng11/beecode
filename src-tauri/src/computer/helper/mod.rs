@@ -17,10 +17,14 @@
 //! their processes. A build without it is a development build. Development
 //! builds skip the peer check and say so in their first frame — tolerable only
 //! because such a build is ad-hoc signed, so the permissions granted to it are
-//! keyed to that one build's cdhash. **A helper that carries a Team ID and no
+//! keyed to that one build's cdhash. **A helper that carries a signing
+//! identity — a Team ID, or the certificate of a self-signed build — and no
 //! requirement refuses to start**: that would be a helper matching the release
 //! signing identity with no check in front of it, a standing key to whatever
-//! the user granted.
+//! the user granted. So does **a helper whose own signature does not hold, or
+//! whose signing information has no ad-hoc flag**: a missing field is the
+//! absence of an answer, not the answer "development build" — the framework
+//! reports partial data for signatures that are invalid.
 //!
 //! On Windows and Linux there is no TCC to guard and no code signature to
 //! check; the helper serves its stdin, which is the pipe codeg gave it.
@@ -204,25 +208,84 @@ impl PeerGuard {
     }
 }
 
+/// Whether a helper built without codeg's designated requirement may serve
+/// at all.
+///
+/// Only a development build may — and it has to show it. `mine` is what reading
+/// its own signature gave ([`super::codesign::self_info`]): a `CodeInfo` for a
+/// signature that is validly signed, or the error that reading it failed.
+///
+/// The order matters, and so does what counts as evidence:
+///
+/// * a signature that could not be read as valid says nothing at all — unsigned
+///   code, and code whose signature does not hold, never become a development
+///   build by failing to answer;
+/// * the one positive mark of a development build here is the ad-hoc flag the
+///   linker sets ([`super::codesign::CS_ADHOC`]). A Team ID and a certificate
+///   **missing** are not that mark: the framework reports partial signing
+///   information for signatures that are invalid, and a certificate it will not
+///   hand over is an error, not "no certificate";
+/// * a helper that does carry a signing identity — a Team ID, or the
+///   certificate of a self-signed build — refuses to start: that would be a
+///   helper matching the release signing identity with no check in front of it,
+///   a standing key to whatever the user granted.
+#[cfg(target_os = "macos")]
+pub(super) fn may_serve_without_requirement(
+    trust: &super::local::Trust<'_>,
+    mine: &Result<super::codesign::CodeInfo, String>,
+) -> Result<(), String> {
+    use super::local::Trust;
+    if *trust != Trust::Development {
+        return Err(format!(
+            "这个构建的信任模式是 {trust:?}，却没有把 codeg 的 requirement 编译进来；\
+             它会服务任何调用者"
+        ));
+    }
+    let me = mine.as_ref().map_err(|why| {
+        format!(
+            "这个 helper 读不出自己有效的签名（{why}）；没有 codeg 的 requirement 的构建\
+             只能是链接器 Adhoc 签名的开发构建，拒绝服务"
+        )
+    })?;
+    // 唯一的正面证据：签名 flags 里明确有 Adhoc 位。绝不从 Team ID / 证书缺席
+    // 反推：无效签名也可能返回一份缺字段的元数据。
+    if !me.ad_hoc() {
+        return Err(format!(
+            "这个 helper 的签名 flags 是 {:?}，没有明确的 Adhoc 标志（kSecCodeSignatureAdhoc）；\
+             没有 codeg 的 requirement 时只有 Adhoc 开发构建可以服务",
+            me.flags
+        ));
+    }
+    // A certificate of a self-signed build is what an ad-hoc signature never
+    // has: this tells the two apart, where a Team ID alone does not.
+    if me.team_id.is_some() || me.leaf_sha1.is_some() {
+        return Err(format!(
+            "这个 helper 带着签名身份（Team ID {:?}，证书 {:?}），却没有把 codeg 的 requirement \
+             编译进来；它会服务任何调用者",
+            me.team_id, me.leaf_sha1
+        ));
+    }
+    Ok(())
+}
+
 /// Decide who is on the other end of stdin, before anything is read from it.
 #[cfg(target_os = "macos")]
 fn open_channel() -> Result<Channel, (i32, String)> {
     use super::codesign::{check_guest, peer_audit_token, self_info, Guest};
+    use super::local::{anchor_matches, trust};
 
+    // A configuration that does not add up — an anchor without its
+    // requirements, a certificate fingerprint that is not one, both anchors at
+    // once — serves nobody: never a quiet fall back to checking nothing.
+    let trust =
+        trust().map_err(|e| (EXIT_UNANCHORED, format!("computer use 的验签配置有误：{e}")))?;
     let requirement = PEER_REQUIREMENT.filter(|r| !r.trim().is_empty());
     if requirement.is_none() {
         // A helper that cannot tell whether it is a release build is treated
-        // as one.
-        let me = self_info()
-            .map_err(|e| (EXIT_UNANCHORED, format!("cannot read my own signature: {e}")))?;
-        if me.team_id.is_some() {
-            return Err((
-                EXIT_UNANCHORED,
-                "this helper is signed with a Team ID but was built without codeg's \
-                 designated requirement; it would serve any caller"
-                    .into(),
-            ));
-        }
+        // as one: its own signature is read — validity first — and what that
+        // reading says is what decides, its failure included.
+        let mine = self_info();
+        may_serve_without_requirement(&trust, &mine).map_err(|why| (EXIT_UNANCHORED, why))?;
     }
 
     if !is_socket(0) {
@@ -266,6 +329,13 @@ fn open_channel() -> Result<Channel, (i32, String)> {
             }
             let info = check_guest(Guest::Audit(token), requirement)
                 .map_err(|e| (EXIT_PEER_REFUSED, format!("the peer is not codeg: {e}")))?;
+            // 证书模式：对端签名的证书指纹必须正是这个构建信任的锚。
+            anchor_matches(&trust, info.leaf_sha1.as_deref()).map_err(|e| {
+                (
+                    EXIT_PEER_REFUSED,
+                    format!("对端不是这个构建信任的 codeg：{e}"),
+                )
+            })?;
             info.entitlements_clean().map_err(|e| {
                 (
                     EXIT_PEER_REFUSED,
@@ -1466,6 +1536,65 @@ mod tests {
         // waiting on a peer that is still, as far as it can tell, there.
         to_helper.shutdown().await.unwrap();
         assert_eq!(task.await.unwrap(), EXIT_OK);
+    }
+
+    /// 没有编译进来的 requirement 时，只有开发构建可以服务，而且要拿得出证据：
+    /// 自身签名读得出来而且是有效的、flags 里明确有 Adhoc 位、并且不带签名身份。
+    /// 带锚的构建、读不出签名的构建、缺 flags / 非 Adhoc 的构建一律拒绝 ——
+    /// 「Team ID 和证书都缺席」不是证据（无效签名也会返回缺字段的元数据）。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_helper_without_a_requirement_serves_only_a_development_build() {
+        use crate::computer::codesign::{self_info, CodeInfo, CS_ADHOC, CS_RUNTIME};
+        use crate::computer::local::Trust;
+
+        // 测试二进制是链接器 Adhoc 签名的：签名有效、flags 带 Adhoc、没有 Team ID
+        // 也没有证书。
+        let mine = self_info();
+        let me = mine.as_ref().expect("自己的签名");
+        assert!(me.ad_hoc(), "链接器写给测试二进制的 Adhoc 标志：{me:?}");
+        assert!(me.team_id.is_none() && me.leaf_sha1.is_none(), "{me:?}");
+        assert!(may_serve_without_requirement(&Trust::Development, &mine).is_ok());
+        // 编译时带了锚（哪怕是被禁用的免费包占位值）：拒绝服务。
+        let disabled = Trust::TeamId {
+            team_id: "FREE-DISABLED",
+        };
+        assert!(may_serve_without_requirement(&disabled, &mine).is_err());
+        let certificate = Trust::Certificate {
+            sha1: "5CB967057A60BE9BA750D5B65285B94BEEE3EFE7",
+        };
+        assert!(may_serve_without_requirement(&certificate, &mine).is_err());
+        // 读不出自己有效的签名（未签名 / 无效签名 / 证书读不出来）：拒绝 ——
+        // 「读不出来」不是「是开发构建」。
+        let unreadable =
+            Err("SecCodeCheckValidity failed: OSStatus -67062 (errSecCSUnsigned)".to_string());
+        assert!(may_serve_without_requirement(&Trust::Development, &unreadable).is_err());
+        // 元数据里没有 flags：没有正面证据，拒绝。
+        let missing_flags = Ok(CodeInfo::default());
+        assert!(may_serve_without_requirement(&Trust::Development, &missing_flags).is_err());
+        // flags 有、但没有 Adhoc（部分/错误状态的签名数据）：拒绝。
+        let not_adhoc = Ok(CodeInfo {
+            flags: Some(CS_RUNTIME),
+            ..CodeInfo::default()
+        });
+        assert!(may_serve_without_requirement(&Trust::Development, &not_adhoc).is_err());
+        // 有 Adhoc 标志，却带着签名身份（Team ID 或证书）：仍然拒绝 —— 自签名
+        // helper 没有 Team ID，只看 Team ID 是分辨不出来的。
+        for signed in [
+            CodeInfo {
+                flags: Some(CS_ADHOC),
+                team_id: Some("ABCDE12345".into()),
+                ..CodeInfo::default()
+            },
+            CodeInfo {
+                flags: Some(CS_ADHOC),
+                leaf_sha1: Some("5CB967057A60BE9BA750D5B65285B94BEEE3EFE7".into()),
+                ..CodeInfo::default()
+            },
+        ] {
+            let refused = may_serve_without_requirement(&Trust::Development, &Ok(signed.clone()));
+            assert!(refused.is_err(), "{signed:?}");
+        }
     }
 
     /// A reply too large for the channel becomes a refusal that says so,

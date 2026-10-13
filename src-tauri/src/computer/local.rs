@@ -58,6 +58,14 @@ pub const HELPER_REQUIREMENT: Option<&str> = option_env!("CODEG_COMPUTER_HELPER_
 /// the helper is launched only as a Developer ID build of this team.
 pub const HELPER_TEAM_ID: Option<&str> = option_env!("CODEG_COMPUTER_TEAM_ID");
 
+/// The certificate anchor of a self-signed build: the SHA-1 of its signing
+/// (leaf) certificate, 40 hex digits — what a requirement names as
+/// `certificate leaf = H"…"`. A certificate of our own making needs no
+/// Developer ID and no Team ID, and the system need not trust it for a
+/// requirement that names it to hold. Set by the release build together with
+/// both requirements, never together with [`HELPER_TEAM_ID`].
+pub const CERT_SHA1: Option<&str> = option_env!("CODEG_COMPUTER_CERT_SHA1");
+
 /// The helper's signing identifier (its designated requirement names it too):
 /// on macOS, the bundle identifier of the helper app.
 pub const HELPER_SIGNING_ID: &str = "app.codeg.computer-helper";
@@ -72,11 +80,129 @@ pub const HELPER_SIGNING_ID: &str = "app.codeg.computer-helper";
 pub const HELPER_APP: &str = "codeg-computer-helper.app";
 
 // A release build pins both or neither: a requirement checked after launch
-// without the launch requirement would let a wrapper run first.
+// without the launch requirement would let a wrapper run first. Which anchor
+// it is — a Team ID or a certificate — is checked at run time too, where the
+// values themselves can be read (`trust`).
 const _: () = assert!(
-    HELPER_REQUIREMENT.is_some() == HELPER_TEAM_ID.is_some(),
-    "CODEG_COMPUTER_HELPER_REQUIREMENT and CODEG_COMPUTER_TEAM_ID are set together"
+    HELPER_REQUIREMENT.is_none() || HELPER_TEAM_ID.is_some() || CERT_SHA1.is_some(),
+    "CODEG_COMPUTER_HELPER_REQUIREMENT needs a trust anchor: CODEG_COMPUTER_TEAM_ID or \
+     CODEG_COMPUTER_CERT_SHA1"
 );
+
+/// What this build trusts the other side of the helper's socket to be signed
+/// with, decided at compile time by the release build's environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trust<'a> {
+    /// A development build: no anchor, no requirement, no signature checked.
+    Development,
+    /// A paid Developer ID build: this Team ID.
+    TeamId { team_id: &'a str },
+    /// A self-signed certificate build: this signing certificate.
+    Certificate { sha1: &'a str },
+}
+
+/// This build's trust mode. An error means the build's configuration does not
+/// add up — a variable that was set but left blank, an anchor without its
+/// requirements, a certificate fingerprint that is not one, or both anchors at
+/// once — and that nothing is launched or served until it does: never a quiet
+/// fall back to checking nothing, and only a build with none of the four set at
+/// all is a development build.
+pub fn trust() -> Result<Trust<'static>, String> {
+    trust_of(
+        HELPER_REQUIREMENT,
+        super::helper::PEER_REQUIREMENT,
+        HELPER_TEAM_ID,
+        CERT_SHA1,
+    )
+}
+
+/// [`trust`], over the four values themselves, so its rules can be read — and
+/// checked — without a build of each kind.
+///
+/// Only a build with **none** of the four variables set at all is a development
+/// build. A variable that is set — `Some`, whatever it holds — is part of the
+/// configuration, and one set to nothing but blanks is a broken one: it is an
+/// error, never a quiet drop back to checking nothing. (`option_env!` is what
+/// tells the two apart; `filled` below is where the distinction is made.)
+///
+/// The two anchors are exclusive: a Developer ID Team ID, or a certificate
+/// SHA-1. The certificate mode needs both requirements — the helper's, which
+/// codeg checks, and codeg's, which the helper checks — and a fingerprint that
+/// is a SHA-1.
+pub fn trust_of<'a>(
+    helper_requirement: Option<&'a str>,
+    peer_requirement: Option<&'a str>,
+    team_id: Option<&'a str>,
+    cert_sha1: Option<&'a str>,
+) -> Result<Trust<'a>, String> {
+    // 先按「变量是否被设置」检查一遍：只有空白值的变量是一个配置错误，而不是
+    // 「没有这个变量」。
+    for (name, value) in [
+        ("CODEG_COMPUTER_HELPER_REQUIREMENT", helper_requirement),
+        ("CODEG_COMPUTER_PEER_REQUIREMENT", peer_requirement),
+        ("CODEG_COMPUTER_TEAM_ID", team_id),
+        ("CODEG_COMPUTER_CERT_SHA1", cert_sha1),
+    ] {
+        if value.is_some_and(|value| value.trim().is_empty()) {
+            return Err(format!(
+                "{name} 被显式设置成了空值（只有空白）；只有确实没有设置这四个变量的构建\
+                 才是开发构建，显式空值一律拒绝"
+            ));
+        }
+    }
+    let helper_requirement = filled(helper_requirement);
+    let peer_requirement = filled(peer_requirement);
+    let team_id = filled(team_id);
+    let cert_sha1 = filled(cert_sha1);
+    match (team_id, cert_sha1) {
+        (None, None) => {
+            if helper_requirement.is_some() || peer_requirement.is_some() {
+                return Err(
+                    "配置了 requirement 却没有信任锚（CODEG_COMPUTER_TEAM_ID 或 \
+                     CODEG_COMPUTER_CERT_SHA1）"
+                        .into(),
+                );
+            }
+            Ok(Trust::Development)
+        }
+        (Some(_), Some(_)) => {
+            Err("同时配置了 CODEG_COMPUTER_TEAM_ID 与 CODEG_COMPUTER_CERT_SHA1；两者互斥".into())
+        }
+        (Some(team_id), None) => {
+            if helper_requirement.is_none() {
+                return Err(
+                    "配置了 CODEG_COMPUTER_TEAM_ID 却没有 CODEG_COMPUTER_HELPER_REQUIREMENT".into(),
+                );
+            }
+            Ok(Trust::TeamId { team_id })
+        }
+        (None, Some(sha1)) => {
+            if !is_sha1(sha1) {
+                return Err(format!(
+                    "CODEG_COMPUTER_CERT_SHA1 不是 40 位十六进制：{sha1}"
+                ));
+            }
+            if helper_requirement.is_none() || peer_requirement.is_none() {
+                return Err("证书模式必须同时配置 CODEG_COMPUTER_HELPER_REQUIREMENT 与 \
+                     CODEG_COMPUTER_PEER_REQUIREMENT"
+                    .into());
+            }
+            Ok(Trust::Certificate { sha1 })
+        }
+    }
+}
+
+/// `None` for a variable that was never set, and for the blanks-only value of
+/// one that was: this is the trimming, applied only after `trust_of` has
+/// refused a variable that was set to nothing.
+fn filled(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// Whether `value` is a 40-digit SHA-1, in either case as `openssl` writes it.
+fn is_sha1(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
 
 /// How long one request may take to go out. A helper that stops reading is
 /// wedged, and half a frame on the socket cannot be taken back.
@@ -1085,7 +1211,11 @@ fn spawn_helper(path: &std::path::Path) -> Result<(HelperChild, Io, PeerFd), Bac
     let (ours, theirs) = UnixStream::pair().map_err(|e| unavailable("socketpair", e))?;
     let (err_ours, err_theirs) = UnixStream::pair().map_err(|e| unavailable("socketpair", e))?;
     let env = helper_environment();
-    let requirement = helper_launch_requirement();
+    // The file about to be run, checked here — after any copy of it has been
+    // made, before anything execs it: an image that does not satisfy what the
+    // kernel is given is killed at `exec`, and one whose signature no longer
+    // holds is never launched at all.
+    let requirement = helper_launch_requirement(path)?;
     let child = spawn(&SpawnSpec {
         program: path,
         args: &[],
@@ -1131,13 +1261,93 @@ fn helper_environment() -> Vec<(String, String)> {
     )]
 }
 
-/// What the kernel holds a helper launch to in a release build: this team's
-/// Developer ID build of the helper, and nothing else from that path.
+/// What the kernel holds a helper launch to in a release build: a Developer ID
+/// build of this team in the team mode, and in the certificate mode the
+/// helper's identifier together with the code directory hashes of the very
+/// file about to be run — read after it was copied into place and checked
+/// against this build's certificate, so that a file another process swapped in
+/// meantime is one the kernel will not run. `None` only in a development
+/// build.
 #[cfg(target_os = "macos")]
-fn helper_launch_requirement() -> Option<Vec<u8>> {
-    HELPER_TEAM_ID
-        .filter(|team| !team.trim().is_empty())
-        .map(|team| super::launch_req::signed_by(team, HELPER_SIGNING_ID))
+fn helper_launch_requirement(path: &std::path::Path) -> Result<Option<Vec<u8>>, BackendError> {
+    let trust = trust()
+        .map_err(|e| BackendError::Unavailable(format!("computer use 的验签配置有误：{e}")))?;
+    match trust {
+        Trust::Development => Ok(None),
+        Trust::TeamId { team_id } => Ok(Some(super::launch_req::signed_by(
+            team_id,
+            HELPER_SIGNING_ID,
+        ))),
+        Trust::Certificate { .. } => {
+            let hashes = verified_helper_hashes(path, &trust)?;
+            let hashes: Vec<&str> = hashes.iter().map(String::as_str).collect();
+            super::launch_req::pinned_certificate(HELPER_SIGNING_ID, &hashes)
+                .map(Some)
+                .ok_or_else(|| {
+                    BackendError::Unavailable(
+                        "证书模式：helper 的 CodeDirectory 哈希不是可钉的 cdhash，拒绝启动".into(),
+                    )
+                })
+        }
+    }
+}
+
+/// Everything the certificate mode asks of a file it is about to run: the
+/// signature it was signed with, the anchor of this build's certificate, the
+/// helper's identifier, and no entitlement codeg refuses. Read statically —
+/// from the file, before anything execs it.
+///
+/// The requirement is the caller's so that a test can hand in what a release
+/// build compiled in (`CODEG_COMPUTER_HELPER_REQUIREMENT`).
+#[cfg(target_os = "macos")]
+fn verify_signed_helper(
+    path: &std::path::Path,
+    requirement: &str,
+    trust: &Trust<'_>,
+) -> Result<super::codesign::CodeInfo, BackendError> {
+    let unavailable = |e: String| BackendError::Unavailable(format!("证书模式：{e}"));
+    let info = super::codesign::check_guest(
+        super::codesign::Guest::StaticFile(path.to_path_buf()),
+        requirement,
+    )
+    .map_err(|e| unavailable(format!("helper 文件验签失败（{}）：{e}", path.display())))?;
+    if info.identifier.as_deref() != Some(HELPER_SIGNING_ID) {
+        return Err(unavailable(format!(
+            "helper 的 identifier 是 {:?}，不是 {HELPER_SIGNING_ID}",
+            info.identifier
+        )));
+    }
+    anchor_matches(trust, info.leaf_sha1.as_deref()).map_err(unavailable)?;
+    info.entitlements_clean().map_err(unavailable)?;
+    Ok(info)
+}
+
+/// The code directory hashes of the file at `path` — the helper about to be
+/// started — once [`verify_signed_helper`] has passed. Every hash the
+/// signature carries for the slice the framework selects is returned, one per
+/// digest algorithm — **not** one per architecture: the release targets here
+/// are thin, x64 or arm64, so there is only one slice to pin. A signature
+/// carrying none is an error, never an unconstrained launch.
+#[cfg(target_os = "macos")]
+fn verified_helper_hashes(
+    path: &std::path::Path,
+    trust: &Trust<'_>,
+) -> Result<Vec<String>, BackendError> {
+    let requirement = HELPER_REQUIREMENT
+        .filter(|r| !r.trim().is_empty())
+        .ok_or_else(|| BackendError::Unavailable("证书模式：缺少 helper 的 requirement".into()))?;
+    let info = verify_signed_helper(path, requirement, trust)?;
+    if info.cdhashes.is_empty() {
+        return Err(BackendError::Unavailable(
+            "证书模式：helper 的签名没有 CodeDirectory 哈希".into(),
+        ));
+    }
+    tracing::info!(
+        "[computer] 证书模式：helper 静态验签通过（证书指纹 {}，cdhash {}）",
+        info.leaf_sha1.as_deref().unwrap_or("-"),
+        info.cdhashes.join(",")
+    );
+    Ok(info.cdhashes)
 }
 
 /// Have a helper started for the purpose ask macOS for `permission`, and say
@@ -1160,7 +1370,9 @@ async fn ask_for_permission(
         |what: &str, e: std::io::Error| BackendError::Unavailable(format!("{what}: {e}"));
     let (ours, theirs) = UnixStream::pair().map_err(|e| unavailable("socketpair", e))?;
     let env = helper_environment();
-    let requirement = helper_launch_requirement();
+    // Started exactly as the serving helper is: the same static check of the
+    // file and the same kernel constraint.
+    let requirement = helper_launch_requirement(path)?;
     let child = spawn(&SpawnSpec {
         program: path,
         args: &[REQUEST_PERMISSION_ARG, permission.arg()],
@@ -1269,9 +1481,15 @@ impl VerifiedPeer {
 #[cfg(target_os = "macos")]
 fn check_helper(peer_fd: PeerFd, peer: PeerCheck) -> Result<Option<VerifiedPeer>, String> {
     use super::codesign::{check_guest, peer_audit_token, Guest};
-    let Some(requirement) = HELPER_REQUIREMENT.filter(|r| !r.trim().is_empty()) else {
+    let trust = trust().map_err(|e| format!("computer use 的验签配置有误：{e}"))?;
+    if trust == Trust::Development {
         tracing::warn!("[computer] development build: not checking the helper's signature");
         return Ok(None);
+    }
+    // The anchor mode decides which requirement this is; `trust` says this
+    // build has one, so a build without it is broken, not a development one.
+    let Some(requirement) = HELPER_REQUIREMENT.filter(|r| !r.trim().is_empty()) else {
+        return Err(format!("{trust:?} 构建却没有 helper 的 requirement"));
     };
     // A release codeg only ever launches a release helper, which checks
     // codeg in turn; one that did not is not the helper that shipped.
@@ -1284,9 +1502,38 @@ fn check_helper(peer_fd: PeerFd, peer: PeerCheck) -> Result<Option<VerifiedPeer>
     let token = peer_audit_token(fd).map_err(|e| format!("no peer token for the helper: {e}"))?;
     let info = check_guest(Guest::Audit(token), requirement)
         .map_err(|e| format!("the helper is not codeg's: {e}"))?;
+    if info.identifier.as_deref() != Some(HELPER_SIGNING_ID) {
+        return Err(format!(
+            "helper 的 identifier 是 {:?}，不是 {HELPER_SIGNING_ID}",
+            info.identifier
+        ));
+    }
+    anchor_matches(&trust, info.leaf_sha1.as_deref())?;
     info.entitlements_clean()
         .map_err(|e| format!("the helper is not one codeg trusts: {e}"))?;
     Ok(Some(VerifiedPeer { fd, token }))
+}
+
+/// In the certificate mode the peer's signing certificate must be the one this
+/// build trusts.
+///
+/// The requirement names the same fingerprint, compiled in; this reads it off
+/// the signature itself, so that a requirement naming another certificate —
+/// one changed in a build's environment, say — cannot pass for this build's.
+#[cfg(target_os = "macos")]
+pub(crate) fn anchor_matches(trust: &Trust<'_>, leaf_sha1: Option<&str>) -> Result<(), String> {
+    let Trust::Certificate { sha1 } = trust else {
+        return Ok(());
+    };
+    match leaf_sha1 {
+        Some(leaf) if leaf.eq_ignore_ascii_case(sha1) => Ok(()),
+        Some(leaf) => Err(format!(
+            "对端的签名证书指纹是 {leaf}，不是本构建信任的 {sha1}"
+        )),
+        None => Err(format!(
+            "对端的签名没有证书（Adhoc），不是本构建信任的自签名证书 {sha1}"
+        )),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1390,6 +1637,84 @@ mod tests {
         ));
     }
 
+    /// 证书模式在**真实签名**上的双向互认：这个进程用 CI 同一张证书签成
+    /// `app.codeg`（带 hardened runtime、无 entitlements）时，stage 签过的 helper
+    /// 必须把它验成 [`PeerCheck::Verified`]；换成另一张证书签的、或没有证书的
+    /// 进程时，helper 必须拒绝它的 parent（以 `EXIT_PEER_REFUSED` 退出）。
+    ///
+    /// 只握手与关闭：不发任何 op，不请求 TCC 权限，不做屏幕 / 鼠标动作。负例由
+    /// workflow 用同一份 harness 的 Adhoc 签名副本运行（`CODEG_TEST_PEER=refused`），
+    /// 于「谁是真的 parent」这件事上它和正例没有任何区别 —— 只有在证书上不同。
+    ///
+    /// ```text
+    /// CODEG_TEST_HELPER=<stage 签过的 helper 可执行文件> \
+    /// CODEG_TEST_PEER=verified|refused \
+    ///   <签成 app.codeg 的测试 harness> --ignored --nocapture \
+    ///   computer::local::tests::a_signed_helper_verifies_a_signed_codeg_parent
+    /// ```
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "需要 CI 证书签出的 helper 与同一证书签过的测试 harness"]
+    async fn a_signed_helper_verifies_a_signed_codeg_parent() {
+        let Some(helper) = std::env::var_os("CODEG_TEST_HELPER").map(PathBuf::from) else {
+            println!("codeg-signed-handshake: NOT-VERIFIED reason=no-helper");
+            return;
+        };
+        // 要证明的是证书模式：这个 harness 自己没有编译进证书锚时，跑出来什么都
+        // 证明不了（开发构建根本不做 peer 验签）。
+        if !matches!(trust(), Ok(Trust::Certificate { .. })) {
+            println!(
+                "codeg-signed-handshake: NOT-VERIFIED reason=this-harness-has-no-certificate-anchor \
+                 （trust={:?}）",
+                trust()
+            );
+            return;
+        }
+        match std::env::var("CODEG_TEST_PEER").as_deref() {
+            // 同一张证书签成 app.codeg 的 parent：helper 必须验成 Verified。
+            Ok("verified") => {
+                let connection = launch(&helper)
+                    .await
+                    .expect("同一张证书签出的 parent 必须通过 helper 的 peer 检查");
+                assert_eq!(connection.peer, PeerCheck::Verified);
+                // 只关掉：helper 的输入结束，它自己退出 —— 一个 op 都没有下去，
+                // 于是不会启动 driver，也不会碰到任何 TCC 权限。
+                connection.shut_down().await;
+                println!(
+                    "codeg-signed-handshake: VERIFIED peer=Verified helper={}",
+                    helper.display()
+                );
+            }
+            // 另一张证书签的、或没有证书的 parent：helper 必须拒绝它。
+            Ok("refused") => {
+                let (child, (mut reader, _writer, _stderr), _fd) =
+                    spawn_helper(&helper).expect("start the helper");
+                let first = tokio::time::timeout(
+                    READY_TIMEOUT,
+                    read_frame::<_, HelperMessage>(&mut reader),
+                )
+                .await;
+                assert!(
+                    matches!(first, Ok(Err(_))),
+                    "被拒绝的 parent 不该收到 ready 帧：{first:?}"
+                );
+                let HelperChild::Mac(child) = &child;
+                let code = tokio::time::timeout(Duration::from_secs(15), child.wait()).await;
+                assert_eq!(
+                    code,
+                    Ok(Some(super::super::helper::EXIT_PEER_REFUSED)),
+                    "helper 必须以「拒绝 peer」退出"
+                );
+                println!(
+                    "codeg-signed-handshake: REFUSED exit={} helper={}",
+                    super::super::helper::EXIT_PEER_REFUSED,
+                    helper.display()
+                );
+            }
+            other => panic!("CODEG_TEST_PEER 必须是 verified 或 refused：{other:?}"),
+        }
+    }
+
     /// A development codeg (every test build is one) takes only a helper built
     /// from its own sources: not one from other sources, nor one too old to
     /// say.
@@ -1399,6 +1724,208 @@ mod tests {
         assert!(stale_development_helper(Some("0000000000000000")).is_some());
         assert!(stale_development_helper(None)
             .is_some_and(|why| why.contains("pnpm tauri:prepare-sidecars")));
+    }
+
+    /// 信任模式只由四个编译期变量决定：团队锚与证书锚互斥，证书模式下两个
+    /// requirement 必须成对、指纹必须是 40 位十六进制；缺锚、混用都是错误 ——
+    /// 绝不悄悄退回不验签的开发模式。
+    ///
+    /// 「设置了但只有空白」与「没有设置」是两回事：四个变量都没有设置时才是开发
+    /// 构建；显式设成空串或空白的锚与 requirement 一律是配置错误，绝不落到开发
+    /// 模式（那样会关掉验签）。
+    #[test]
+    fn the_trust_mode_is_read_from_the_build() {
+        let sha1 = "5CB967057A60BE9BA750D5B65285B94BEEE3EFE7";
+        // 开发构建：四个变量都没有设置。
+        assert_eq!(trust_of(None, None, None, None), Ok(Trust::Development));
+        // 显式空值：四个变量任何一个都是错误，而不是「没配置」。
+        for (i, refused) in [
+            trust_of(Some(""), None, None, None),
+            trust_of(None, Some("  "), None, None),
+            trust_of(None, None, Some(""), None),
+            trust_of(None, None, None, Some("   ")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(refused.is_err(), "显式空值 #{i}：{refused:?}");
+        }
+        // 团队模式：付费 Developer ID 构建照旧，免费包的占位值也一样。
+        assert_eq!(
+            trust_of(
+                Some("helper-req"),
+                Some("peer-req"),
+                Some("ABCDE12345"),
+                None
+            ),
+            Ok(Trust::TeamId {
+                team_id: "ABCDE12345"
+            })
+        );
+        assert_eq!(
+            trust_of(Some("never"), Some("never"), Some("FREE-DISABLED"), None),
+            Ok(Trust::TeamId {
+                team_id: "FREE-DISABLED"
+            })
+        );
+        // 证书模式：两个 requirement 成对，锚是叶子证书的 SHA-1。
+        assert_eq!(
+            trust_of(Some("helper-req"), Some("peer-req"), None, Some(sha1)),
+            Ok(Trust::Certificate { sha1 })
+        );
+        for refused in [
+            // 证书模式缺 peer requirement
+            trust_of(Some("helper-req"), None, None, Some(sha1)),
+            // 只有 CERT_SHA1 被设成空白（以前会落回 Development）
+            trust_of(Some("helper-req"), Some("peer-req"), None, Some("")),
+            // 证书模式缺 helper requirement
+            trust_of(None, Some("peer-req"), None, Some(sha1)),
+            // 指纹不是 40 位十六进制
+            trust_of(Some("h"), Some("p"), None, Some("ABCDEF")),
+            // 指纹只有空白
+            trust_of(Some("h"), Some("p"), None, Some("   ")),
+            // 两个锚混用
+            trust_of(Some("h"), Some("p"), Some("ABCDE12345"), Some(sha1)),
+            // 有 requirement 却没有锚
+            trust_of(Some("h"), Some("p"), None, None),
+            // 有 Team ID 却没有 requirement
+            trust_of(None, None, Some("ABCDE12345"), None),
+        ] {
+            assert!(refused.is_err(), "{refused:?}");
+        }
+    }
+
+    /// 证书模式比对的是签名里的叶子证书指纹，而不是 requirement 字符串：
+    /// 指纹不同、或对端是 Adhoc 签名（没有证书）都要拒绝；团队模式与开发构建
+    /// 不做这个比对。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_certificate_build_compares_the_peers_certificate() {
+        let sha1 = "5CB967057A60BE9BA750D5B65285B94BEEE3EFE7";
+        let certificate = Trust::Certificate { sha1 };
+        // 大小写不敏感：环境变量里是大写，框架给的也是大写。
+        assert!(anchor_matches(&certificate, Some(sha1)).is_ok());
+        assert!(anchor_matches(&certificate, Some(&sha1.to_lowercase())).is_ok());
+        assert!(anchor_matches(
+            &certificate,
+            Some("0000000000000000000000000000000000000000")
+        )
+        .is_err());
+        assert!(anchor_matches(&certificate, None).is_err());
+        assert!(anchor_matches(&Trust::Development, None).is_ok());
+        assert!(anchor_matches(
+            &Trust::TeamId {
+                team_id: "ABCDE12345"
+            },
+            None
+        )
+        .is_ok());
+    }
+
+    /// 证书模式对一份「不是本构建证书签名」的文件必须失败：这里是一份 Apple
+    /// 签名的系统二进制，identifier 与证书指纹都对不上；文件不存在也一样。
+    /// 绝不退回「没有约束地启动」。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn certificate_mode_refuses_a_file_signed_with_another_certificate() {
+        let sha1 = "5CB967057A60BE9BA750D5B65285B94BEEE3EFE7";
+        let trust = Trust::Certificate { sha1 };
+        let requirement =
+            format!("identifier \"{HELPER_SIGNING_ID}\" and certificate leaf = H\"{sha1}\"");
+        let refused = verify_signed_helper(Path::new("/bin/echo"), &requirement, &trust);
+        assert!(refused.is_err(), "{refused:?}");
+        assert!(verify_signed_helper(
+            Path::new("/nonexistent-codeg-computer-helper"),
+            &requirement,
+            &trust
+        )
+        .is_err());
+    }
+
+    /// 证书模式对着真实自签名 helper 的全部静态检查。正例的 cdhash 与证书
+    /// 指纹都从文件本身读出来；负例是另一张证书、带被拒 entitlement 的构建、
+    /// 签名之后又被改动的文件，以及 helper 侧「没有 requirement 就不服务」的
+    /// 判定。默认 ignore，需要 CI 证书签出的文件：
+    ///
+    /// ```text
+    /// CODEG_TEST_SELF_SIGNED_BIN=/tmp/x/codeg-computer-helper \
+    /// CODEG_TEST_SELF_SIGNED_SHA1=<40 位大写十六进制> \
+    /// CODEG_TEST_SELF_SIGNED_DIRTY_BIN=/tmp/x/helper-with-entitlement \
+    /// CODEG_TEST_SELF_SIGNED_TAMPERED_BIN=/tmp/x/helper-code-changed \
+    /// CODEG_TEST_SELF_SIGNED_TRAILING_BIN=/tmp/x/helper-extra-data \
+    ///   cargo test --features test-utils --lib \
+    ///   computer::local::tests::certificate_mode_checks_a_real_self_signed_helper -- --ignored
+    /// ```
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "需要自签名证书签出的 helper：见测试说明"]
+    fn certificate_mode_checks_a_real_self_signed_helper() {
+        use crate::computer::codesign::{check_guest, Guest};
+        let (Some(bin), Some(sha1)) = (
+            std::env::var("CODEG_TEST_SELF_SIGNED_BIN").ok(),
+            std::env::var("CODEG_TEST_SELF_SIGNED_SHA1").ok(),
+        ) else {
+            eprintln!("跳过：需要 CODEG_TEST_SELF_SIGNED_BIN 与 CODEG_TEST_SELF_SIGNED_SHA1");
+            return;
+        };
+        let trust = Trust::Certificate { sha1: &sha1 };
+        let requirement =
+            format!("identifier \"{HELPER_SIGNING_ID}\" and certificate leaf = H\"{sha1}\"");
+        let info = verify_signed_helper(Path::new(&bin), &requirement, &trust)
+            .expect("自签名 helper 的静态验签必须通过");
+        assert_eq!(info.identifier.as_deref(), Some(HELPER_SIGNING_ID));
+        assert_eq!(info.leaf_sha1.as_deref(), Some(sha1.as_str()));
+        assert!(info.team_id.is_none(), "自签名没有 Team ID");
+        assert!(info.entitlements.is_empty(), "{:?}", info.entitlements);
+        // 框架给出的每个哈希都是 40 位小写十六进制。这是被选中 slice 的多种
+        // 摘要算法，不是每个架构一份：发布目标是 thin（x64 或 arm64），只有一个
+        // slice，所以钉住签名里的全部哈希就覆盖了会跑的那一份代码。
+        assert!(!info.cdhashes.is_empty());
+        for hash in &info.cdhashes {
+            assert_eq!(hash.len(), 40, "{hash}");
+            assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{hash}");
+        }
+        // 同一个文件，锚换成别的指纹：拒绝。
+        assert!(verify_signed_helper(
+            Path::new(&bin),
+            &requirement,
+            &Trust::Certificate {
+                sha1: "0000000000000000000000000000000000000000"
+            },
+        )
+        .is_err());
+        // 签名没问题、却带着 codeg 拒绝的 entitlement 的构建：拒绝。
+        if let Some(dirty) = std::env::var_os("CODEG_TEST_SELF_SIGNED_DIRTY_BIN") {
+            let dirty = PathBuf::from(dirty);
+            let refused = verify_signed_helper(&dirty, &requirement, &trust);
+            assert!(refused.is_err(), "{refused:?}");
+            let signed =
+                check_guest(Guest::StaticFile(dirty), &requirement).expect("签名本身是好的");
+            assert!(
+                signed.entitlements_clean().is_err(),
+                "{:?}",
+                signed.entitlements
+            );
+        }
+        // 签名之后又被改动的文件：拒绝（改动落在签名覆盖的代码里）。
+        if let Some(tampered) = std::env::var_os("CODEG_TEST_SELF_SIGNED_TAMPERED_BIN") {
+            assert!(
+                verify_signed_helper(Path::new(&tampered), &requirement, &trust).is_err(),
+                "改动过的文件不能通过验签"
+            );
+        }
+        // 签名覆盖范围之外被塞进东西的文件：拒绝（严格校验）。
+        if let Some(trailing) = std::env::var_os("CODEG_TEST_SELF_SIGNED_TRAILING_BIN") {
+            assert!(
+                verify_signed_helper(Path::new(&trailing), &requirement, &trust).is_err(),
+                "签名之外被改动的文件不能通过严格校验"
+            );
+        }
+        // helper 侧：这样一份真实的证书签名，即使编译时没有 requirement 也必须
+        // 拒绝服务 —— 只看自身的 Team ID 是不够的，自签名没有 Team ID。
+        let serving =
+            super::super::helper::may_serve_without_requirement(&Trust::Development, &Ok(info));
+        assert!(serving.is_err(), "{serving:?}");
     }
 
     /// A Stop holds in the backend itself, with no helper running to hear it:

@@ -15,6 +15,7 @@
 
 use std::ffi::{c_int, c_void};
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -22,9 +23,18 @@ use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
-use core_foundation_sys::base::{CFRelease, CFTypeRef};
-use core_foundation_sys::dictionary::CFDictionaryRef;
+use core_foundation::url::CFURL;
+use core_foundation_sys::array::{
+    CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef,
+};
+use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFTypeRef};
+use core_foundation_sys::data::{CFDataGetTypeID, CFDataRef};
+use core_foundation_sys::dictionary::{
+    CFDictionaryGetCount, CFDictionaryGetKeysAndValues, CFDictionaryGetTypeID,
+    CFDictionaryGetValue, CFDictionaryRef,
+};
 use core_foundation_sys::string::CFStringRef;
+use core_foundation_sys::url::CFURLRef;
 
 use super::driver::DENIED_ENTITLEMENTS;
 
@@ -36,6 +46,22 @@ type SecCSFlags = u32;
 const K_SEC_CS_DEFAULT_FLAGS: SecCSFlags = 0;
 const K_SEC_CS_SIGNING_INFORMATION: SecCSFlags = 1 << 1;
 const K_SEC_CS_REQUIREMENT_INFORMATION: SecCSFlags = 1 << 2;
+/// `kSecCSCheckAllArchitectures`: every architecture of a universal binary,
+/// not only the one this machine would run.
+const K_SEC_CS_CHECK_ALL_ARCHITECTURES: SecCSFlags = 1 << 0;
+/// `kSecCSStrictValidate` (`SecStaticCode.h`): the reading `codesign --verify
+/// --strict` asks for, which also refuses code with anything added around it.
+const K_SEC_CS_STRICT_VALIDATE: SecCSFlags = 1 << 4;
+/// What a file is held to before it is run: the whole of it, all its
+/// architectures, and nothing added around the code it signs. Measured:
+/// without the first, a change inside another architecture of a universal
+/// binary passes; without the second, one outside the signed region does.
+const K_SEC_CS_FILE_FLAGS: SecCSFlags = K_SEC_CS_CHECK_ALL_ARCHITECTURES | K_SEC_CS_STRICT_VALIDATE;
+
+/// `kSecCodeSignatureAdhoc` (`CSCommon.h`): a signature with no certificate
+/// chain — what the linker gives a development build, and what `codesign
+/// -s -` writes.
+pub const CS_ADHOC: u32 = 0x0000_0002;
 
 /// `csops` operations and status bits (`<kern/cs_blobs.h>`).
 const CS_OPS_STATUS: u32 = 0;
@@ -52,8 +78,10 @@ extern "C" {
     static kSecCodeInfoIdentifier: CFStringRef;
     static kSecCodeInfoTeamIdentifier: CFStringRef;
     static kSecCodeInfoUnique: CFStringRef;
+    static kSecCodeInfoCdHashes: CFStringRef;
     static kSecCodeInfoFlags: CFStringRef;
     static kSecCodeInfoEntitlementsDict: CFStringRef;
+    static kSecCodeInfoCertificates: CFStringRef;
 
     fn SecCodeCopyGuestWithAttributes(
         host: SecCodeRef,
@@ -62,6 +90,14 @@ extern "C" {
         guest: *mut SecCodeRef,
     ) -> OSStatus;
     fn SecCodeCheckValidity(
+        code: SecCodeRef,
+        flags: SecCSFlags,
+        requirement: SecRequirementRef,
+    ) -> OSStatus;
+    /// The same question about the code of a file, which is not a running
+    /// process: the dynamic call above refuses a static code object
+    /// (`errSecCSInvalidObjectRef`).
+    fn SecStaticCodeCheckValidity(
         code: SecCodeRef,
         flags: SecCSFlags,
         requirement: SecRequirementRef,
@@ -77,11 +113,23 @@ extern "C" {
         information: *mut CFDictionaryRef,
     ) -> OSStatus;
     fn SecCodeCopySelf(flags: SecCSFlags, code: *mut SecCodeRef) -> OSStatus;
+    /// The code of a file, checked as it is on disk — before anything runs it.
+    fn SecStaticCodeCreateWithPath(
+        path: CFURLRef,
+        flags: SecCSFlags,
+        static_code: *mut SecCodeRef,
+    ) -> OSStatus;
+    /// A certificate's DER, for hashing: `certificate leaf = H"…"` names the
+    /// SHA-1 of exactly these bytes.
+    fn SecCertificateCopyData(certificate: CFTypeRef) -> CFDataRef;
 }
 
 extern "C" {
     /// libsystem_kernel; not in the `libc` crate.
     fn csops(pid: libc::pid_t, ops: u32, useraddr: *mut c_void, usersize: libc::size_t) -> c_int;
+    /// CommonCrypto, in libSystem: the SHA-1 code-signature requirements are
+    /// written with.
+    fn CC_SHA1(data: *const c_void, len: u32, md: *mut u8) -> *mut u8;
 }
 
 /// A Core Foundation object this module owns, released on drop.
@@ -155,22 +203,40 @@ pub fn peer_audit_token(fd: RawFd) -> std::io::Result<AuditToken> {
     Ok(AuditToken(token))
 }
 
-/// Which running process to check.
-#[derive(Debug, Clone, Copy)]
+/// What to check: a running process, or a file on disk.
+#[derive(Debug, Clone)]
 pub enum Guest {
     /// A socket peer.
     Audit(AuditToken),
     /// Our own suspended, unreaped child.
     ChildPid(u32),
+    /// A file, checked statically — as it is on disk, before anything runs
+    /// it: its signature, its certificate and its entitlements are read from
+    /// the file, and the validity check is against the code written there.
+    StaticFile(PathBuf),
 }
 
-/// What a signature says about a running process, once it has checked out.
+/// What a signature says about a running process — or a file on disk — once
+/// it has checked out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodeInfo {
     pub identifier: Option<String>,
     pub team_id: Option<String>,
-    /// The code-directory hash, lowercase hex.
+    /// The code-directory hash the kernel uses for this image, lowercase hex.
     pub cdhash: Option<String>,
+    /// Every code-directory hash the signature carries of the slice the
+    /// framework selects, lowercase hex, in the framework's order: one per
+    /// digest algorithm in the signature — **not** one per architecture
+    /// (`kSecCodeInfoCdHashes` is that selected slice's array of digests).
+    /// The release targets here are thin, x64 or arm64, so there is only one
+    /// slice to select; a universal build would need each slice's hashes
+    /// collected separately, per architecture. A launch constraint pins all of
+    /// these.
+    pub cdhashes: Vec<String>,
+    /// SHA-1 of the signing (leaf) certificate, uppercase hex — the value a
+    /// requirement names as `certificate leaf = H"…"`. `None` for ad-hoc
+    /// signed code, which carries no certificate at all.
+    pub leaf_sha1: Option<String>,
     /// The code directory's flags (`0x10000` is the hardened runtime).
     pub flags: Option<u32>,
     /// Every entitlement the signature carries that is not a boolean `false`.
@@ -178,6 +244,14 @@ pub struct CodeInfo {
 }
 
 impl CodeInfo {
+    /// Whether the signature is ad-hoc (`kSecCodeSignatureAdhoc`): no
+    /// certificate chain, the way a development build here is signed. `false`
+    /// when the signing information carried no flags at all — an answer that
+    /// was not read is not one that says "ad-hoc".
+    pub fn ad_hoc(&self) -> bool {
+        self.flags.is_some_and(|flags| flags & CS_ADHOC != 0)
+    }
+
     /// Refuse a signature carrying any entitlement that would let another
     /// process put code inside this one.
     pub fn entitlements_clean(&self) -> Result<(), String> {
@@ -201,50 +275,85 @@ fn status_error(what: &str, status: OSStatus) -> String {
         -67065 => " (errSecCSNoSuchCode)",
         -67052 => " (errSecCSReqInvalid)",
         -67068 => " (errSecCSGuestInvalid)",
+        -67071 => " (errSecCSInvalidObjectRef)",
         _ => "",
     };
     format!("{what} failed: OSStatus {status}{name}")
 }
 
 fn copy_guest(guest: Guest) -> Result<Owned, String> {
-    // SAFETY: the extern statics are valid CFStrings for the life of the
-    // process; wrapping under the get rule retains nothing we must release.
-    let dict = unsafe {
-        match guest {
-            Guest::Audit(token) => {
+    let mut code: SecCodeRef = std::ptr::null();
+    match guest {
+        // A file: checked as the code written in it, with no process named.
+        Guest::StaticFile(path) => {
+            let url = CFURL::from_path(&path, false)
+                .ok_or_else(|| format!("no file URL for {}", path.display()))?;
+            // SAFETY: `url` is live for the call; `code` receives a +1
+            // reference on success.
+            let status = unsafe {
+                SecStaticCodeCreateWithPath(
+                    url.as_concrete_TypeRef(),
+                    K_SEC_CS_DEFAULT_FLAGS,
+                    &mut code,
+                )
+            };
+            if status != 0 {
+                return Err(status_error("SecStaticCodeCreateWithPath", status));
+            }
+        }
+        // A running process, named by the kernel.
+        Guest::Audit(token) => {
+            // SAFETY: the extern statics are valid CFStrings for the life of
+            // the process; wrapping under the get rule retains nothing we
+            // must release.
+            let attributes = unsafe {
                 let bytes: Vec<u8> = token.0.iter().flat_map(|w| w.to_ne_bytes()).collect();
                 CFDictionary::from_CFType_pairs(&[(
                     CFString::wrap_under_get_rule(kSecGuestAttributeAudit).as_CFType(),
                     CFData::from_buffer(&bytes).as_CFType(),
                 )])
-            }
-            Guest::ChildPid(pid) => {
-                let pid = i32::try_from(pid).map_err(|_| "pid out of range".to_string())?;
+            };
+            copy_named_guest(attributes, &mut code)?;
+        }
+        Guest::ChildPid(pid) => {
+            let pid = i32::try_from(pid).map_err(|_| "pid out of range".to_string())?;
+            // SAFETY: see `Guest::Audit` above.
+            let attributes = unsafe {
                 CFDictionary::from_CFType_pairs(&[(
                     CFString::wrap_under_get_rule(kSecGuestAttributePid).as_CFType(),
                     CFNumber::from(pid).as_CFType(),
                 )])
-            }
+            };
+            copy_named_guest(attributes, &mut code)?;
         }
-    };
-    let mut code: SecCodeRef = std::ptr::null();
-    // SAFETY: a null host means "the system's guest registry"; `dict` is a
-    // live dictionary and `code` receives a +1 reference on success.
+    }
+    Ok(Owned(code))
+}
+
+/// The code of the running process `attributes` names.
+fn copy_named_guest(
+    attributes: CFDictionary<CFType, CFType>,
+    code: &mut SecCodeRef,
+) -> Result<(), String> {
+    // SAFETY: a null host means "the system's guest registry"; the
+    // dictionary is live for the call and `code` receives a +1 reference on
+    // success.
     let status = unsafe {
         SecCodeCopyGuestWithAttributes(
             std::ptr::null(),
-            dict.as_concrete_TypeRef(),
+            attributes.as_concrete_TypeRef(),
             K_SEC_CS_DEFAULT_FLAGS,
-            &mut code,
+            code,
         )
     };
     if status != 0 {
         return Err(status_error("SecCodeCopyGuestWithAttributes", status));
     }
-    Ok(Owned(code))
+    Ok(())
 }
 
-fn check_requirement(code: &Owned, requirement: &str) -> Result<(), String> {
+/// The requirement `requirement` names, ready to check code against.
+fn create_requirement(requirement: &str) -> Result<Owned, String> {
     let text = CFString::new(requirement);
     let mut req: SecRequirementRef = std::ptr::null();
     // SAFETY: `text` is live; `req` receives a +1 reference on success.
@@ -254,11 +363,45 @@ fn check_requirement(code: &Owned, requirement: &str) -> Result<(), String> {
     if status != 0 {
         return Err(status_error("SecRequirementCreateWithString", status));
     }
-    let req = Owned(req);
-    // SAFETY: both references are live for the call.
+    Ok(Owned(req))
+}
+
+/// Whether the running process `code` satisfies `requirement` — or, for a
+/// `None`, whether it is validly signed at all.
+///
+/// A null requirement is what the framework reads as "no requirement, only
+/// validity": the signature holds and the code is the code the kernel mapped.
+/// It is the check to make before any of a signature's own metadata is
+/// believed, because `SecCodeCopySigningInformation` succeeds on code whose
+/// signature does not hold and then reports it partly.
+fn check_requirement(code: &Owned, requirement: Option<&str>) -> Result<(), String> {
+    let req = match requirement {
+        Some(requirement) => create_requirement(requirement)?,
+        // Nothing to release: `Owned` releases a null reference.
+        None => Owned(std::ptr::null()),
+    };
+    // SAFETY: `code` is live and `req.0` is either a live requirement or null,
+    // which the call accepts as "no requirement".
     let status = unsafe { SecCodeCheckValidity(code.0, K_SEC_CS_DEFAULT_FLAGS, req.0) };
     if status != 0 {
         return Err(status_error("SecCodeCheckValidity", status));
+    }
+    Ok(())
+}
+
+/// Whether the code of a file (`SecStaticCode`) satisfies `requirement`. The
+/// static call, not the dynamic one above: a file is not a running process,
+/// and the dynamic check refuses its reference.
+///
+/// The stricter reading, as `codesign --verify --strict` asks it of a file:
+/// the signature and the requirement hold, every architecture of it holds,
+/// and nothing has been added outside the code it signs.
+fn check_static_requirement(code: &Owned, requirement: &str) -> Result<(), String> {
+    let req = create_requirement(requirement)?;
+    // SAFETY: both references are live for the call.
+    let status = unsafe { SecStaticCodeCheckValidity(code.0, K_SEC_CS_FILE_FLAGS, req.0) };
+    if status != 0 {
+        return Err(status_error("SecStaticCodeCheckValidity", status));
     }
     Ok(())
 }
@@ -293,6 +436,31 @@ fn signing_info(code: &Owned) -> Result<CodeInfo, String> {
             .find(key(unsafe { kSecCodeInfoUnique }))
             .and_then(|v| v.downcast::<CFData>())
             .map(|d| hex(d.bytes())),
+        // What the running image's code directory is, for the kernel: the
+        // value it names it by, and every other digest the signature carries
+        // for the selected slice.
+        // SAFETY for the statics in this block: see `key`.
+        cdhashes: {
+            let mut hashes = unsafe { value_of(raw, kSecCodeInfoUnique) }
+                .map(cdhashes_in)
+                .unwrap_or_default();
+            for hash in unsafe { value_of(raw, kSecCodeInfoCdHashes) }
+                .map(cdhashes_in)
+                .unwrap_or_default()
+            {
+                if !hashes.contains(&hash) {
+                    hashes.push(hash);
+                }
+            }
+            hashes
+        },
+        // SAFETY: see `key`.
+        leaf_sha1: match unsafe { value_of(raw, kSecCodeInfoCertificates) } {
+            // 没有证书键：Adhoc 签名，正常。
+            None => None,
+            // 有证书却读不出来是签名处在错误状态 —— 拒绝，绝不当成「无证书」。
+            Some(certificates) => leaf_certificate_sha1(certificates)?,
+        },
         flags: dict
             .find(key(unsafe { kSecCodeInfoFlags }))
             .and_then(|v| v.downcast::<CFNumber>())
@@ -324,6 +492,93 @@ fn signing_info(code: &Owned) -> Result<CodeInfo, String> {
     Ok(info)
 }
 
+/// The value for `key` in a signing-information dictionary.
+///
+/// # Safety
+///
+/// `dict` must be a live `CFDictionary` and `key` a valid `CFString`.
+unsafe fn value_of(dict: CFDictionaryRef, key: CFStringRef) -> Option<CFTypeRef> {
+    let value = CFDictionaryGetValue(dict, key.cast());
+    (!value.is_null()).then_some(value)
+}
+
+/// Every code-directory hash in `value`, which the framework gives as a single
+/// `CFData`, or as an array of them (`kSecCodeInfoCdHashes`: the digests of the
+/// **selected slice's** code directory, one per digest algorithm in the
+/// signature — not one per architecture) and, where it reports them apart, as a
+/// dictionary of them. Empty when the value has another shape: a caller must
+/// refuse rather than pin nothing.
+fn cdhashes_in(value: CFTypeRef) -> Vec<String> {
+    // SAFETY: reads of a live CF object; the sub-objects come back borrowed
+    // and are only read.
+    unsafe {
+        if CFGetTypeID(value) == CFDataGetTypeID() {
+            let data: CFData = CFData::wrap_under_get_rule(value as CFDataRef);
+            return vec![hex(data.bytes())];
+        }
+        if CFGetTypeID(value) == CFArrayGetTypeID() {
+            let array = value as CFArrayRef;
+            return (0..CFArrayGetCount(array))
+                .flat_map(|i| cdhashes_in(CFArrayGetValueAtIndex(array, i)))
+                .collect();
+        }
+        if CFGetTypeID(value) == CFDictionaryGetTypeID() {
+            let dict = value as CFDictionaryRef;
+            let count = CFDictionaryGetCount(dict) as usize;
+            let mut keys: Vec<CFTypeRef> = vec![std::ptr::null(); count];
+            let mut values: Vec<CFTypeRef> = vec![std::ptr::null(); count];
+            CFDictionaryGetKeysAndValues(
+                dict,
+                keys.as_mut_ptr().cast(),
+                values.as_mut_ptr().cast(),
+            );
+            return values.into_iter().flat_map(cdhashes_in).collect();
+        }
+    }
+    Vec::new()
+}
+
+/// SHA-1 of the first certificate of `certificates` — the signing leaf — in
+/// uppercase hex: the value `certificate leaf = H"…"` names. `Ok(None)` when
+/// the signature carries no certificate at all, which is what an ad-hoc
+/// signature is; `Err` when it carries one the framework will not hand over,
+/// which is an error about the signature, never "no certificate".
+fn leaf_certificate_sha1(certificates: CFTypeRef) -> Result<Option<String>, String> {
+    // SAFETY: reads of a live CF object; the certificate comes back borrowed
+    // from the array.
+    let certificate = unsafe {
+        if CFGetTypeID(certificates) != CFArrayGetTypeID() {
+            return Err("its certificates are not the array they must be".into());
+        }
+        let array = certificates as CFArrayRef;
+        if CFArrayGetCount(array) < 1 {
+            return Ok(None);
+        }
+        CFArrayGetValueAtIndex(array, 0)
+    };
+    if certificate.is_null() {
+        return Err("its first certificate is null".into());
+    }
+    // SAFETY: a `SecCertificateRef` borrowed from a live array; its DER copy
+    // is a +1 `CFData`, released by the wrapper.
+    let der = unsafe { SecCertificateCopyData(certificate) };
+    if der.is_null() {
+        return Err("its certificate's own bytes could not be read".into());
+    }
+    // SAFETY: a +1 result of the call above.
+    let der = unsafe { CFData::wrap_under_create_rule(der) };
+    let mut digest = [0u8; 20];
+    // SAFETY: CC_SHA1 writes exactly 20 bytes, whatever the input length.
+    unsafe {
+        CC_SHA1(
+            der.bytes().as_ptr().cast(),
+            der.bytes().len() as u32,
+            digest.as_mut_ptr(),
+        )
+    };
+    Ok(Some(hex_upper(&digest)))
+}
+
 /// Check a running process against a designated-requirement string, and read
 /// its signature if it passes.
 ///
@@ -332,14 +587,25 @@ fn signing_info(code: &Owned) -> Result<CodeInfo, String> {
 /// running — a file replaced after `exec` fails here rather than passing on
 /// the strength of the new file.
 pub fn check_guest(guest: Guest, requirement: &str) -> Result<CodeInfo, String> {
+    let file = matches!(guest, Guest::StaticFile(_));
     let code = copy_guest(guest)?;
-    check_requirement(&code, requirement)?;
+    if file {
+        check_static_requirement(&code, requirement)?;
+    } else {
+        check_requirement(&code, Some(requirement))?;
+    }
     signing_info(&code)
 }
 
-/// This process's own signature, unchecked. For the helper's interlock: a
-/// helper that carries a Team ID but no compiled-in trust anchors refuses to
-/// start.
+/// This process's own signature, **checked for validity and then read**: `Err`
+/// for a signature that does not hold — unsigned code included — and for
+/// metadata in an error state, such as a certificate the framework will not
+/// hand over.
+///
+/// The order is the point. For the helper's interlock a helper that carries a
+/// signing identity but no compiled-in trust anchors refuses to start; and an
+/// invalid or unsigned helper must not be able to call itself a development
+/// build by the absence of fields that were never read properly.
 pub fn self_info() -> Result<CodeInfo, String> {
     let mut code: SecCodeRef = std::ptr::null();
     // SAFETY: `code` receives a +1 reference on success.
@@ -347,7 +613,9 @@ pub fn self_info() -> Result<CodeInfo, String> {
     if status != 0 {
         return Err(status_error("SecCodeCopySelf", status));
     }
-    signing_info(&Owned(code))
+    let code = Owned(code);
+    check_requirement(&code, None)?;
+    signing_info(&code)
 }
 
 /// The kernel's code-directory hash for the image `pid` is running, lowercase
@@ -387,6 +655,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Certificate fingerprints are written in upper case — the value the release
+/// build hands the binary in `CODEG_COMPUTER_CERT_SHA1`.
+fn hex_upper(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,7 +685,7 @@ mod tests {
     fn an_unmet_requirement_is_refused() {
         let me = Guest::ChildPid(std::process::id());
         let err = check_guest(
-            me,
+            me.clone(),
             "anchor apple generic and certificate leaf[subject.OU] = \"XXXXXXXXXX\"",
         )
         .unwrap_err();
@@ -428,6 +702,50 @@ mod tests {
         let token = peer_audit_token(a.as_raw_fd()).unwrap();
         assert_eq!(token.pid(), std::process::id());
         drop(b);
+    }
+
+    /// A file is checked as it is on disk — before anything runs it — and read
+    /// like a running process is: the test binary is ad-hoc signed (no
+    /// certificate), and the code directory hash of the file is the one the
+    /// kernel reports for this very process.
+    #[test]
+    fn a_file_is_checked_as_it_is_on_disk() {
+        let me = self_info().expect("its own signature");
+        let identifier = me.identifier.clone().expect("signed code has one");
+        let exe = std::env::current_exe().expect("this test's own binary");
+        let file = check_guest(
+            Guest::StaticFile(exe.clone()),
+            &format!("identifier \"{identifier}\""),
+        )
+        .expect("the file's own signature holds");
+        assert_eq!(file.identifier, me.identifier);
+        assert_eq!(file.cdhash, me.cdhash);
+        assert!(
+            file.cdhashes.contains(me.cdhash.as_ref().unwrap()),
+            "{:?}",
+            file.cdhashes
+        );
+        assert_eq!(file.leaf_sha1, None, "ad-hoc code carries no certificate");
+        // A requirement it does not meet is refused here too.
+        assert!(check_guest(Guest::StaticFile(exe), "anchor apple").is_err());
+    }
+
+    /// A signing certificate is read as the SHA-1 fingerprint a requirement
+    /// names, in upper case. An Apple-signed system binary has one; ad-hoc
+    /// signed code has none.
+    #[test]
+    fn a_signing_certificate_is_read_as_its_fingerprint() {
+        let ls = check_guest(Guest::StaticFile("/bin/ls".into()), "anchor apple")
+            .expect("/bin/ls is signed by Apple");
+        assert_eq!(ls.identifier.as_deref(), Some("com.apple.ls"));
+        let leaf = ls.leaf_sha1.expect("a certificate signature has a leaf");
+        assert_eq!(leaf.len(), 40, "{leaf}");
+        assert!(
+            leaf.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_lowercase()),
+            "{leaf}"
+        );
+        assert!(!ls.cdhashes.is_empty());
     }
 
     #[test]

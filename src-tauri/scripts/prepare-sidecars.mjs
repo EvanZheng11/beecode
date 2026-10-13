@@ -17,6 +17,10 @@
 //      `tauri.macos.conf.json`). macOS charges an executable's permissions to
 //      the app bundle it sits in: a helper beside codeg in `Contents/MacOS/`
 //      would hold codeg's — every agent's shell's — and none of its own.
+//   5. macOS 目标还会给 staged 的 `codeg-mcp` 与 helper app 显式签名：identifier
+//      写死，证书模式（APPLE_SIGNING_IDENTITY）带 hardened runtime 与 SHA-256
+//      CodeDirectory。codesign 不带 `-i` 重签会按文件名重推 identifier，见
+//      `signMac`。
 //
 // `codeg-computer-helper` takes its trust anchors from the environment at
 // compile time (`CODEG_COMPUTER_PEER_REQUIREMENT`): the release workflow sets
@@ -59,8 +63,11 @@ const BINARIES_DIR = join(SRC_TAURI, "binaries")
 const BIN_NAMES = ["codeg-mcp", "codeg-computer-helper"]
 // The features their binary targets require (Cargo.toml).
 const FEATURES = "mcp-bin,computer-helper"
+const MCP = "codeg-mcp"
 const HELPER = "codeg-computer-helper"
 const HELPER_APP = join(BINARIES_DIR, `${HELPER}.app`)
+// 签名标识：与 workflow 的验签条件（req_mcp / helper requirement）必须完全一致。
+const HELPER_IDENTIFIER = "app.codeg.computer-helper"
 
 function log(msg) {
   console.log(`[prepare-sidecars] ${msg}`)
@@ -95,10 +102,30 @@ function resolveHostTriple() {
   }
 }
 
+// macOS 签名统一入口：identifier 一律显式 `-i` 写死，因为 codesign 给裸可执行
+// 文件重签时不带 `-i` 会按文件名重新推导 identifier，而 Rust linker 写进裸二进制
+// 的是 `codeg_mcp-<hash>` 这类值 —— 与 workflow 里 `identifier "codeg-mcp"` 的
+// 验签条件不一致。证书模式（导入脚本导出的 APPLE_SIGNING_IDENTITY，值为证书
+// SHA-1）额外启用 hardened runtime 与 SHA-256 CodeDirectory；本地未设置该变量时
+// 保持原有 Ad hoc（identity `-`）语义，不加 entitlements。
+function signMac(path, identifier) {
+  if (process.platform !== "darwin") {
+    log(`not on macOS: ${path} is left unsigned`)
+    return
+  }
+  const identity = process.env.APPLE_SIGNING_IDENTITY
+  const args = ["--force", "--sign", identity || "-", "-i", identifier]
+  if (identity) {
+    args.push("--options", "runtime", "--digest-algorithm=sha256")
+  }
+  args.push(path)
+  execFileSync("codesign", args, { stdio: "inherit" })
+}
+
 // The helper as an app: its Info.plist (identifier `app.codeg.computer-helper`,
-// no Dock icon), its executable, codeg's icon. Sealed ad hoc, so a bundle
-// signed around it accepts it; release.yml signs it again with the Developer
-// ID before `tauri build`.
+// no Dock icon), its executable, codeg's icon. Sealed with the identity in
+// `APPLE_SIGNING_IDENTITY` when it is exported (the CI release self-signed
+// certificate), else ad hoc for a local build.
 function stageHelperApp(built) {
   const version = JSON.parse(
     readFileSync(join(SRC_TAURI, "tauri.conf.json"), "utf8")
@@ -119,13 +146,7 @@ function stageHelperApp(built) {
     join(SRC_TAURI, "icons", "icon.icns"),
     join(contents, "Resources", "icon.icns")
   )
-  if (process.platform === "darwin") {
-    execFileSync("codesign", ["--force", "--sign", "-", HELPER_APP], {
-      stdio: "inherit",
-    })
-  } else {
-    log(`not on macOS: ${HELPER_APP} is left unsigned`)
-  }
+  signMac(HELPER_APP, HELPER_IDENTIFIER)
   log(`helper app staged at ${HELPER_APP}`)
 }
 
@@ -186,8 +207,14 @@ function main() {
       chmodSync(dest, 0o755)
     }
     log(`sidecar staged at ${dest}`)
-    if (name === HELPER && target.includes("apple-darwin")) {
-      stageHelperApp(built)
+    if (target.includes("apple-darwin")) {
+      if (name === MCP) {
+        // 裸二进制在 staging 就固定 identifier（signMac 注释）；否则留在里面的
+        // 是 Rust linker 生成的 codeg_mcp-<hash>，与验签条件 `codeg-mcp` 不符。
+        signMac(dest, MCP)
+      } else if (name === HELPER) {
+        stageHelperApp(built)
+      }
     }
   }
 }

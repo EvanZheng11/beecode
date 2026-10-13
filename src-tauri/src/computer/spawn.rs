@@ -454,6 +454,7 @@ mod tests {
     async fn an_image_outside_its_launch_requirement_never_runs() {
         use super::super::launch_req::{held_here, supported};
         if !supported() || !held_here() {
+            println!("codeg-kernel-constraint: NOT-VERIFIED reason=sip-disabled（团队模式断言）");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -528,5 +529,127 @@ mod tests {
         let mut out = String::new();
         read_end.read_to_string(&mut out).unwrap();
         assert_eq!(out.trim(), "0 1 2");
+    }
+
+    /// 证书模式的 launch constraint 对着 CI 证书真实签出的 fixture：正例真的
+    /// `exec` 起来（marker 出现），错的 cdhash、以及「验签之后文件被换成另一份
+    /// 合法签名」都在 `exec` 处被内核拒绝（`SIGKILL`），第一条指令都不跑。
+    ///
+    /// 只有 SIP 全开时才算验证：`csrutil` 关掉时内核不保持 launch requirement
+    /// （任何镜像都会跑起来），本测试打印 NOT-VERIFIED 并返回 —— 绝不把
+    /// 「`amfi_launch_constraint_set_spawnattr` 返回 0」当成内核接受了约束。
+    ///
+    /// fixture 由 release workflow 用临时 keychain 里同一张证书签出，本身没有
+    /// 任何副作用（只写一个临时 marker 文件，不碰 TCC / 屏幕 / 鼠标）。
+    ///
+    /// ```text
+    /// CODEG_TEST_SELF_SIGNED_BIN=/tmp/x/codeg-self-signed-fixture \
+    /// CODEG_TEST_SELF_SIGNED_OTHER_BIN=/tmp/x/codeg-self-signed-fixture-other \
+    /// CODEG_TEST_SELF_SIGNED_SHA1=<40 位大写十六进制> \
+    ///   cargo test --features test-utils --lib \
+    ///   computer::spawn::tests::a_certificate_launch_requirement_holds_at_exec \
+    ///   -- --ignored --nocapture
+    /// ```
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "需要自签名证书签出的 fixture：见测试说明"]
+    async fn a_certificate_launch_requirement_holds_at_exec() {
+        use std::path::PathBuf;
+
+        use super::super::codesign::{check_guest, Guest};
+        use super::super::launch_req::{held_here, pinned_certificate, supported};
+
+        let (Some(fixture), Some(other), Some(sha1)) = (
+            std::env::var_os("CODEG_TEST_SELF_SIGNED_BIN").map(PathBuf::from),
+            std::env::var_os("CODEG_TEST_SELF_SIGNED_OTHER_BIN").map(PathBuf::from),
+            std::env::var("CODEG_TEST_SELF_SIGNED_SHA1").ok(),
+        ) else {
+            println!(
+                "codeg-kernel-constraint: NOT-VERIFIED reason=no-fixture \
+                 （需要 CODEG_TEST_SELF_SIGNED_BIN / _OTHER_BIN / _SHA1）"
+            );
+            return;
+        };
+        if !supported() {
+            println!("codeg-kernel-constraint: NOT-VERIFIED reason=launch-requirement-unsupported");
+            return;
+        }
+        if !held_here() {
+            println!(
+                "codeg-kernel-constraint: NOT-VERIFIED reason=sip-disabled \
+                 （本机 SIP 未全开：内核不保持 launch requirement，这里不做任何「通过」的宣称）"
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("codeg-self-signed-fixture");
+        std::fs::copy(&fixture, &file).unwrap();
+        let anchor = format!("certificate leaf = H\"{sha1}\"");
+        let info = check_guest(Guest::StaticFile(file.clone()), &anchor)
+            .expect("fixture 必须是本次证书签出的（静态验签失败）");
+        assert_eq!(info.leaf_sha1.as_deref(), Some(sha1.as_str()), "{info:?}");
+        let identifier = info.identifier.clone().expect("fixture 有签名标识");
+        let hashes: Vec<&str> = info.cdhashes.iter().map(String::as_str).collect();
+        let requirement = pinned_certificate(&identifier, &hashes).expect("fixture 的 cdhash 可钉");
+        // 被替换进来的那一份：同一张证书、同一个 identifier，只有内容与 cdhash
+        // 不同 —— 它自己合法，没被钉住时跑得起来，正因如此「它跑不起来」才说明
+        // 钉的是原来那份。
+        let replacement = check_guest(Guest::StaticFile(other.clone()), &anchor)
+            .expect("第二份 fixture 也必须由本次证书签出");
+        assert_eq!(
+            replacement.identifier.as_deref(),
+            Some(identifier.as_str()),
+            "{replacement:?}"
+        );
+        assert_ne!(
+            replacement.cdhashes, info.cdhashes,
+            "两份 fixture 的 cdhash 必须不同"
+        );
+
+        let marker = dir.path().join("ran");
+        let env = vec![(
+            "CODEG_TEST_FIXTURE_MARKER".to_string(),
+            marker.display().to_string(),
+        )];
+        let run = |program: &Path, launch_requirement: Option<&[u8]>| {
+            spawn(&SpawnSpec {
+                program,
+                args: &[],
+                env: &env,
+                stdio: [ChildFd::Null, ChildFd::Null, ChildFd::Null],
+                disclaim: false,
+                suspended: false,
+                launch_requirement,
+            })
+            .expect("spawn")
+        };
+
+        // 正例：被验签、被钉住的那一份真的 exec 起来。
+        assert_eq!(run(&file, Some(&requirement)).wait().await, Some(0));
+        assert!(marker.exists(), "正例必须真的跑起来（marker 出现）");
+        std::fs::remove_file(&marker).unwrap();
+
+        // 错的 cdhash：内核在 exec 处 SIGKILL，第一条指令都不跑。
+        let wrong = pinned_certificate(&identifier, &["0000000000000000000000000000000000000000"])
+            .expect("40 位十六进制可钉");
+        assert_eq!(run(&file, Some(&wrong)).wait().await, Some(-libc::SIGKILL));
+        assert!(!marker.exists(), "错的 cdhash 不能有任何副作用");
+
+        // 验签之后被替换：钉住的还是原来那份的 cdhash。
+        std::fs::copy(&other, &file).unwrap();
+        assert_eq!(
+            run(&file, Some(&requirement)).wait().await,
+            Some(-libc::SIGKILL)
+        );
+        assert!(!marker.exists(), "替换进来的镜像不能有任何副作用");
+
+        println!(
+            "codeg-kernel-constraint: VERIFIED identifier={identifier} cdhash={} replacement={} \
+             host={}（SIP 打开）",
+            hashes.join(","),
+            replacement.cdhashes.join(","),
+            std::env::consts::ARCH
+        );
     }
 }

@@ -164,6 +164,36 @@ pub fn signed_by(team_id: &str, identifier: &str) -> Vec<u8> {
     ])
 }
 
+/// Code signed with a self-signed certificate: signing identifier
+/// `identifier`, and one of `cdhashes` (hex) as the code directory hash of the
+/// image that runs.
+///
+/// A self-signed build has no Team ID and no Developer ID validation category
+/// — the facts the Developer ID requirement above is made of — so the hashes
+/// of the build that was verified are what the launch is pinned to. `None`
+/// when `cdhashes` is empty or not hex: a launch with nothing pinned is not
+/// one to make.
+pub fn pinned_certificate(identifier: &str, cdhashes: &[&str]) -> Option<Vec<u8>> {
+    let hashes = cdhashes
+        .iter()
+        // A code directory hash is 20 bytes, 40 hex digits; anything else is
+        // not one, and a launch is not held to it.
+        .map(|hash: &&str| {
+            (hash.len() == 40)
+                .then_some(*hash)
+                .and_then(hex)
+                .map(Der::Bytes)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if hashes.is_empty() {
+        return None;
+    }
+    Some(requirement(vec![
+        ("cdhash", Der::Dict(vec![("$in", Der::Array(hashes))])),
+        ("signing-identifier", Der::Str(identifier)),
+    ]))
+}
+
 type SetFn = unsafe extern "C" fn(*mut libc::posix_spawnattr_t, *const u8, usize) -> c_int;
 
 fn set_fn() -> Option<SetFn> {
@@ -204,10 +234,7 @@ pub(crate) fn held_here() -> bool {
 /// # Safety
 ///
 /// `attr` must be an initialised `posix_spawnattr_t`.
-pub unsafe fn apply(
-    attr: &mut libc::posix_spawnattr_t,
-    requirement: &[u8],
-) -> std::io::Result<()> {
+pub unsafe fn apply(attr: &mut libc::posix_spawnattr_t, requirement: &[u8]) -> std::io::Result<()> {
     let set = set_fn().ok_or_else(|| {
         std::io::Error::other(
             "computer use needs macOS 14.4 or later, the first to let a launch be held to a \
@@ -270,6 +297,56 @@ mod tests {
              090c0476657273020101",
         );
         assert_eq!(signed_by("ABCDE12345", "codeg-computer-helper"), apple);
+    }
+
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The certificate-mode requirement pins the signing identifier and the
+    /// verified build's code directory hashes, and none of the Developer ID
+    /// facts — a self-signed build has neither a Team ID nor a validation
+    /// category.
+    #[test]
+    fn the_certificate_requirement_pins_identifier_and_hashes() {
+        let ours = pinned_certificate(
+            "app.codeg.computer-helper",
+            &[
+                "5d6b31ffbf371b41f6658ad980135df8e69a799f",
+                "1d3cf25892c1e0483b330d5d69f43e1753b75570",
+            ],
+        )
+        .unwrap();
+        for fact in ["signing-identifier", "cdhash", "$in"] {
+            assert!(contains(&ours, fact.as_bytes()), "{fact} missing");
+        }
+        for absent in ["team-identifier", "validation-category", "certificate"] {
+            assert!(
+                !contains(&ours, absent.as_bytes()),
+                "{absent} must not be pinned"
+            );
+        }
+        assert!(contains(&ours, b"app.codeg.computer-helper"));
+        let first = unhex("5d6b31ffbf371b41f6658ad980135df8e69a799f");
+        let second = unhex("1d3cf25892c1e0483b330d5d69f43e1753b75570");
+        assert!(contains(&ours, &first) && contains(&ours, &second));
+        // Both hashes are values of the one `$in` list, in the order given:
+        // nothing between them but the second's own tag and length.
+        let after = ours
+            .windows(first.len() + 2 + second.len())
+            .position(|w| w.starts_with(&first) && w.ends_with(&second))
+            .expect("both hashes in one list");
+        let between = &ours[after + first.len()..after + first.len() + 2];
+        assert_eq!(between, [TAG_OCTETS, second.len() as u8]);
+    }
+
+    /// A hash that is empty, not hex or not a whole byte is refused: there is
+    /// no launch to make with it.
+    #[test]
+    fn a_certificate_requirement_needs_whole_hashes() {
+        for bad in [vec![], vec![""], vec!["zz"], vec!["abc"]] {
+            assert!(pinned_certificate("app.codeg.computer-helper", &bad).is_none());
+        }
     }
 
     #[test]
