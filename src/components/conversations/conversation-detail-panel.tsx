@@ -840,7 +840,9 @@ const ConversationTabView = memo(function ConversationTabView({
   // i.e. the agent reads the same instruction twice. Holding the flush for one
   // round-trip is enough, and cannot strand the queue: `handleQueueSteer`
   // always clears this in a `finally`, which re-runs the flush effect.
-  const [queueSteerInFlight, setQueueSteerInFlight] = useState(false)
+  const [queueSteerInFlightId, setQueueSteerInFlightId] = useState<
+    string | null
+  >(null)
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -867,7 +869,7 @@ const ConversationTabView = memo(function ConversationTabView({
     if (runtimeSyncState === "awaiting_persist") return
     // A row being inserted into the (just-ended) turn is still queued; sending
     // it now would deliver it twice. See `queueSteerInFlight`.
-    if (queueSteerInFlight) return
+    if (queueSteerInFlightId !== null) return
     if (msgQueue.length === 0) return
     // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
     // a just-bounced retry waits out the backoff window before re-sending.
@@ -894,7 +896,7 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlight])
+  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlightId])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
@@ -2100,50 +2102,8 @@ const ConversationTabView = memo(function ConversationTabView({
     [effectiveConversationId]
   )
 
-  const messageListNode = (
-    <GoalControlProvider value={goalControlValue}>
-      <MessageListView
-        conversationId={effectiveConversationId}
-        imageRoot={workingDirForConnection ?? null}
-        agentType={selectedAgent}
-        availableCommands={connectionCommands}
-        connStatus={connStatus}
-        isActive={isActive}
-        sendSignal={sendSignal}
-        detailLoading={detailLoading}
-        detailError={detailError}
-        acpLoadError={acpLoadError}
-        hideEmptyState={!hasPersistedConversation || hasSentMessage}
-        onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
-        onNewSession={
-          canShowDetailErrorActions ? handleOpenNewSession : undefined
-        }
-        onQuoteSelection={composerAvailable ? handleQuoteSelection : undefined}
-        // Asking opens its own conversation, so it needs a folder to open it in
-        // rather than a usable composer here — a transcript whose composer is
-        // blocked (session/load failure) can still spawn the question elsewhere.
-        onAskSelection={canAskSelection ? handleAskSelection : undefined}
-        // Fork carries no draft, so — unlike a send — a non-empty queue is
-        // not at risk of being jumped and needs no guard here. A turn in
-        // flight is still rejected, by the backend, which is the only place
-        // that can see it without racing.
-        //
-        // "prompting" belongs on this side of the gate (same shape as the
-        // goal-control gate above): this answers "can this surface fork at
-        // all", and a turn in flight is a passing "not right now" that the
-        // view greys the button out for. Dropping the handler instead made
-        // every reply's fork icon disappear for the length of each reply.
-        // `handleForkFromTurn` re-checks liveness at click time.
-        onForkFromTurn={
-          (connStatus === "connected" || connStatus === "prompting") &&
-          hasPersistedConversation &&
-          conn.supportsFork
-            ? handleForkFromTurn
-            : undefined
-        }
-      />
-    </GoalControlProvider>
-  )
+  // `messageListNode` is assembled after the live-feedback handler below so the
+  // transcript and queue use the same append callback.
 
   // Live-feedback bar gating + the "agent never read your note" resend fallback.
   // Enqueue rather than `handleSend`: this fallback fires on a turn-end race
@@ -2204,7 +2164,7 @@ const ConversationTabView = memo(function ConversationTabView({
       if (!payload) return
       // Set before the first await so the flush effect above is already held
       // when the turn-end edge lands mid-round-trip.
-      setQueueSteerInFlight(true)
+      setQueueSteerInFlightId(id)
       try {
         const delivered = await deliverQueuedSteer(
           () => feedbackSteer(payload.text, payload.blocks),
@@ -2224,7 +2184,7 @@ const ConversationTabView = memo(function ConversationTabView({
           description: toErrorMessage(err),
         })
       } finally {
-        setQueueSteerInFlight(false)
+        setQueueSteerInFlightId(null)
       }
     },
     [
@@ -2236,6 +2196,48 @@ const ConversationTabView = memo(function ConversationTabView({
       tCmp,
       mqMoveToFront,
     ]
+  )
+
+  const canAppendQueuedMessage =
+    feedback.featureEnabled &&
+    feedback.steerAvailable &&
+    connStatus === "prompting" &&
+    !conn.isViewer &&
+    msgQueue.length > 0
+
+  const messageListNode = (
+    <GoalControlProvider value={goalControlValue}>
+      <MessageListView
+        conversationId={effectiveConversationId}
+        imageRoot={workingDirForConnection ?? null}
+        agentType={selectedAgent}
+        availableCommands={connectionCommands}
+        connStatus={connStatus}
+        isActive={isActive}
+        sendSignal={sendSignal}
+        detailLoading={detailLoading}
+        detailError={detailError}
+        acpLoadError={acpLoadError}
+        hideEmptyState={!hasPersistedConversation || hasSentMessage}
+        onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
+        onNewSession={
+          canShowDetailErrorActions ? handleOpenNewSession : undefined
+        }
+        onQuoteSelection={composerAvailable ? handleQuoteSelection : undefined}
+        onAskSelection={canAskSelection ? handleAskSelection : undefined}
+        onForkFromTurn={
+          (connStatus === "connected" || connStatus === "prompting") &&
+          hasPersistedConversation &&
+          conn.supportsFork
+            ? handleForkFromTurn
+            : undefined
+        }
+        onAppendQueuedMessage={
+          canAppendQueuedMessage ? handleQueueSteer : undefined
+        }
+        appendingQueuedMessageId={queueSteerInFlightId}
+      />
+    </GoalControlProvider>
   )
 
   return (

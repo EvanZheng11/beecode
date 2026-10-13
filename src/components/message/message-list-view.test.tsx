@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { fireEvent, render, screen } from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
+import { describe, expect, it, vi } from "vitest"
+
+import enMessages from "@/i18n/messages/en.json"
 
 import {
   advanceReplyFold,
@@ -9,6 +13,7 @@ import {
   markThreadTail,
   mergeConsecutiveAssistantTurns,
   singletonSourceTurns,
+  UserMessageAppendButton,
   type MergedAssistantRunCache,
   type ReplyFoldState,
   type ResolvedMessageGroup,
@@ -16,6 +21,59 @@ import {
 } from "./message-list-view"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import type { MessageTurn } from "@/lib/types"
+
+const appendMessages = {
+  ...enMessages,
+  Folder: {
+    ...enMessages.Folder,
+    chat: {
+      ...enMessages.Folder.chat,
+      messageList: {
+        ...enMessages.Folder.chat.messageList,
+        appendAsFeedback: "Append as live feedback",
+      },
+    },
+  },
+}
+
+describe("UserMessageAppendButton", () => {
+  it("uses the localized key and passes the queued id", () => {
+    const onAppendQueuedMessage = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={appendMessages}>
+        <UserMessageAppendButton
+          queuedId="queued-1"
+          onAppendQueuedMessage={onAppendQueuedMessage}
+        />
+      </NextIntlClientProvider>
+    )
+
+    const button = screen.getByRole("button", {
+      name: "Append as live feedback",
+    })
+    expect(button).toHaveAttribute("aria-label", "Append as live feedback")
+    fireEvent.click(button)
+    expect(onAppendQueuedMessage).toHaveBeenCalledOnce()
+    expect(onAppendQueuedMessage).toHaveBeenCalledWith("queued-1")
+  })
+
+  it("disables the button for any append already in flight", () => {
+    const onAppendQueuedMessage = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={appendMessages}>
+        <UserMessageAppendButton
+          queuedId="queued-1"
+          onAppendQueuedMessage={onAppendQueuedMessage}
+          appendingQueuedMessageId="queued-2"
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(
+      screen.getByRole("button", { name: "Append as live feedback" })
+    ).toBeDisabled()
+  })
+})
 
 function turn(id: string): MessageTurn {
   return { id, role: "assistant", blocks: [], timestamp: "" }

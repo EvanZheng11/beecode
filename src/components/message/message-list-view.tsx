@@ -65,6 +65,7 @@ import {
   Plus,
   RefreshCw,
   ListTodo,
+  Zap,
 } from "lucide-react"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { Button } from "@/components/ui/button"
@@ -179,6 +180,10 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /** Append a queued message to the running turn as live feedback. */
+  onAppendQueuedMessage?: (queuedId: string) => void
+  /** Queue id currently being appended; any non-null value disables append. */
+  appendingQueuedMessageId?: string | null
 }
 
 export interface ResolvedMessageGroup {
@@ -865,6 +870,33 @@ const UserMessageCopyButton = memo(function UserMessageCopyButton({
   )
 })
 
+export const UserMessageAppendButton = memo(function UserMessageAppendButton({
+  queuedId,
+  onAppendQueuedMessage,
+  appendingQueuedMessageId,
+}: {
+  queuedId: string
+  onAppendQueuedMessage: (queuedId: string) => void
+  appendingQueuedMessageId?: string | null
+}) {
+  const t = useTranslations("Folder.chat.messageList")
+  const label = t("appendAsFeedback" as Parameters<typeof t>[0])
+  const disabled = appendingQueuedMessageId != null
+
+  return (
+    <MessageAction
+      tooltip={label}
+      aria-label={label}
+      disabled={disabled}
+      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      onClick={() => onAppendQueuedMessage(queuedId)}
+      size="icon-xs"
+    >
+      <Zap size={12} />
+    </MessageAction>
+  )
+})
+
 const UserMessageTaskButton = memo(function UserMessageTaskButton({
   parts,
 }: {
@@ -948,6 +980,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onForkFromTurn,
   forkDisabled = false,
   isThreadTail = false,
+  onAppendQueuedMessage,
+  appendingQueuedMessageId,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -964,6 +998,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
+  /** Append this queued user message as live feedback. */
+  onAppendQueuedMessage?: (queuedId: string) => void
+  appendingQueuedMessageId?: string | null
 }) {
   if (group.role === "system") {
     return <CollapsibleSystemMessage parts={group.parts} />
@@ -984,6 +1021,13 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         ) : null}
         {group.role === "user" ? (
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
+            {onAppendQueuedMessage ? (
+              <UserMessageAppendButton
+                queuedId={group.id}
+                onAppendQueuedMessage={onAppendQueuedMessage}
+                appendingQueuedMessageId={appendingQueuedMessageId}
+              />
+            ) : null}
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
@@ -1109,6 +1153,8 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  onAppendQueuedMessage,
+  appendingQueuedMessageId,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1452,6 +1498,8 @@ export function MessageListView({
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
+                onAppendQueuedMessage={onAppendQueuedMessage}
+                appendingQueuedMessageId={appendingQueuedMessageId}
               />
             </div>
           )
@@ -1481,6 +1529,8 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      onAppendQueuedMessage,
+      appendingQueuedMessageId,
     ]
   )
 

@@ -137,6 +137,20 @@ describe("MessageQueueDisplay click-to-insert", () => {
     })
   })
 
+  it("disables every queue control for a host append in flight", () => {
+    renderDisplay({
+      onSteerItem: vi.fn(async () => {}),
+      steerChannel: "native",
+      appendingQueuedMessageId: "q2",
+    })
+
+    expect(
+      screen
+        .getAllByRole("button")
+        .every((button) => (button as HTMLButtonElement).disabled)
+    ).toBe(true)
+    expect(screen.getAllByTitle(TQ.steerItemNow)).toHaveLength(2)
+  })
   it("hides the note button on a pull row the channel cannot carry", () => {
     // The pull tool delivers text only, so the backend rejects a draft with
     // attachments there — the click could never insert anything. The row is

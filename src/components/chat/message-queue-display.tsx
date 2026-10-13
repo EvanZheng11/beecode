@@ -26,6 +26,8 @@ interface MessageQueueDisplayProps {
    *  mirroring the composer's split-button (`Zap` = instant insert,
    *  `Clock` = note the agent reads on its next check). */
   steerChannel?: "native" | "pull"
+  /** Queue id whose append operation is owned by the host, if any. */
+  appendingQueuedMessageId?: string | null
 }
 
 interface QueueItemProps {
@@ -36,6 +38,8 @@ interface QueueItemProps {
   onDelete: (id: string) => void
   onSteerItem?: (id: string) => Promise<void> | void
   steerChannel: "native" | "pull"
+  /** Whether queue controls are disabled by an append in flight. */
+  disabled: boolean
   /** Whether an insert from ANY row is in flight — every row's button is
    *  disabled for the duration, so two rows can't race the one channel. */
   steering: boolean
@@ -51,6 +55,7 @@ function QueueItem({
   onSteerItem,
   steerChannel,
   steering,
+  disabled,
   onSteerStart,
 }: QueueItemProps) {
   const t = useTranslations("Folder.chat.messageQueue")
@@ -70,6 +75,7 @@ function QueueItem({
     Boolean(onSteerItem) &&
     !isEditing &&
     (steerChannel === "native" || !draftRidesBlocks(item.draft))
+  const controlsDisabled = disabled || steering
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
@@ -94,7 +100,8 @@ function QueueItem({
     >
       <button
         type="button"
-        className="shrink-0 cursor-grab touch-none active:cursor-grabbing p-0"
+        className="shrink-0 cursor-grab touch-none active:cursor-grabbing p-0 disabled:pointer-events-none disabled:opacity-50"
+        disabled={controlsDisabled}
         onPointerDown={startDrag}
       >
         <GripVertical className="h-3 w-3 text-muted-foreground/60" />
@@ -109,7 +116,7 @@ function QueueItem({
         <button
           type="button"
           onClick={() => void onSteerStart(item.id)}
-          disabled={steering}
+          disabled={disabled || steering}
           className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground disabled:opacity-50"
           title={t(
             steerChannel === "pull" ? "steerItemAsNote" : "steerItemNow"
@@ -125,7 +132,8 @@ function QueueItem({
       <button
         type="button"
         onClick={() => onEdit(item.id)}
-        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
+        disabled={controlsDisabled}
+        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground disabled:opacity-50"
         title={t("editItem")}
       >
         <Pencil className="h-2.5 w-2.5" />
@@ -133,7 +141,8 @@ function QueueItem({
       <button
         type="button"
         onClick={() => onDelete(item.id)}
-        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
+        disabled={controlsDisabled}
+        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground disabled:opacity-50"
         title={t("deleteItem")}
       >
         <X className="h-2.5 w-2.5" />
@@ -150,6 +159,7 @@ export function MessageQueueDisplay({
   editingItemId,
   onSteerItem,
   steerChannel = "pull",
+  appendingQueuedMessageId,
 }: MessageQueueDisplayProps) {
   // The id whose insert is in flight. A per-row `steering` would let a
   // concurrent click on another row race the same channel; one shared id
@@ -177,6 +187,9 @@ export function MessageQueueDisplay({
     [onSteerItem]
   )
 
+  const controlsDisabled =
+    steeringId !== null || appendingQueuedMessageId != null
+
   if (queue.length === 0) return null
 
   return (
@@ -185,7 +198,7 @@ export function MessageQueueDisplay({
         as="div"
         axis="y"
         values={queue}
-        onReorder={onReorder}
+        onReorder={controlsDisabled ? () => {} : onReorder}
         className="flex flex-col gap-0.5"
       >
         {queue.map((item, index) => (
@@ -199,6 +212,7 @@ export function MessageQueueDisplay({
             onSteerItem={onSteerItem}
             steerChannel={steerChannel}
             steering={steeringId !== null}
+            disabled={appendingQueuedMessageId != null}
             onSteerStart={handleSteerStart}
           />
         ))}
