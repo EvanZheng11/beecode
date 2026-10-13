@@ -345,7 +345,7 @@ jobs:
           csreq -r="$peer_req" -t >/dev/null
           echo "CODEG_COMPUTER_HELPER_REQUIREMENT=$helper_req" >> "$GITHUB_ENV"
           echo "CODEG_COMPUTER_PEER_REQUIREMENT=$peer_req" >> "$GITHUB_ENV"
-          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：$sha1）："
+          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：${sha1}）："
           echo "  helper: $helper_req"
           echo "  peers : $peer_req"
 
@@ -527,7 +527,7 @@ jobs:
           set -e
           cat "$kernel_log"
           if [ "$kernel_rc" -ne 0 ]; then
-            echo "::error::内核约束测试失败（rc=$kernel_rc）"
+            echo "::error::内核约束测试失败（rc=${kernel_rc}）"
             exit 1
           fi
 
@@ -979,7 +979,7 @@ jobs:
           csreq -r="$peer_req" -t >/dev/null
           echo "CODEG_COMPUTER_HELPER_REQUIREMENT=$helper_req" >> "$GITHUB_ENV"
           echo "CODEG_COMPUTER_PEER_REQUIREMENT=$peer_req" >> "$GITHUB_ENV"
-          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：$sha1）。"
+          echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：${sha1}）。"
 
       - name: Build server + codeg-mcp companion + computer-use helper
         working-directory: src-tauri
