@@ -121,6 +121,8 @@ interface ConversationShellProps {
    *  live-feedback channel; threaded straight through to the composer's
    *  queue list. See `ChatInputProps.onQueueSteer`. */
   onQueueSteer?: (id: string) => Promise<void> | void
+  /** 正在追加的队列项 id；追加期间禁用所有队列行操作。 */
+  appendingQueuedMessageId?: string | null
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
@@ -205,6 +207,7 @@ export function ConversationShell({
   onQueueEdit,
   onQueueDelete,
   onQueueSteer,
+  appendingQueuedMessageId,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -318,6 +321,7 @@ export function ConversationShell({
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
               onQueueSteer={onQueueSteer}
+              appendingQueuedMessageId={appendingQueuedMessageId}
               editingItemId={editingItemId}
               editingDraftText={editingDraftText}
               editingDraftBlocks={editingDraftBlocks}

@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import type { ComponentProps } from "react"
-import { render, screen } from "@testing-library/react"
+import { act, render, screen, fireEvent } from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
+import enMessages from "@/i18n/messages/en.json"
 
-// The shell's own children are not under test: stand each in with a marker.
-vi.mock("@/components/chat/chat-input", () => ({
-  ChatInput: () => <div data-testid="composer" />,
+// 保留真实 Shell → ChatInput → MessageQueueDisplay，仅替换编辑器及无关子组件。
+vi.mock("@/components/chat/message-input", () => ({
+  MessageInput: () => <div data-testid="composer" />,
 }))
 vi.mock("@/components/chat/chat-width-handles", () => ({
   ChatWidthHandles: () => <div data-testid="width-handles" />,
@@ -34,6 +36,20 @@ import { ConversationShell } from "./conversation-shell"
 
 type ShellProps = ComponentProps<typeof ConversationShell>
 
+const appendMessages = {
+  ...enMessages,
+  Folder: {
+    ...enMessages.Folder,
+    chat: {
+      ...enMessages.Folder.chat,
+      messageList: {
+        ...enMessages.Folder.chat.messageList,
+        appendAsFeedback: "追加为实时反馈",
+      },
+    },
+  },
+}
+
 function renderShell(extra: Partial<ShellProps> = {}) {
   const noop = () => {}
   const props = {
@@ -54,9 +70,11 @@ function renderShell(extra: Partial<ShellProps> = {}) {
     ...extra,
   } as unknown as ShellProps
   return render(
-    <ConversationShell {...props}>
-      <div data-testid="transcript" />
-    </ConversationShell>
+    <NextIntlClientProvider locale="en" messages={appendMessages}>
+      <ConversationShell {...props}>
+        <div data-testid="transcript" />
+      </ConversationShell>
+    </NextIntlClientProvider>
   )
 }
 
@@ -79,6 +97,48 @@ describe("ConversationShell chat-width handles", () => {
     expect(host).toContainElement(screen.getByTestId("width-handles"))
     expect(host).toHaveClass("relative")
     expect(shellRoot().style.getPropertyValue("--chat-gutter")).toBe("12px")
+  })
+})
+
+describe("ConversationShell 队列追加接线", () => {
+  const queueProps = {
+    queue: [
+      {
+        id: "真实队列-id",
+        draft: {
+          displayText: "排队消息",
+          blocks: [{ type: "text" as const, text: "排队消息" }],
+        },
+        modeId: null,
+      },
+    ],
+    onQueueReorder: vi.fn(),
+    onQueueEdit: vi.fn(),
+    onQueueDelete: vi.fn(),
+  }
+
+  it("经真实 ChatInput 把队列 id 传给宿主回调", async () => {
+    const onQueueSteer = vi.fn(async () => {})
+    renderShell({ ...queueProps, onQueueSteer })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "追加为实时反馈" }))
+    })
+    expect(onQueueSteer).toHaveBeenCalledTimes(1)
+    expect(onQueueSteer).toHaveBeenCalledWith("真实队列-id")
+  })
+
+  it("把宿主追加状态透传给所有队列控件", () => {
+    renderShell({
+      ...queueProps,
+      onQueueSteer: vi.fn(async () => {}),
+      appendingQueuedMessageId: "另一队列-id",
+    })
+
+    expect(screen.getAllByRole("button")).toHaveLength(4)
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).toBeDisabled()
+    }
   })
 })
 

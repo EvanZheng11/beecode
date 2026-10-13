@@ -59,6 +59,8 @@ interface ChatInputProps {
    *  Threaded straight through; present only while a turn is in flight and
    *  the session has a working channel. */
   onQueueSteer?: (id: string) => Promise<void> | void
+  /** 正在追加的队列项 id；追加期间禁用所有队列行操作。 */
+  appendingQueuedMessageId?: string | null
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
@@ -130,6 +132,7 @@ export const ChatInput = memo(function ChatInput({
   onQueueEdit,
   onQueueDelete,
   onQueueSteer,
+  appendingQueuedMessageId,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -198,6 +201,7 @@ export const ChatInput = memo(function ChatInput({
             editingItemId={editingItemId ?? null}
             onSteerItem={onQueueSteer}
             steerChannel={steerChannel}
+            appendingQueuedMessageId={appendingQueuedMessageId}
           />
         )}
       <MessageInput

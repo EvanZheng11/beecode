@@ -59,6 +59,7 @@ function QueueItem({
   onSteerStart,
 }: QueueItemProps) {
   const t = useTranslations("Folder.chat.messageQueue")
+  const messageListT = useTranslations("Folder.chat.messageList")
   const dragControls = useDragControls()
 
   // Which rows may offer the insert at all. Two rows can't, and offering a
@@ -75,15 +76,19 @@ function QueueItem({
     Boolean(onSteerItem) &&
     !isEditing &&
     (steerChannel === "native" || !draftRidesBlocks(item.draft))
+  const appendLabel = canSteer
+    ? messageListT("appendAsFeedback" as Parameters<typeof messageListT>[0])
+    : undefined
   const controlsDisabled = disabled || steering
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
       event.preventDefault()
       event.stopPropagation()
+      if (controlsDisabled) return
       dragControls.start(event)
     },
-    [dragControls]
+    [controlsDisabled, dragControls]
   )
 
   return (
@@ -118,9 +123,8 @@ function QueueItem({
           onClick={() => void onSteerStart(item.id)}
           disabled={disabled || steering}
           className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground disabled:opacity-50"
-          title={t(
-            steerChannel === "pull" ? "steerItemAsNote" : "steerItemNow"
-          )}
+          title={appendLabel}
+          aria-label={appendLabel}
         >
           {steerChannel === "pull" ? (
             <Clock className="h-2.5 w-2.5" />
@@ -174,7 +178,13 @@ export function MessageQueueDisplay({
 
   const handleSteerStart = useCallback(
     async (id: string) => {
-      if (!onSteerItem || steeringIdRef.current !== null) return
+      if (
+        !onSteerItem ||
+        steeringIdRef.current !== null ||
+        appendingQueuedMessageId != null ||
+        editingItemId === id
+      )
+        return
       steeringIdRef.current = id
       setSteeringId(id)
       try {
@@ -184,7 +194,7 @@ export function MessageQueueDisplay({
         setSteeringId(null)
       }
     },
-    [onSteerItem]
+    [appendingQueuedMessageId, editingItemId, onSteerItem]
   )
 
   const controlsDisabled =

@@ -2102,9 +2102,6 @@ const ConversationTabView = memo(function ConversationTabView({
     [effectiveConversationId]
   )
 
-  // `messageListNode` is assembled after the live-feedback handler below so the
-  // transcript and queue use the same append callback.
-
   // Live-feedback bar gating + the "agent never read your note" resend fallback.
   // Enqueue rather than `handleSend`: this fallback fires on a turn-end race
   // where the backend already reports no active turn but the frontend may still
@@ -2198,13 +2195,6 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
-  const canAppendQueuedMessage =
-    feedback.featureEnabled &&
-    feedback.steerAvailable &&
-    connStatus === "prompting" &&
-    !conn.isViewer &&
-    msgQueue.length > 0
-
   const messageListNode = (
     <GoalControlProvider value={goalControlValue}>
       <MessageListView
@@ -2232,10 +2222,6 @@ const ConversationTabView = memo(function ConversationTabView({
             ? handleForkFromTurn
             : undefined
         }
-        onAppendQueuedMessage={
-          canAppendQueuedMessage ? handleQueueSteer : undefined
-        }
-        appendingQueuedMessageId={queueSteerInFlightId}
       />
     </GoalControlProvider>
   )
@@ -2319,15 +2305,15 @@ const ConversationTabView = memo(function ConversationTabView({
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}
       onQueueSteer={
-        // Same gate as the composer's mid-turn send, plus a turn actually in
-        // flight: a queued row can only be inserted into a RUNNING turn —
-        // idle sessions have the queue's own auto-flush for that.
+        // 仅运行中且支持实时反馈的拥有者可追加；空闲会话由队列自动发送。
         feedback.featureEnabled &&
         feedback.steerAvailable &&
-        connStatus === "prompting"
+        connStatus === "prompting" &&
+        !conn.isViewer
           ? handleQueueSteer
           : undefined
       }
+      appendingQueuedMessageId={queueSteerInFlightId}
       editingItemId={mqEditingItemId}
       editingDraftText={editingQueueDraftText}
       editingDraftBlocks={editingQueueDraftBlocks}
