@@ -21,7 +21,7 @@
 - 现有 flush、`TurnBusyError` 回队、反馈 native/pull 通道和持久化结构保持原有语义；不做批量追加、追加位置选择或追加状态持久化。
 - 新增或调整的代码注释使用中文，说明“移除 → 反馈提交 → 成功消失/失败回队首”的顺序；不记录消息正文到日志。
 
-## 任务 1：UI 追加按钮与回调接线
+## Task 1: UI 追加按钮与回调接线
 
 **文件：**
 
@@ -52,7 +52,7 @@ pnpm test -- src/components/message/message-list-view.test.tsx src/components/ch
 
 **预期结果：** 两个组件测试文件全部通过；测试能证明按钮的显示门控、正确 id 传递、全局禁用和同步防重复行为，不触发真实反馈提交。
 
-## 任务 2：队列状态和失败回队首
+## Task 2: 队列状态和失败回队首
 
 **文件：**
 
@@ -82,7 +82,7 @@ pnpm test -- src/hooks/use-message-queue.test.ts src/components/conversations/co
 
 **预期结果：** 队列 hook 测试确认移除、回队首、FIFO 和发送时机字段保持；详情面板布局测试确认编排顺序为“按 id 取项 → remove → 设置追加状态 → steer → 成功清理或失败 requeueFront → finally 清理”，并确认追加状态会阻塞自动 flush。
 
-## 任务 3：复用实时反馈并防重复/双入队
+## Task 3: 复用实时反馈并防重复/双入队
 
 **文件：**
 
@@ -113,7 +113,7 @@ pnpm test -- src/hooks/use-session-feedback.test.ts src/components/conversations
 
 **预期结果：** 实时反馈 hook 的 steer 成功、附件参数和失败抛出测试通过；面板编排测试通过成功、彻底失败、降级成功和快速重复点击场景；不会出现同一 draft 同时被 `steer` 和 `requeueFront` 处理的双入队结果。
 
-## 任务 4：10 语言文案
+## Task 4: 10 语言文案
 
 **文件：**
 
@@ -159,7 +159,7 @@ NODE
 
 **预期结果：** 脚本退出码为 0，并输出十个语言文件均含新增 key；任一文件缺 key、JSON 格式错误或值为空都会以非零退出码失败。
 
-## 任务 5：前端测试和 lint
+## Task 5: 前端测试和 lint
 
 **文件：**
 
