@@ -411,47 +411,62 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(flushEffect).not.toContain("connectedWorkingDir")
   })
 
-  it("holds the queue auto-flush while a queued row is being inserted", () => {
-    // A queued row's click-to-insert leaves the row in the queue for the whole
-    // round-trip (it only goes once delivery is confirmed). If the turn ends in
-    // that window, the flush would dequeue and send the very row the backend
-    // just injected — the same instruction delivered twice. The hold is
-    // released in a `finally`, and the flag is a dependency, so the flush
-    // resumes on the next commit either way.
+  it("holds the queue auto-flush while a queued message is being appended as feedback", () => {
+    // 追加编排（handleAppendQueuedAsFeedback）在第一次异步等待前先按 id 快照
+    // 并 remove，再提交反馈；搬运期间暂停自动 flush，追加结束（成功清理或
+    // 失败回队首）后由状态变化重新进入 flush，恢复正常 FIFO 与
+    // TurnBusyError 回退。以下断言固定这条编排链与门控接线。
     const start = source.indexOf("// Flush queued messages whenever the agent")
     const depsEnd = source.indexOf("clearTimeout(timer)", start)
     const effectWithDeps = source.slice(
       start,
       source.indexOf("])", depsEnd) + 2
     )
-    expect(effectWithDeps).toContain("if (queueSteerInFlight) return")
+    expect(effectWithDeps).toContain("if (appendingQueuedId !== null) return")
     // …and as a dependency, so releasing the hold re-runs the flush.
-    expect(effectWithDeps).toContain("queueSteerInFlight])")
+    expect(effectWithDeps).toContain("appendingQueuedId])")
 
-    const steerStart = source.indexOf("const handleQueueSteer = useCallback")
-    expect(steerStart).toBeGreaterThan(-1)
-    const steerHandler = source.slice(
-      steerStart,
-      source.indexOf("\n  return (", steerStart)
+    const appendStart = source.indexOf(
+      "const handleAppendQueuedAsFeedback = useCallback"
     )
-    // Set BEFORE the first await, cleared in a finally. Both must be found: a
-    // missing setter's -1 would otherwise pass the ordering check.
-    const holdAt = steerHandler.indexOf("setQueueSteerInFlight(true)")
-    const awaitAt = steerHandler.indexOf("await deliverQueuedSteer(")
-    expect(holdAt).toBeGreaterThan(-1)
-    expect(holdAt).toBeLessThan(awaitAt)
-    expect(steerHandler).toContain("finally {")
-    expect(steerHandler).toContain("setQueueSteerInFlight(false)")
-    // A turn-end fallback must use the existing mode/readiness/busy handling,
-    // without a second prompt or optimistic-message path in this callback.
-    expect(steerHandler).toContain("() => mqMoveToFront(id)")
-    expect(steerHandler).toContain("if (delivered) mqRemove(id)")
-    // …and still tells the user the row became the next turn, not an insert.
-    expect(steerHandler).toContain(
-      'else toast.info(tCmp("steerQueuedInstead"))'
+    expect(appendStart).toBeGreaterThan(-1)
+    const appendHandler = source.slice(
+      appendStart,
+      source.indexOf("\n  const messageListNode = (", appendStart)
     )
-    expect(steerHandler).not.toContain("acpPrompt(")
-    expect(steerHandler).not.toContain("appendOptimisticTurn(")
+    // 入口用同步 ref 短路（同 tick 的第二次点击也被拒绝），再从当前队列按
+    // id 取项；找不到时直接返回，不修改队列。
+    expect(appendHandler).toContain(
+      "if (appendingQueuedIdRef.current !== null) return"
+    )
+    expect(appendHandler).toContain(
+      "const item = msgQueue.find((m) => m.id === id)"
+    )
+    // remove 在第一次异步等待之前，随后才设置追加状态：flush、编辑和删除
+    // 在搬运期间不会再看到或操作该项。
+    const removeAt = appendHandler.indexOf("mqRemove(id)")
+    const setAt = appendHandler.indexOf("setAppendingQueuedId(id)")
+    const awaitAt = appendHandler.indexOf("await feedbackSteer(")
+    expect(removeAt).toBeGreaterThan(-1)
+    expect(setAt).toBeGreaterThan(removeAt)
+    expect(setAt).toBeLessThan(awaitAt)
+    // 失败路径把原始 draft/mode 和 adoptSendTimeMode 发送时机语义交给
+    // requeueFront，消息回到当前队首（不做位置记忆，不能 reorder）。
+    expect(appendHandler).toContain("mqRequeueFront(item.draft, item.modeId, {")
+    expect(appendHandler).toContain("adoptSendTimeMode: item.adoptSendTimeMode")
+    expect(appendHandler).not.toContain("mqReorder(")
+    expect(appendHandler).not.toContain("mqMoveToFront(")
+    // 无论成败，finally 都清理追加状态；成功路径不会再手动入队。
+    expect(appendHandler).toContain("finally {")
+    expect(appendHandler).toContain("appendingQueuedIdRef.current = null")
+    expect(appendHandler).toContain("setAppendingQueuedId(null)")
+    expect(appendHandler.match(/mqRequeueFront\(/g)).toHaveLength(1)
+    expect(appendHandler.match(/mqRemove\(/g)).toHaveLength(1)
+    // 队列行的追加入口接线到编排函数，队列展示组件读取追加中 id。
+    expect(source).toContain(
+      "? handleAppendQueuedAsFeedback\n          : undefined"
+    )
+    expect(source).toContain("appendingQueuedMessageId={appendingQueuedId}")
   })
 
   it("disables the welcome composer while connected-but-not-ready", () => {

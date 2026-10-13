@@ -40,8 +40,16 @@ export interface UseMessageQueueReturn {
    * Put a draft back at the FRONT of the queue. Used when an auto-flushed item
    * was dequeued, sent, and bounced (TurnBusyError): it must return to the head
    * so it retries before items that were already behind it (FIFO preserved).
+   *
+   * Pass the original item's `adoptSendTimeMode` through `opts` when restoring
+   * a WHOLE queued item (e.g. the append-as-feedback failure path): the flag
+   * decides the send-time mode semantics and must not be silently dropped.
    */
-  requeueFront: (draft: PromptDraft, modeId: string | null) => void
+  requeueFront: (
+    draft: PromptDraft,
+    modeId: string | null,
+    opts?: { adoptSendTimeMode?: boolean }
+  ) => void
   dequeue: () => QueuedMessage | undefined
   remove: (id: string) => void
   reorder: (items: QueuedMessage[]) => void
@@ -101,8 +109,20 @@ export function useMessageQueue(): UseMessageQueueReturn {
   )
 
   const requeueFront = useCallback(
-    (draft: PromptDraft, modeId: string | null) => {
-      commit([{ id: randomUUID(), draft, modeId }, ...queueRef.current])
+    (
+      draft: PromptDraft,
+      modeId: string | null,
+      opts?: { adoptSendTimeMode?: boolean }
+    ) => {
+      commit([
+        {
+          id: randomUUID(),
+          draft,
+          modeId,
+          ...(opts?.adoptSendTimeMode ? { adoptSendTimeMode: true } : {}),
+        },
+        ...queueRef.current,
+      ])
     },
     [commit]
   )

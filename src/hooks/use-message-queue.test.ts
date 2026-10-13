@@ -83,6 +83,29 @@ describe("useMessageQueue bounce FIFO ordering", () => {
     expect(dequeued?.draft.displayText).toBe("A")
   })
 
+  it("requeueFront preserves adoptSendTimeMode via opts (append-failure recovery)", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => result.current.enqueue(draft("A"), null))
+
+    // 追加为实时反馈失败：原始项的 adoptSendTimeMode 随 requeueFront 回队首，
+    // 发送时机语义不丢失；队首语义保持（它先于后面的项被 flush）。
+    act(() =>
+      result.current.requeueFront(draft("B"), null, {
+        adoptSendTimeMode: true,
+      })
+    )
+    expect(texts(result.current.queue)).toEqual(["B", "A"])
+    expect(result.current.queue[0]).toMatchObject({
+      modeId: null,
+      adoptSendTimeMode: true,
+    })
+
+    // 不传 opts 的既有调用（TurnBusyError 弹回）不新增该字段。
+    act(() => result.current.requeueFront(draft("C"), "plan"))
+    expect(result.current.queue[0]).not.toHaveProperty("adoptSendTimeMode")
+    expect(texts(result.current.queue)).toEqual(["C", "B", "A"])
+  })
+
   it("enqueue still appends to the tail (front vs tail are distinct)", () => {
     const { result } = renderHook(() => useMessageQueue())
     act(() => result.current.enqueue(draft("A"), null))

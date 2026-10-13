@@ -102,8 +102,6 @@ import {
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
-import { deliverQueuedSteer } from "@/lib/queued-steer"
-import { toErrorMessage } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
 import {
   claimRuntimeSession,
@@ -117,7 +115,6 @@ import {
 import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
-  buildSteerPayload,
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
   promptDraftTitleSeed,
@@ -258,9 +255,6 @@ const ConversationTabView = memo(function ConversationTabView({
   groupId,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
-  // Composer-namespace copy for the queue row's click-to-insert outcomes
-  // (same keys the composer's own mid-turn send reports).
-  const tCmp = useTranslations("Folder.chat.messageInput")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -658,7 +652,6 @@ const ConversationTabView = memo(function ConversationTabView({
     dequeue: mqDequeue,
     remove: mqRemove,
     reorder: mqReorder,
-    moveToFront: mqMoveToFront,
     updateItem: mqUpdateItem,
     editingItemId: mqEditingItemId,
     startEditing: mqStartEditing,
@@ -832,17 +825,16 @@ const ConversationTabView = memo(function ConversationTabView({
   // another turn while this client believes it is idle) don't spin one failed
   // send per round-trip.
   const lastFlushBounceAtRef = useRef(0)
-  // Whether a queued row's click-to-insert (`handleQueueSteer`) is mid-flight.
-  // The row STAYS in the queue for the whole round-trip — it only leaves once
-  // the backend confirms delivery — so without this the turn-end edge would
-  // hand the same row to the flush below while the insert is still settling:
-  // admitted against the ending turn AND re-sent as the next turn's prompt,
-  // i.e. the agent reads the same instruction twice. Holding the flush for one
-  // round-trip is enough, and cannot strand the queue: `handleQueueSteer`
-  // always clears this in a `finally`, which re-runs the flush effect.
-  const [queueSteerInFlightId, setQueueSteerInFlightId] = useState<
-    string | null
-  >(null)
+  // 正在"追加为实时反馈"的队列项 id。编排函数（见下方
+  // handleAppendQueuedAsFeedback）先按 id 快照并 remove，再提交反馈：搬运期间
+  // 该项已不在队列，flush、编辑和删除不会再看到它。此状态用于防重复点击、
+  // 禁用队列控件，并在追加结束前暂停自动 flush —— 追加完成或失败回队首后
+  // 由状态变化重新进入既有 flush。ref 与 state 同步维护：ref 保证同 tick 的
+  // 第二次点击也被拒绝，state 只负责驱动渲染。
+  const [appendingQueuedId, setAppendingQueuedId] = useState<string | null>(
+    null
+  )
+  const appendingQueuedIdRef = useRef<string | null>(null)
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -867,9 +859,10 @@ const ConversationTabView = memo(function ConversationTabView({
     // lifecycle reconnects — which, for a not-installed target, never happens.
     if (!connectionReady) return
     if (runtimeSyncState === "awaiting_persist") return
-    // A row being inserted into the (just-ended) turn is still queued; sending
-    // it now would deliver it twice. See `queueSteerInFlight`.
-    if (queueSteerInFlightId !== null) return
+    // 追加为实时反馈进行中：暂停自动 flush，等追加结束（成功清理或失败回队
+    // 首后状态复位）再重新进入本 effect，恢复正常 FIFO 与 TurnBusyError 回退。
+    // 追加期间被搬运的项已 remove，不会在这里被重复发送。
+    if (appendingQueuedId !== null) return
     if (msgQueue.length === 0) return
     // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
     // a just-bounced retry waits out the backoff window before re-sending.
@@ -896,7 +889,7 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length, queueSteerInFlightId])
+  }, [connectionReady, runtimeSyncState, msgQueue.length, appendingQueuedId])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
@@ -2143,56 +2136,33 @@ const ConversationTabView = memo(function ConversationTabView({
     [feedbackSteer]
   )
 
-  // Click-to-insert for a queued row: send THAT item into the running turn
-  // over the same live-feedback channel the composer's mid-turn dropdown uses.
-  // The block/text encoding is the shared `buildSteerPayload` — one call site,
-  // no policy here beyond the row's own lifecycle: success removes the row;
-  // a turn-end race prioritizes the row for the existing queue auto-flush.
-  // Failures keep the row available for retry.
-  const handleQueueSteer = useCallback(
+  // 把等待队列中的一条消息"追加为实时反馈"。顺序：按 id 取项 → remove →
+  // 设置追加状态 → steer 提交 → 成功只清理追加状态（实时反馈的乐观条目
+  // 负责显示）/ 失败交回 requeueFront 回到当前队首 → finally 清理。失败恢复
+  // 保留原始 draft、modeId 和 adoptSendTimeMode 发送时机语义，不做位置记忆
+  // （与 TurnBusyError 弹回一致），不记录消息正文。
+  const handleAppendQueuedAsFeedback = useCallback(
     async (id: string) => {
+      // 同步短路：同一时刻最多一个追加。ref 先于 state 拒绝同 tick 的
+      // 第二次点击，state 只负责渲染后的禁用。
+      if (appendingQueuedIdRef.current !== null) return
       const item = msgQueue.find((m) => m.id === id)
       if (!item) return
-      const payload = buildSteerPayload(item.draft)
-      // Nothing sendable in this row (no text, and no display text standing in
-      // for its attachments). Leave it alone: removing it would delete queued
-      // content — including whatever blocks it carries — on a button that
-      // promises to SEND it.
-      if (!payload) return
-      // Set before the first await so the flush effect above is already held
-      // when the turn-end edge lands mid-round-trip.
-      setQueueSteerInFlightId(id)
+      appendingQueuedIdRef.current = id
+      mqRemove(id)
+      setAppendingQueuedId(id)
       try {
-        const delivered = await deliverQueuedSteer(
-          () => feedbackSteer(payload.text, payload.blocks),
-          () => mqMoveToFront(id)
-        )
-        // Not delivered means the turn ended first, so the row goes out as the
-        // next turn instead; say so, as the composer's steer does.
-        if (delivered) mqRemove(id)
-        else toast.info(tCmp("steerQueuedInstead"))
-      } catch (err: unknown) {
-        notify({
-          level: "error",
-          key: `steer-failed:${tabId}`,
-          title: tCmp(
-            feedback.channel === "pull" ? "steerNoteFailed" : "steerFailed"
-          ),
-          description: toErrorMessage(err),
+        await feedbackSteer(item.draft.displayText, item.draft.blocks)
+      } catch {
+        mqRequeueFront(item.draft, item.modeId, {
+          adoptSendTimeMode: item.adoptSendTimeMode,
         })
       } finally {
-        setQueueSteerInFlightId(null)
+        appendingQueuedIdRef.current = null
+        setAppendingQueuedId(null)
       }
     },
-    [
-      msgQueue,
-      feedbackSteer,
-      mqRemove,
-      feedback.channel,
-      tabId,
-      tCmp,
-      mqMoveToFront,
-    ]
+    [msgQueue, mqRemove, feedbackSteer, mqRequeueFront]
   )
 
   const messageListNode = (
@@ -2310,10 +2280,10 @@ const ConversationTabView = memo(function ConversationTabView({
         feedback.steerAvailable &&
         connStatus === "prompting" &&
         !conn.isViewer
-          ? handleQueueSteer
+          ? handleAppendQueuedAsFeedback
           : undefined
       }
-      appendingQueuedMessageId={queueSteerInFlightId}
+      appendingQueuedMessageId={appendingQueuedId}
       editingItemId={mqEditingItemId}
       editingDraftText={editingQueueDraftText}
       editingDraftBlocks={editingQueueDraftBlocks}
