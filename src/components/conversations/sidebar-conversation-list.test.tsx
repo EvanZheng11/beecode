@@ -85,12 +85,21 @@ vi.mock("@/components/agent-icon", () => ({
   },
 }))
 
-// Controllable virtua geometry for the sticky-overlay tests. All rows are 32px
-// (h-[2rem]), so offsets are index*32 and findItemIndex is floor(offset/32).
+// 用于吸顶测试的可控 virtua 几何。默认每行 32px；需要覆盖真实测量时由测试写入
+// itemSizes，所有偏移都按行高累加计算。
 const virtuaCtl = vi.hoisted(() => ({
   scrollOffset: 0,
+  itemSizes: [] as number[],
+  rowKinds: [] as string[],
+  rowSections: [] as Array<string | null>,
   onScroll: null as ((offset: number) => void) | null,
   scrollToIndex: vi.fn(),
+  offsetFor(index: number) {
+    if (this.itemSizes.length === 0) return index * 32
+    return this.itemSizes
+      .slice(0, index)
+      .reduce((total, size) => total + size, 0)
+  },
 }))
 
 // Render EVERY row (data.map) rather than only a window, so the render-count
@@ -111,21 +120,33 @@ vi.mock("virtua", () => ({
     onScroll?: (offset: number) => void
     ref?: Ref<unknown>
   }) => {
+    virtuaCtl.rowKinds = (data as Array<{ kind: string }>).map(
+      (row) => row.kind
+    )
+    virtuaCtl.rowSections = (data as Array<{ section?: string }>).map(
+      (row) => row.section ?? null
+    )
     virtuaCtl.onScroll = onScroll ?? null
     useImperativeHandle(ref, () => ({
       get scrollOffset() {
         return virtuaCtl.scrollOffset
       },
       get scrollSize() {
-        return data.length * 32
+        return virtuaCtl.offsetFor(data.length)
       },
       get viewportSize() {
         return 600
       },
-      findItemIndex: (offset: number) =>
-        Math.max(0, Math.min(data.length - 1, Math.floor(offset / 32))),
-      getItemOffset: (index: number) => index * 32,
-      getItemSize: () => 32,
+      findItemIndex: (offset: number) => {
+        if (data.length === 0) return -1
+        for (let index = 0; index < data.length; index++) {
+          const size = virtuaCtl.itemSizes[index] ?? 32
+          if (offset < virtuaCtl.offsetFor(index) + size) return index
+        }
+        return data.length - 1
+      },
+      getItemOffset: (index: number) => virtuaCtl.offsetFor(index),
+      getItemSize: (index: number) => virtuaCtl.itemSizes[index] ?? 32,
       scrollToIndex: virtuaCtl.scrollToIndex,
       scrollTo: () => {},
       scrollBy: () => {},
@@ -340,6 +361,9 @@ beforeEach(() => {
     ...stableWorkspaceFns,
   })
   virtuaCtl.scrollOffset = 0
+  virtuaCtl.itemSizes = []
+  virtuaCtl.rowKinds = []
+  virtuaCtl.rowSections = []
   virtuaCtl.onScroll = null
   virtuaCtl.scrollToIndex.mockClear()
 })
@@ -684,6 +708,273 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
         "true"
       )
     }
+  })
+
+  it("段落行使用44像素实测高度且不把顶隙重复计入条高", () => {
+    virtuaCtl.itemSizes = [44, ...Array(20).fill(32)]
+    virtuaCtl.scrollOffset = 50
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    const overlay = folders[1].closest("div.absolute")
+    expect(overlay).not.toBeNull()
+    expect(overlay?.className).not.toContain("pt-[0.75rem]")
+  })
+
+  it("自定义段落顺序按实际行索引吸顶", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    useAppWorkspaceStore.setState({
+      conversations: [conv(11, 1), conv(31, 99, { kind: "chat" })],
+    })
+    const view = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+
+    const expectPinned = (label: string, offset: number) => {
+      virtuaCtl.scrollOffset = offset
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SidebarConversationList
+            showCompleted
+            showRecent
+            sortMode="created"
+            sectionOrder={["chats", "folders", "recent"]}
+          />
+        </NextIntlClientProvider>
+      )
+      const buttons = Array.from(document.querySelectorAll("button")).filter(
+        (button) => button.textContent === label
+      )
+      expect(buttons).toHaveLength(2)
+    }
+
+    expectPinned("Chat", 40)
+    expectPinned("Folders", 100)
+    expectPinned("Recent", 300)
+  })
+
+  it("下一个段落进入一条高时按整数像素推顶", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const nextSectionIndex = virtuaCtl.rowKinds.findIndex(
+      (kind, index) => index > 0 && kind === "section"
+    )
+    expect(nextSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) - 8
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    expect(folders[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(-12px)",
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it("滚动到最后一个段落后浮层持续吸顶", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const lastSectionIndex = virtuaCtl.rowKinds.reduce(
+      (last, kind, index) => (kind === "section" ? index : last),
+      -1
+    )
+    expect(lastSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(lastSectionIndex) + 40
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(1)
+    const recent = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Recent"
+    )
+    expect(recent).toHaveLength(2)
+    expect(recent[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    vi.unstubAllGlobals()
+  })
+  it("段落浮层存在时文件夹浮层位于段落条下方", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(sectionButtons).toHaveLength(2)
+    expect(folderButtons).toHaveLength(2)
+    const sectionOverlay = sectionButtons[1].closest("div.absolute")
+    const folderOverlay = folderButtons[1].closest("div.absolute")
+    expect(sectionOverlay).not.toBeNull()
+    expect(folderOverlay).not.toBeNull()
+    expect(
+      Boolean(
+        folderOverlay!.compareDocumentPosition(sectionOverlay!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+    ).toBe(true)
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(32px)" })
+  })
+
+  it("段落交界处两个浮层共同上移且不重叠", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const nextSectionIndex = virtuaCtl.rowKinds.findIndex(
+      (kind, index) => index > 0 && kind === "section"
+    )
+    expect(nextSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) - 8
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const folderButtons = document.querySelectorAll('[data-folder-id="2"]')
+    expect(sectionButtons[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(-12px)",
+    })
+    expect(folderButtons[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(20px)",
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it("没有文件夹行时段落仍可吸顶", () => {
+    useAppWorkspaceStore.setState({
+      folders: [],
+      allFolders: [],
+      conversations: [conv(31, 99, { kind: "chat" })],
+    })
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const chatIndex = virtuaCtl.rowSections.findIndex(
+      (section) => section === "chats"
+    )
+    expect(chatIndex).toBeGreaterThanOrEqual(0)
+    const targetIndex = chatIndex
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(targetIndex) + 20
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+    const chatButtons = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Chat"
+    )
+    expect(chatButtons).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+
+  it("折叠段落仍保留标题吸顶", () => {
+    localStorage.setItem(
+      "workspace:sidebar-section-collapsed",
+      JSON.stringify({ folders: true })
+    )
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    virtuaCtl.scrollOffset = 20
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const collapsedFolders = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    expect(collapsedFolders).toHaveLength(2)
+    act(() => fireEvent.click(collapsedFolders[1]))
+    expect(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent === "Folders" &&
+          !button.closest('[aria-hidden="true"]')
+      )
+    ).toHaveAttribute("aria-expanded", "true")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it("空段落仍保留标题吸顶", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [],
+    })
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    virtuaCtl.scrollOffset = 20
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    act(() => fireEvent.click(folders[1]))
+    expect(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent === "Folders" &&
+          !button.closest('[aria-hidden="true"]')
+      )
+    ).toHaveAttribute("aria-expanded", "false")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
   })
 
   it("hides the overlay at the top of the list", () => {

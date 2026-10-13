@@ -111,6 +111,7 @@ import {
   buildDragSlots,
   buildOwnerHeaderIndex,
   buildRows,
+  buildSectionHeaderIndex,
   buildSidebarLayout,
   EMPTY_SIDEBAR_LAYOUT,
   layoutFolderIds,
@@ -120,6 +121,7 @@ import {
   computeStickyState,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
+  sectionHeaderFlatIndices,
   formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
@@ -1137,14 +1139,17 @@ export function SidebarConversationList({
   const [dragLayout, setDragLayout] = useState<SidebarLayout | null>(null)
   const pendingLayoutRef = useRef<SidebarLayout | null>(null)
 
-  // Floating sticky folder header. `stickyFolderId` is the ONLY new render
-  // state and changes solely when the scroll crosses into a different folder —
-  // never on a status event or the per-minute `now` tick — so the card/header
-  // memo budget is untouched. The per-frame handoff translateY is written
-  // straight to the overlay node (no re-render); see `recomputeSticky`.
+  // 浮动文件夹标题。`stickyFolderId` 只在滚动跨过文件夹时改变；每帧的推顶位移
+  // 直接写入节点，避免状态更新进入卡片和标题的 memo 路径。
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
+  const [stickySection, setStickySection] = useState<SidebarSectionKey | null>(
+    null
+  )
   const overlayRef = useRef<HTMLDivElement>(null)
+  const sectionOverlayRef = useRef<HTMLDivElement>(null)
   const stickyRafRef = useRef<number | null>(null)
+  const zoomLevelRef = useRef(zoomLevel)
+  zoomLevelRef.current = zoomLevel
   // Read by the imperative scroll path without re-subscribing virtua's listener.
   const draggingRef = useRef<SidebarEntry | null>(dragging)
   draggingRef.current = dragging
@@ -1633,10 +1638,22 @@ export function SidebarConversationList({
   // they have zero effect on the card/header memo path.
   const ownerHeaderIndex = useMemo(() => buildOwnerHeaderIndex(rows), [rows])
   const headerFlatIndices = useMemo(() => folderHeaderFlatIndices(rows), [rows])
+  const sectionHeaderIndex = useMemo(
+    () => buildSectionHeaderIndex(rows),
+    [rows]
+  )
+  const sectionFlatIndices = useMemo(
+    () => sectionHeaderFlatIndices(rows),
+    [rows]
+  )
   const ownerHeaderIndexRef = useRef(ownerHeaderIndex)
   ownerHeaderIndexRef.current = ownerHeaderIndex
   const headerFlatIndicesRef = useRef(headerFlatIndices)
   headerFlatIndicesRef.current = headerFlatIndices
+  const sectionHeaderIndexRef = useRef(sectionHeaderIndex)
+  sectionHeaderIndexRef.current = sectionHeaderIndex
+  const sectionFlatIndicesRef = useRef(sectionFlatIndices)
+  sectionFlatIndicesRef.current = sectionFlatIndices
 
   useImperativeHandle(ref, () => ({
     scrollToActive() {
@@ -1938,48 +1955,91 @@ export function SidebarConversationList({
     }
   }, [rows, conversationExpanded, loading, ensureChildrenLoaded])
 
-  // ── Sticky folder header overlay ──────────────────────────────────────────
-  // Resolve the folder currently scrolled through and the iOS handoff offset
-  // from the live virtua geometry. Imperative + ref-only so its identity stays
-  // stable (passing it to `<Virtualizer onScroll>` must not re-subscribe the
-  // listener) and so it never participates in the memoized render path.
+  // ── 段落与文件夹吸顶栈 ────────────────────────────────────────────────
+  // 所有滚动计算都读取 ref，保持 onScroll 与 RAF 回调的引用稳定；virtua 的
+  // 实测行高决定每个标题的真实位置，浮层位移只直接写入 DOM。
   const recomputeSticky = useCallback(() => {
     const handle = virtualizerRef.current
     const currentRows = rowsRef.current
-    const headers = headerFlatIndicesRef.current
-    if (
-      !handle ||
-      draggingRef.current !== null ||
-      currentRows.length === 0 ||
-      headers.length === 0
-    ) {
+    const reset = () => {
+      setStickySection((prev) => (prev === null ? prev : null))
       setStickyFolderId((prev) => (prev === null ? prev : null))
+      if (sectionOverlayRef.current) {
+        sectionOverlayRef.current.style.transform = "translateY(0px)"
+      }
+      if (overlayRef.current) {
+        overlayRef.current.style.transform = "translateY(0px)"
+      }
+    }
+    if (!handle || currentRows.length === 0 || draggingRef.current !== null) {
+      reset()
       return
     }
+
     const scrollOffset = handle.scrollOffset
     const topIndex = Math.max(
       0,
       Math.min(currentRows.length - 1, handle.findItemIndex(scrollOffset))
     )
+    const sectionIdx = sectionHeaderIndexRef.current[topIndex]
+    if (sectionIdx < 0) {
+      reset()
+      return
+    }
+
+    const remPx = (16 * zoomLevelRef.current) / 100
+    const sectionTopGap = 0.75 * remPx
+    const sectionBarHeight = 2 * remPx
+    const barTop = (index: number) =>
+      handle.getItemOffset(index) +
+      (currentRows[index]?.kind === "section" ? sectionTopGap : 0)
+    const sectionIndices = sectionFlatIndicesRef.current
+    const nextSectionIdx = nextHeaderAfter(sectionIndices, sectionIdx)
+    const sectionState = computeStickyState({
+      scrollOffset,
+      activeHeaderOffset: barTop(sectionIdx),
+      nextHeaderOffset: nextSectionIdx == null ? null : barTop(nextSectionIdx),
+      headerHeight: sectionBarHeight,
+    })
+    if (sectionOverlayRef.current) {
+      sectionOverlayRef.current.style.transform = `translateY(${sectionState.translateY}px)`
+    }
+    const sectionRow = currentRows[sectionIdx]
+    const nextSection =
+      sectionState.visible && sectionRow.kind === "section"
+        ? sectionRow.section
+        : null
+    setStickySection((prev) => (prev === nextSection ? prev : nextSection))
+
     const activeHeaderIndex = ownerHeaderIndexRef.current[topIndex]
     if (activeHeaderIndex < 0) {
       setStickyFolderId((prev) => (prev === null ? prev : null))
+      if (overlayRef.current) {
+        overlayRef.current.style.transform = "translateY(0px)"
+      }
       return
     }
+    const headers = headerFlatIndicesRef.current
     const nextHeaderIndex = nextHeaderAfter(headers, activeHeaderIndex)
-    const { visible, translateY } = computeStickyState({
+    const folderInset = sectionState.visible ? sectionBarHeight : 0
+    const folderState = computeStickyState({
       scrollOffset,
       activeHeaderOffset: handle.getItemOffset(activeHeaderIndex),
       nextHeaderOffset:
         nextHeaderIndex == null ? null : handle.getItemOffset(nextHeaderIndex),
       headerHeight: handle.getItemSize(activeHeaderIndex) || 32,
+      inset: folderInset,
     })
     if (overlayRef.current) {
-      overlayRef.current.style.transform = `translateY(${translateY}px)`
+      const folderTotalY =
+        sectionState.translateY + folderInset + folderState.translateY
+      overlayRef.current.style.transform = `translateY(${folderTotalY}px)`
     }
     const activeRow = currentRows[activeHeaderIndex]
     const nextFolderId =
-      visible && activeRow.kind === "folder" ? activeRow.folderId : null
+      folderState.visible && activeRow.kind === "folder"
+        ? activeRow.folderId
+        : null
     setStickyFolderId((prev) => (prev === nextFolderId ? prev : nextFolderId))
   }, [])
 
@@ -2025,7 +2085,9 @@ export function SidebarConversationList({
     folderExpanded,
     viewportEl,
     dragging,
+    stickySection,
     stickyFolderId,
+    zoomLevel,
     recomputeSticky,
   ])
 
@@ -2854,7 +2916,9 @@ export function SidebarConversationList({
       // Search region sits above the scrolled list — gives the first section
       // (Pinned, or Folders when nothing is pinned) the same breathing room
       // below that region instead of butting right up against it.
-      return sectionHeaderElement(row)
+      return sectionHeaderElement(row, {
+        suppressed: stickySection === row.section,
+      })
     }
     if (row.kind === "folder-group") {
       const group = folderGroups.find((g) => g.id === row.groupId)
@@ -3137,6 +3201,14 @@ export function SidebarConversationList({
     return `${prefix}conv-${row.conversation.agent_type}-${row.conversation.id}`
   }
 
+  const stickySectionRow =
+    stickySection === null
+      ? null
+      : (rows.find(
+          (row): row is SectionHeaderRow =>
+            row.kind === "section" && row.section === stickySection
+        ) ?? null)
+
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
       {(loading || refreshing) && (
@@ -3333,7 +3405,7 @@ export function SidebarConversationList({
                 is what occludes the rows scrolling beneath it — plain app-theme
                 sidebar, exactly the colour those rows are painted on.
               */}
-              {stickyFolderId !== null && (
+              {stickyFolderId !== null && !dragging && (
                 <div
                   ref={overlayRef}
                   className={cn(
@@ -3347,6 +3419,22 @@ export function SidebarConversationList({
                       dragging: false,
                       grip: false,
                       onToggle: handleOverlayToggle,
+                    })}
+                  </div>
+                </div>
+              )}
+              {stickySectionRow !== null && !dragging && (
+                <div
+                  ref={sectionOverlayRef}
+                  className={cn(
+                    "pointer-events-none absolute left-0 right-0 top-0 z-20",
+                    "px-1.5 [--conv-rail-axis:0.875rem]"
+                  )}
+                  style={{ willChange: "transform" }}
+                >
+                  <div className="pointer-events-auto bg-sidebar">
+                    {sectionHeaderElement(stickySectionRow, {
+                      topGap: false,
                     })}
                   </div>
                 </div>
