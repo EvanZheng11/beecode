@@ -1334,6 +1334,8 @@ mod tauri_app {
                     use tauri_plugin_deep_link::DeepLinkExt;
                     let handle = app.handle().clone();
                     let _ = app.deep_link().on_open_url(move |event| {
+                        #[cfg(target_os = "macos")]
+                        crate::macos::opened_paths::handle_opened_urls(&handle, event.urls());
                         let urls: Vec<String> =
                             event.urls().iter().map(|url| url.to_string()).collect();
                         crate::deep_link::handle_raw_urls(&handle, &urls);

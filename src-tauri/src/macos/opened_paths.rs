@@ -2,8 +2,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-#[cfg(feature = "tauri-runtime")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use url::Url;
 
@@ -57,7 +56,10 @@ pub enum EnqueueResult {
 struct QueueState {
     frontend_ready: bool,
     pending: Vec<PathBuf>,
+    recent: Vec<(PathBuf, Instant)>,
 }
+
+const DUPLICATE_EVENT_WINDOW: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Default)]
 pub struct OpenedPathQueue {
@@ -72,10 +74,21 @@ impl OpenedPathQueue {
     }
 
     pub fn push(&self, path: PathBuf) -> EnqueueResult {
+        self.push_at(path, Instant::now())
+    }
+
+    pub(crate) fn push_at(&self, path: PathBuf, now: Instant) -> EnqueueResult {
         let Ok(mut state) = self.state.lock() else {
             tracing::error!("Finder 目录事件队列锁已损坏，丢弃路径");
             return EnqueueResult::Duplicate;
         };
+        state
+            .recent
+            .retain(|(_, at)| now.saturating_duration_since(*at) < DUPLICATE_EVENT_WINDOW);
+        if state.recent.iter().any(|(recent, _)| recent == &path) {
+            return EnqueueResult::Duplicate;
+        }
+        state.recent.push((path.clone(), now));
         if state.frontend_ready {
             return EnqueueResult::Ready;
         }
