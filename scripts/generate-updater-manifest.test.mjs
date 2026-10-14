@@ -101,6 +101,28 @@ test("服务器包缺少 .sig 资产时拒绝生成", (t) => {
   )
 })
 
+test("未下载到签名文件时拒绝生成", (t) => {
+  const { dir, releaseJson, sigDir } = fixture()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  rmSync(join(sigDir, "codeg_x64.app.tar.gz.sig"))
+  assert.throws(
+    () => buildManifest({ releaseJson, sigDir, version: VERSION }),
+    /未下载到签名文件/
+  )
+})
+
+test("签名文件内容不是 base64 时拒绝生成", (t) => {
+  const { dir, releaseJson, sigDir } = fixture()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  writeFileSync(join(sigDir, "codeg_x64.app.tar.gz.sig"), "not@@base64")
+  assert.throws(
+    () => buildManifest({ releaseJson, sigDir, version: VERSION }),
+    /签名文件不是 base64 文本/
+  )
+})
+
 test("CLI 入口写出完整的 latest.json", (t) => {
   const { dir, releaseJson, sigDir } = fixture()
   t.after(() => rmSync(dir, { recursive: true, force: true }))

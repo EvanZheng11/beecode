@@ -754,7 +754,6 @@ jobs:
           done
 
       # 保留包结构、严格签名、无权限扩展、hardened runtime 及符号黑名单门禁；证书模式按 SHA-1 指纹双向验签通过。
-      # 保留包结构、严格签名、无权限扩展、hardened runtime 及符号黑名单门禁；证书模式按 SHA-1 指纹双向验签通过。
       - name: 检查自签名包签名、结构与符号（macOS）
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
