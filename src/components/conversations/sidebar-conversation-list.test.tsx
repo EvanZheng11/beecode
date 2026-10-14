@@ -93,14 +93,25 @@ const virtuaCtl = vi.hoisted(() => ({
   rowKinds: [] as string[],
   rowSections: [] as Array<string | null>,
   onScroll: null as ((offset: number) => void) | null,
+  handle: null as {
+    getItemOffset: (index: number) => number
+    getItemSize: (index: number) => number
+    scrollSize: number
+  } | null,
   scrollToIndex: vi.fn(),
+  sizeFor(index: number) {
+    return this.itemSizes[index] ?? 32
+  },
   offsetFor(index: number) {
-    if (this.itemSizes.length === 0) return index * 32
-    return this.itemSizes
-      .slice(0, index)
-      .reduce((total, size) => total + size, 0)
+    let offset = 0
+    for (let rowIndex = 0; rowIndex < index; rowIndex++) {
+      offset += this.sizeFor(rowIndex)
+    }
+    return offset
   },
 }))
+
+const appearanceCtl = vi.hoisted(() => ({ zoomLevel: 100 }))
 
 // Render EVERY row (data.map) rather than only a window, so the render-count
 // probes stay meaningful in jsdom (which has no real layout/scroll). This is
@@ -127,7 +138,7 @@ vi.mock("virtua", () => ({
       (row) => row.section ?? null
     )
     virtuaCtl.onScroll = onScroll ?? null
-    useImperativeHandle(ref, () => ({
+    const handle = {
       get scrollOffset() {
         return virtuaCtl.scrollOffset
       },
@@ -140,17 +151,20 @@ vi.mock("virtua", () => ({
       findItemIndex: (offset: number) => {
         if (data.length === 0) return -1
         for (let index = 0; index < data.length; index++) {
-          const size = virtuaCtl.itemSizes[index] ?? 32
+          const size = virtuaCtl.sizeFor(index)
           if (offset < virtuaCtl.offsetFor(index) + size) return index
         }
         return data.length - 1
       },
       getItemOffset: (index: number) => virtuaCtl.offsetFor(index),
-      getItemSize: (index: number) => virtuaCtl.itemSizes[index] ?? 32,
+      getItemSize: (index: number) => virtuaCtl.sizeFor(index),
       scrollToIndex: virtuaCtl.scrollToIndex,
       scrollTo: () => {},
       scrollBy: () => {},
-    }))
+    }
+    virtuaCtl.handle = handle
+    useImperativeHandle(ref, () => handle)
+
     // 内容根节点带稳定标记，供后续几何/边界断言定位虚拟列表内容容器。
     return (
       <div data-virtua-content>{data.map((row, i) => children(row, i))}</div>
@@ -217,7 +231,10 @@ vi.mock("@/hooks/use-appearance", () => ({
   useThemeColor: () => ({ themeColor: "blue" }),
   // 100% — the folder-drag row height reads this, so the drag cases below
   // measure against the same 32px row the real hook yields at that zoom.
-  useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
+  useZoomLevel: () => ({
+    zoomLevel: appearanceCtl.zoomLevel,
+    setZoomLevel: () => {},
+  }),
 }))
 
 vi.mock("@/hooks/use-sorted-available-agents", () => ({
@@ -365,7 +382,9 @@ beforeEach(() => {
   virtuaCtl.rowKinds = []
   virtuaCtl.rowSections = []
   virtuaCtl.onScroll = null
+  virtuaCtl.handle = null
   virtuaCtl.scrollToIndex.mockClear()
+  appearanceCtl.zoomLevel = 100
 })
 
 describe("SidebarConversationList — single status event re-render scope", () => {
@@ -723,9 +742,17 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
       (button) => button.textContent === "Folders"
     )
     expect(folders).toHaveLength(2)
+    expect(virtuaCtl.handle?.getItemOffset(1)).toBe(44)
+    expect(virtuaCtl.handle?.getItemSize(0)).toBe(44)
+    expect(virtuaCtl.handle?.getItemSize(1)).toBe(32)
     const overlay = folders[1].closest("div.absolute")
     expect(overlay).not.toBeNull()
+    expect(overlay).toHaveStyle({ transform: "translateY(0px)" })
     expect(overlay?.className).not.toContain("pt-[0.75rem]")
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(folderButtons).toHaveLength(2)
+    const folderOverlay = folderButtons[1].closest("div.absolute")
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(32px)" })
   })
 
   it("自定义段落顺序按实际行索引吸顶", () => {
@@ -768,6 +795,16 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
   })
 
   it("下一个段落进入一条高时按整数像素推顶", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1),
+        conv(12, 1),
+        conv(21, 2),
+        conv(22, 2),
+        conv(23, 2),
+        conv(31, 99, { kind: "chat" }),
+      ],
+    })
     virtuaCtl.itemSizes = Array(30).fill(32)
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -794,7 +831,57 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
     expect(folders[1].closest("div.absolute")).toHaveStyle({
       transform: "translateY(-12px)",
     })
+
     vi.unstubAllGlobals()
+  })
+
+  it("下一段落完全到位后切换段落吸顶归属", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    const nextSectionIndex = 8
+    virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) + 13
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const oldSectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const nextSectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Chat")
+    expect(oldSectionButtons).toHaveLength(1)
+    expect(nextSectionButtons).toHaveLength(2)
+    expect(nextSectionButtons[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+  })
+
+  it("缩放后顶隙、段落条高和文件夹内缩放正确", () => {
+    appearanceCtl.zoomLevel = 125
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    expect(sectionButtons).toHaveLength(2)
+    expect(sectionButtons[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionButtons[1].closest("div.absolute")?.className).not.toContain(
+      "pt-[0.75rem]"
+    )
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(folderButtons).toHaveLength(2)
+    const folderOverlay = folderButtons[1].closest("div.absolute")
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(40px)" })
   })
 
   it("滚动到最后一个段落后浮层持续吸顶", () => {
@@ -831,6 +918,42 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
     })
     vi.unstubAllGlobals()
   })
+
+  it("浮层不改变滚动总高度并保留底部边界", () => {
+    virtuaCtl.itemSizes = [44, 36, 30]
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const initialScrollSize = virtuaCtl.handle?.scrollSize
+    const expectedScrollSize = virtuaCtl.rowKinds.reduce(
+      (total, _, index) => total + virtuaCtl.sizeFor(index),
+      0
+    )
+    expect(initialScrollSize).toBe(expectedScrollSize)
+
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = expectedScrollSize - 1
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const recentButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Recent")
+    expect(recentButtons).toHaveLength(2)
+    expect(recentButtons[1].closest("div.absolute")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(virtuaCtl.handle?.scrollSize).toBe(initialScrollSize)
+    vi.unstubAllGlobals()
+  })
+
   it("段落浮层存在时文件夹浮层位于段落条下方", () => {
     virtuaCtl.itemSizes = Array(30).fill(32)
     virtuaCtl.scrollOffset = 40
@@ -1063,8 +1186,17 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
         document.querySelector('[data-folder-id="2"]') as HTMLElement
       ).parentElement as HTMLElement
       act(() => firePointer(grip, "pointerdown", { clientY: 100 }))
+      const sectionButtons = Array.from(
+        document.querySelectorAll("button")
+      ).filter((button) => button.textContent === "Folders")
+      expect(sectionButtons).toHaveLength(2)
       act(() => firePointer(window, "pointermove", { clientY: 120 })) // cross 6px
-      // Virtualizer unmounted → drag surface shows each folder once, overlay gone.
+      // 拖拽面板只显示文件夹目标，段落浮层和文件夹浮层都应消失。
+      expect(
+        Array.from(document.querySelectorAll("button")).filter(
+          (button) => button.textContent === "Folders"
+        )
+      ).toHaveLength(0)
       expect(headerCount(1)).toBe(1)
       act(() => firePointer(window, "pointercancel", { clientY: 120 }))
     } finally {

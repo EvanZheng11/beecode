@@ -50,3 +50,36 @@
 - `deja` 本轮检索未返回可复用的历史实现决策，未改变 brief 约束或实现选择。
 
 报告时间：2026-10-14 07:42:22
+
+## 修复轮次 1：补齐审查 findings 回归
+
+### Findings 修复
+
+1. **段落完全到位后的归属切换**：新增中文测试 `下一段落完全到位后切换段落吸顶归属`，在下一段落完全越过顶隙后断言旧 `Folders` 浮层只剩真实行、新段落 `Chat` 浮层接管且 transform 为 `translateY(0px)`；保留原有 8px 推顶断言。
+2. **44px 实测行高几何**：virtua mock 增加可观察的 `handle`，统一通过 `sizeFor` 以 32px 回退计算 `offsetFor`、`findItemIndex`、`getItemOffset`、`getItemSize` 和 `scrollSize`；44px 测试现在断言具体 offset、行高、段落浮层 transform 和文件夹浮层的 32px inset。
+3. **拖拽时清空两类浮层**：拖拽回归测试增加段落标题存在性检查，并在越过阈值后断言 `Folders` 标题总数为 0，覆盖段落与文件夹浮层同时清空。
+4. **缩放、底部边界和滚动总高**：新增 125% 缩放测试，断言段落浮层没有重复顶隙、文件夹浮层使用缩放后的 40px 槽位；新增底部边界测试，断言受控 `scrollSize` 等于所有行高之和，浮层出现和滚动到末尾都不改变总高，最后段落 transform 保持 0px。
+5. **mock 几何一致性**：删除缺失 `itemSizes` 时 offset 累加为 0 的特殊路径，offset 与 getItemSize/findItemIndex/scrollSize 统一使用同一个 32px 默认行高函数。
+
+本轮只修改：
+
+- `src/components/conversations/sidebar-conversation-list.test.tsx`
+- `.superpowers/sdd/2026-10-14-sticky-top-sections/task-3-report.md`
+
+### 验证命令与结果
+
+- `pnpm exec vitest run src/components/conversations/sidebar-conversation-list.test.tsx --reporter=dot`
+  - 通过：14 个测试套件、64 个测试通过，0 失败。
+- `pnpm exec tsc --noEmit`
+  - 通过：无 TypeScript 错误。
+- `pnpm exec eslint src/components/conversations/sidebar-conversation-list.test.tsx`
+  - 通过：0 error、0 warning。
+- `git diff --check`
+  - 通过。
+
+### 剩余 concerns
+
+- 本轮未修改生产实现；真实 virtua ResizeObserver、OverlayScrollbars 视口和桌面缩放仍需人工滚动检查。
+- Vitest 启动时保留已有 `RTK:PASSTHROUGH` parser 提示，不影响退出码和测试结果。
+
+修复轮次 1 报告时间：2026-10-14 07:59:51
