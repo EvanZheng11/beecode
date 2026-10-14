@@ -3205,9 +3205,7 @@
         "saveEdit": "Save",
         "cancelEdit": "Cancel edit",
         "editItem": "Edit",
-        "deleteItem": "Remove",
-        "steerItemNow": "Insert into current turn",
-        "steerItemAsNote": "Send as note for next check"
+        "deleteItem": "Remove"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Settings > Agents",

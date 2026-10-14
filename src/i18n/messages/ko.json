@@ -3205,9 +3205,7 @@
         "saveEdit": "저장",
         "cancelEdit": "편집 취소",
         "editItem": "편집",
-        "deleteItem": "삭제",
-        "steerItemNow": "현재 턴에 삽입",
-        "steerItemAsNote": "메모로 보내 다음 점검 때 읽도록 함"
+        "deleteItem": "삭제"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "설정 > 에이전트",

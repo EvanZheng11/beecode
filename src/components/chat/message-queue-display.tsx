@@ -15,18 +15,13 @@ interface MessageQueueDisplayProps {
   onDelete: (id: string) => void
   editingItemId: string | null
   /**
-   * Send one queued item straight into the RUNNING turn over the session's
-   * live-feedback channel (same delivery as the composer's mid-turn send).
-   * Present only while the session has a working channel AND a turn is in
-   * flight; the host decides whether the row is removed (it stays queued on
-   * the turn-end race). Resolves once delivery is settled.
+   * 将一个排队项送入当前运行中的回合，使用会话的实时反馈通道。
+   * 只有会话存在可用通道且回合正在运行时才传入；宿主负责决定队列项是否移除。
    */
   onSteerItem?: (id: string) => Promise<void> | void
-  /** Which channel {@link onSteerItem} rides; picks the honest icon/copy,
-   *  mirroring the composer's split-button (`Zap` = instant insert,
-   *  `Clock` = note the agent reads on its next check). */
+  /** onSteerItem 使用的通道：选择与 composer 分流按钮一致的图标和文案。 */
   steerChannel?: "native" | "pull"
-  /** Queue id whose append operation is owned by the host, if any. */
+  /** 追加进行中由宿主持有该 id；此时禁用所有队列操作。 */
   appendingQueuedMessageId?: string | null
 }
 
@@ -38,10 +33,9 @@ interface QueueItemProps {
   onDelete: (id: string) => void
   onSteerItem?: (id: string) => Promise<void> | void
   steerChannel: "native" | "pull"
-  /** Whether queue controls are disabled by an append in flight. */
+  /** 追加进行中时禁用所有队列控件。 */
   disabled: boolean
-  /** Whether an insert from ANY row is in flight — every row's button is
-   *  disabled for the duration, so two rows can't race the one channel. */
+  /** 任意一行追加进行中时，所有行的追加按钮都禁用，避免同一通道并发。 */
   steering: boolean
   onSteerStart: (id: string) => Promise<void>
 }
@@ -62,16 +56,10 @@ function QueueItem({
   const messageListT = useTranslations("Folder.chat.messageList")
   const dragControls = useDragControls()
 
-  // Which rows may offer the insert at all. Two rows can't, and offering a
-  // click that provably does nothing is worse than offering none:
-  // * The row under edit. Its authoritative text is in the composer now, so
-  //   inserting would send the PRE-edit draft and then drop the row the edit
-  //   was going to save into. (The composer hides its own mid-turn send while
-  //   editing for the same reason.)
-  // * A draft carrying attachments on a pull-tool session. The pull channel
-  //   delivers text, so the backend rejects blocks there — every click would
-  //   land on the turn-end fallback, which only moves the row to the front
-  //   and never inserts it. It still goes out whole with the next turn.
+  // 追加入口必须与实际 payload 编码共用同一门控：
+  // * 编辑中的项仍以 composer 草稿为准，不能发送旧内容；
+  // * pull 通道不能携带附件 blocks；
+  // * 没有可发送文本的 draft 不显示会静默失败的按钮。
   const canSteer =
     Boolean(onSteerItem) &&
     !isEditing &&
@@ -166,15 +154,11 @@ export function MessageQueueDisplay({
   steerChannel = "pull",
   appendingQueuedMessageId,
 }: MessageQueueDisplayProps) {
-  // The id whose insert is in flight. A per-row `steering` would let a
-  // concurrent click on another row race the same channel; one shared id
-  // both disables the clicked row and (via `steeringId !== null`) the others
-  // — matching the composer's single-flight `steering` guard.
+  // 当前行和其他行共用一个追加锁，避免多个按钮竞争同一反馈通道；这与 composer
+  // 的单飞 steering 防重语义一致。
   const [steeringId, setSteeringId] = useState<string | null>(null)
-  // The click handler's re-entrancy lock. Taken in the click itself and
-  // released in `finally`, so a second click that lands before React commits
-  // the disabled buttons is still refused: the state above only drives
-  // rendering and lags a commit.
+  // 追加操作的同步重入锁。state 只驱动渲染，ref 在 React 提交禁用态之前就
+  // 拒绝同 tick 的第二次点击。
   const steeringIdRef = useRef<string | null>(null)
 
   const handleSteerStart = useCallback(

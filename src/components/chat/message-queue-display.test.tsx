@@ -224,6 +224,31 @@ describe("MessageQueueDisplay click-to-insert", () => {
     )
   })
 
+  it("空白附件 displayText 不显示无法提交的追加入口", () => {
+    renderDisplay({
+      queue: [
+        {
+          ...itemWithAttachment("q1", "   "),
+          draft: {
+            blocks: [
+              {
+                type: "resource",
+                uri: "clipboard://shot.png-1",
+                mime_type: "image/png",
+                text: null,
+                blob: "QUJD",
+              },
+            ],
+            displayText: "   ",
+          },
+        },
+      ],
+      onSteerItem: vi.fn(async () => {}),
+      steerChannel: "native",
+    })
+    expect(screen.queryByRole("button", { name: appendLabel })).toBeNull()
+  })
+
   it("文本 blocks 有内容时使用真实 payload 门控而非显示文本", async () => {
     const onSteerItem = vi.fn(async () => {})
     renderDisplay({

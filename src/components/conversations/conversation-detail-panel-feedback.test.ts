@@ -60,7 +60,7 @@ expect(flushEnd).toBeGreaterThan(flushStart)
 // effect，避免在 harness 中复制待测逻辑；队列、反馈 hook 和 payload 编码均用实物。
 const usePanelQueueActions = runInNewContext(
   transpileModule(
-    `(function ({ useCallback, useEffect, msgQueue, mqRemove, mqRequeueFront,
+    `(function ({ useCallback, useEffect, msgQueue, mqGetItem, mqRemove, mqRequeueFront,
       feedback, feedbackSteer, appendingQueuedIdRef, appendingQueuedId,
       setAppendingQueuedId, notify, toErrorMessage, buildSteerPayload, tabId, tCmp,
       connectionReady, connectionReadyRef, runtimeSyncState, flushRetryDelayMs,
@@ -130,6 +130,7 @@ function useQueuePanelHarness({ connectionReady = false } = {}) {
     useCallback,
     useEffect,
     msgQueue: queue.queue,
+    mqGetItem: queue.getItem,
     mqRemove: remove,
     mqRequeueFront: requeueFront,
     feedback,
@@ -313,24 +314,129 @@ describe("ConversationDetailPanel 追加队列反馈行为", () => {
     expect(result.current.requeueFront).not.toHaveBeenCalled()
   })
 
-  it("不存在或空 payload 的队列项不修改队列、不调用后端", async () => {
-    const { result } = await setup()
-    const emptyDraft: PromptDraft = {
-      displayText: "",
-      blocks: [{ type: "image", data: "QUJD", mime_type: "image/png" }],
-    }
-    act(() => {
-      result.current.queue.enqueue(emptyDraft, null)
-    })
-    const before = result.current.queue.queue
+  it("同 tick 的 flush 先取走队首时，旧追加回调不 steer、不回队", async () => {
+    const { result, rerender } = await setup()
+    vi.useFakeTimers()
+    rerender({ connectionReady: true })
+    const id = result.current.queue.queue[0].id
+    const staleAppend = result.current.append
     await act(async () => {
-      await result.current.append("missing")
-      await result.current.append(before[2].id)
+      vi.runOnlyPendingTimers()
+      // React 尚未提交，渲染队列仍含该 id，权威队列已被真实 flush 取走。
+      expect(result.current.queue.queue[0].id).toBe(id)
+      expect(result.current.queue.getItem(id)).toBeUndefined()
+      await staleAppend(id)
     })
-    expect(result.current.queue.queue).toBe(before)
+    expect(result.current.flushSend).toHaveBeenCalledTimes(1)
+    expect(result.current.flushSend).toHaveBeenCalledWith(
+      nextDraft,
+      "下一条模式",
+      { fromQueueFlush: true }
+    )
+    expect(mockSubmit).not.toHaveBeenCalled()
     expect(result.current.remove).not.toHaveBeenCalled()
     expect(result.current.requeueFront).not.toHaveBeenCalled()
+    expect(result.current.queue.queue.map((item) => item.draft)).toEqual([
+      attachmentDraft,
+    ])
+    expect(result.current.appendingQueuedId).toBeNull()
+    expect(result.current.appendingQueuedIdRef.current).toBeNull()
+  })
+
+  it("原子移除返回空时立即放弃，不提交也不恢复旧队列项", async () => {
+    const { result, id } = await setup()
+    result.current.remove.mockImplementationOnce((queuedId) => {
+      result.current.queue.remove(queuedId)
+      return undefined
+    })
+    await act(async () => {
+      await result.current.append(id)
+    })
+    expect(result.current.remove).toHaveBeenCalledWith(id)
     expect(mockSubmit).not.toHaveBeenCalled()
+    expect(result.current.requeueFront).not.toHaveBeenCalled()
+    expect(result.current.queue.queue.map((item) => item.draft)).toEqual([
+      nextDraft,
+    ])
+    expect(result.current.appendingQueuedId).toBeNull()
+    expect(result.current.appendingQueuedIdRef.current).toBeNull()
+  })
+
+  it("同 tick 编辑 draft 后追加采用权威新内容，失败恢复也保留新内容", async () => {
+    const { result, id } = await setup()
+    const staleAppend = result.current.append
+    const editedDraft = {
+      ...attachmentDraft,
+      displayText: "编辑后的反馈 [截图]",
+    }
+    mockSubmit.mockRejectedValue(new Error("反馈提交失败"))
+    await act(async () => {
+      result.current.queue.updateItem(id, editedDraft)
+      await staleAppend(id)
+    })
+    expect(mockSubmit).toHaveBeenCalledWith(
+      "c1",
+      editedDraft.displayText,
+      editedDraft.blocks
+    )
+    expect(result.current.requeueFront).toHaveBeenCalledWith(
+      editedDraft,
+      "原模式",
+      { adoptSendTimeMode: true }
+    )
+    expect(result.current.queue.queue[0].draft).toBe(editedDraft)
+  })
+
+  it.each(["", " \t\n "])(
+    "不存在或空白 payload（%j）的队列项不修改队列、不调用后端",
+    async (displayText) => {
+      const { result } = await setup()
+      const emptyDraft: PromptDraft = {
+        displayText,
+        blocks: [{ type: "image", data: "QUJD", mime_type: "image/png" }],
+      }
+      act(() => {
+        result.current.queue.enqueue(emptyDraft, null)
+      })
+      const before = result.current.queue.queue
+      await act(async () => {
+        await result.current.append("missing")
+        await result.current.append(before[2].id)
+      })
+      expect(result.current.queue.queue).toBe(before)
+      expect(result.current.remove).not.toHaveBeenCalled()
+      expect(result.current.requeueFront).not.toHaveBeenCalled()
+      expect(mockSubmit).not.toHaveBeenCalled()
+    }
+  )
+
+  it("追加先取得项时，同 tick 已排定的 flush 定时器也暂停", async () => {
+    const { result, rerender, id } = await setup()
+    vi.useFakeTimers()
+    rerender({ connectionReady: true })
+    let release!: (item: FeedbackItem) => void
+    mockSubmit.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    )
+    let pending!: Promise<void>
+    act(() => {
+      pending = result.current.append(id)
+      vi.runOnlyPendingTimers()
+    })
+    expect(result.current.flushSend).not.toHaveBeenCalled()
+    expect(result.current.queue.queue.map((item) => item.draft)).toEqual([
+      nextDraft,
+    ])
+    await act(async () => {
+      release(note())
+      await pending
+    })
+    act(() => vi.runOnlyPendingTimers())
+    expect(result.current.flushSend).toHaveBeenCalledTimes(1)
+    expect(result.current.requeueFront).not.toHaveBeenCalled()
   })
 
   it("追加期间即使连接就绪也暂停 flush，完成后恢复剩余队列", async () => {

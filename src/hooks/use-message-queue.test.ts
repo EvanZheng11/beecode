@@ -54,6 +54,25 @@ describe("useMessageQueue bounce FIFO ordering", () => {
     expect(texts(result.current.queue)).toEqual(["A"])
   })
 
+  it("remove 返回权威项，已被其他路径移除时返回 undefined", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => result.current.enqueue(draft("A"), null))
+    const id = result.current.queue[0].id
+    let removed: ReturnType<typeof result.current.remove>
+    act(() => {
+      result.current.updateItem(id, draft("edited A"))
+      expect(result.current.getItem(id)?.draft.displayText).toBe("edited A")
+      removed = result.current.remove(id)
+      expect(result.current.getItem(id)).toBeUndefined()
+    })
+    expect(removed?.id).toBe(id)
+    expect(removed?.draft.displayText).toBe("edited A")
+    act(() => {
+      removed = result.current.remove(id)
+    })
+    expect(removed).toBeUndefined()
+  })
+
   it("requeueFront keeps a bounced head ahead of items behind it", () => {
     const { result } = renderHook(() => useMessageQueue())
 

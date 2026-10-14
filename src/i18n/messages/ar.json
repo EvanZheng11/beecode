@@ -3205,9 +3205,7 @@
         "saveEdit": "حفظ",
         "cancelEdit": "إلغاء التعديل",
         "editItem": "تعديل",
-        "deleteItem": "حذف",
-        "steerItemNow": "إدراج في الدور الحالي",
-        "steerItemAsNote": "إرسال كملاحظة للفحص التالي"
+        "deleteItem": "حذف"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "الإعدادات > الوكلاء",

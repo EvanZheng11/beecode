@@ -3205,9 +3205,7 @@
         "saveEdit": "Speichern",
         "cancelEdit": "Bearbeitung abbrechen",
         "editItem": "Bearbeiten",
-        "deleteItem": "Entfernen",
-        "steerItemNow": "In aktuellen Turn einfügen",
-        "steerItemAsNote": "Als Notiz für die nächste Abfrage senden"
+        "deleteItem": "Entfernen"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Einstellungen > Agenten",

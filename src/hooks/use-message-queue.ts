@@ -37,13 +37,11 @@ export interface UseMessageQueueReturn {
     opts?: { adoptSendTimeMode?: boolean }
   ) => void
   /**
-   * Put a draft back at the FRONT of the queue. Used when an auto-flushed item
-   * was dequeued, sent, and bounced (TurnBusyError): it must return to the head
-   * so it retries before items that were already behind it (FIFO preserved).
+   * 将草稿放回队首。自动 flush 取出消息后遇到 TurnBusyError，或追加为实时
+   * 反馈失败时，都必须回到队首，确保它先于原本排在后面的消息重试。
    *
-   * Pass the original item's `adoptSendTimeMode` through `opts` when restoring
-   * a WHOLE queued item (e.g. the append-as-feedback failure path): the flag
-   * decides the send-time mode semantics and must not be silently dropped.
+   * 恢复完整队列项时，通过 opts 传入原项的 `adoptSendTimeMode`；该标记决定
+   * 发送时的模式语义，不能静默丢失。未传 opts 的既有调用行为保持不变。
    */
   requeueFront: (
     draft: PromptDraft,
@@ -51,7 +49,13 @@ export interface UseMessageQueueReturn {
     opts?: { adoptSendTimeMode?: boolean }
   ) => void
   dequeue: () => QueuedMessage | undefined
-  remove: (id: string) => void
+  /** 同步读取权威队列的当前项，用于追加前的 payload 门控。 */
+  getItem: (id: string) => QueuedMessage | undefined
+  /**
+   * 从权威队列中原子移除指定项，并返回实际移除的项；项已被 flush 或不存在
+   * 时返回 undefined。
+   */
+  remove: (id: string) => QueuedMessage | undefined
   reorder: (items: QueuedMessage[]) => void
   /** Prioritize a still-queued item using its latest draft and mode. */
   moveToFront: (id: string) => void
@@ -134,12 +138,21 @@ export function useMessageQueue(): UseMessageQueueReturn {
     return current[0]
   }, [commit])
 
+  const getItem = useCallback(
+    (id: string) => queueRef.current.find((item) => item.id === id),
+    []
+  )
+
   const remove = useCallback(
-    (id: string) => {
+    (id: string): QueuedMessage | undefined => {
+      const current = queueRef.current
+      const item = current.find((candidate) => candidate.id === id)
+      if (!item) return undefined
       if (editingItemId === id) {
         setEditingItemId(null)
       }
-      commit(queueRef.current.filter((item) => item.id !== id))
+      commit(current.filter((candidate) => candidate.id !== id))
+      return item
     },
     [commit, editingItemId]
   )
@@ -207,6 +220,7 @@ export function useMessageQueue(): UseMessageQueueReturn {
     enqueue,
     requeueFront,
     dequeue,
+    getItem,
     remove,
     reorder,
     moveToFront,

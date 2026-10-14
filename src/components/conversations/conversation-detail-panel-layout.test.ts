@@ -412,8 +412,8 @@ describe("ConversationDetailPanel send-path hardening", () => {
   })
 
   it("holds the queue auto-flush while a queued message is being appended as feedback", () => {
-    // 追加编排（handleAppendQueuedAsFeedback）在第一次异步等待前先按 id 快照
-    // 并 remove，再提交反馈；搬运期间暂停自动 flush，追加结束（成功清理或
+    // 追加编排（handleAppendQueuedAsFeedback）在第一次异步等待前读取权威项
+    // 并原子 remove，再提交反馈；搬运期间暂停自动 flush，追加结束（成功清理或
     // 失败回队首）后由状态变化重新进入 flush，恢复正常 FIFO 与
     // TurnBusyError 回退。以下断言固定这条编排链与门控接线。
     const start = source.indexOf("// Flush queued messages whenever the agent")
@@ -423,7 +423,7 @@ describe("ConversationDetailPanel send-path hardening", () => {
       source.indexOf("])", depsEnd) + 2
     )
     expect(effectWithDeps).toContain("if (appendingQueuedId !== null) return")
-    // …and as a dependency, so releasing the hold re-runs the flush.
+    // 释放追加状态后依赖变化会重新运行 flush。
     expect(effectWithDeps).toContain("appendingQueuedId])")
 
     const appendStart = source.indexOf(
@@ -434,14 +434,16 @@ describe("ConversationDetailPanel send-path hardening", () => {
       appendStart,
       source.indexOf("\n  const messageListNode = (", appendStart)
     )
-    // 入口用同步 ref 短路（同 tick 的第二次点击也被拒绝），再从当前队列按
-    // id 取项；找不到时直接返回，不修改队列。
+    // 入口用同步 ref 短路（同 tick 的第二次点击也被拒绝），再从 queueRef
+    // 读取权威项；remove 原子确认并返回实际拥有的项。
     expect(appendHandler).toContain(
       "if (appendingQueuedIdRef.current !== null) return"
     )
-    expect(appendHandler).toContain(
-      "const item = msgQueue.find((m) => m.id === id)"
-    )
+    expect(appendHandler).toContain("const current = mqGetItem(id)")
+    expect(appendHandler).not.toContain("msgQueue.find")
+    expect(appendHandler).toContain("const item = mqRemove(id)")
+    expect(appendHandler).toContain("if (!item) return")
+    // flush 如果先移除了该 id，原子 remove 返回 undefined，不能继续 steer。
     // remove 在第一次异步等待之前，随后才设置追加状态：flush、编辑和删除
     // 在搬运期间不会再看到或操作该项。
     const removeAt = appendHandler.indexOf("mqRemove(id)")
@@ -452,7 +454,7 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(setAt).toBeLessThan(awaitAt)
     // 复用统一 payload 编码：附件随 blocks 传递，真正空文本不触发 steer。
     expect(appendHandler).toContain(
-      "const payload = buildSteerPayload(item.draft)"
+      "const payload = buildSteerPayload(current.draft)"
     )
     expect(appendHandler).toContain("if (!payload) return")
     expect(appendHandler).toContain(

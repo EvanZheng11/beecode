@@ -95,32 +95,25 @@ export function promptDraftTitleSeed(
 }
 
 /**
- * Whether a draft carries more than plain text (image attachments, file
- * badges) and therefore has to ride the wire as a full block list.
+ * 判断 draft 是否包含纯文本之外的内容（图片附件、文件徽章等），因此必须
+ * 以完整 blocks 发送。
  *
- * Exported because it is also an ELIGIBILITY fact, not just an encoding one:
- * only the native `_session/steering` wire takes blocks, so a surface that
- * offers a mid-turn send on a pull-tool session must not offer it for a draft
- * this returns true for (the backend rejects it with `NoActiveTurn`). Shared
- * with {@link buildSteerPayload} so the affordance and the encoding can never
- * disagree about what "more than text" means.
+ * 这同时是追加入口的资格判断，而不仅是编码细节：只有原生 steering wire
+ * 能携带 blocks，所以 pull-tool 会话不能为这类 draft 显示追加入口。它与
+ * buildSteerPayload 共用同一事实，避免入口门控和编码规则分叉。
  */
 export function draftRidesBlocks(draft: PromptDraft): boolean {
   return draft.blocks.some((b) => b.type !== "text")
 }
 
 /**
- * Encode a draft for the live-feedback (steering) wire — the SINGLE place
- * this encoding lives, shared by the composer's mid-turn send and the queue
- * row's click-to-insert so the two can never drift.
+ * 将 draft 编码为实时反馈（steering）wire。composer 的回合中发送和队列项追加
+ * 都使用这里的唯一编码入口，避免两条路径产生不同 payload。
  *
- * Returns `null` when there is nothing to steer (no text at all). Otherwise:
- * - `blocks` carries the FULL block list only when the draft holds more than
- *   plain text (image attachments, file badges). Only the native
- *   `_session/steering` wire takes blocks — the pull path rejects them as
- *   `NoActiveTurn`, which callers handle as their turn-end fallback.
- * - `text` is the recorded/display form: the draft's display text when
- *   blocks ride along, else the joined text blocks, trimmed.
+ * 没有可发送文本时返回 null。带非文本 block 时保留完整 blocks；只有原生
+ * `_session/steering` wire 能携带 blocks，pull 路径会把这类失败交给回合结束
+ * 时的队列 fallback。text 使用记录/显示文本，纯文本 draft 则使用文本 blocks
+ * 拼接后的内容。
  */
 export function buildSteerPayload(draft: PromptDraft): {
   text: string
@@ -133,7 +126,7 @@ export function buildSteerPayload(draft: PromptDraft): {
         .map((b) => (b.type === "text" ? b.text : ""))
         .join("\n")
         .trim()
-  if (!text) return null
+  if (!text.trim()) return null
   return { text, ...(blocks ? { blocks } : {}) }
 }
 

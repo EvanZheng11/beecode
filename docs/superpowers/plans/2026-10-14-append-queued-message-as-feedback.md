@@ -2,7 +2,7 @@
 
 **Goal：** 为等待队列中的用户消息增加“追加”操作。用户点击后，消息从等待队列移除并交给当前已有的实时反馈通道；反馈提交成功后由实时反馈的乐观条目承载，提交彻底失败时把原始消息放回队首。整个流程同一时刻只允许一个消息处于追加中，避免重复提交、编辑竞态和自动 flush 双入队。
 
-**Architecture：** 沿用现有 `MessageListView → ConversationDetailPanel → useMessageQueue/useSessionFeedback` 调用链，不新增模块。`MessageListView` 在等待消息的 hover 操作区提供追加按钮，并通过新增回调把队列 id 交给宿主；`MessageQueueDisplay` 只负责把追加中的全局状态传给等待项并禁用编辑、删除等冲突操作，不能再为同一消息渲染第二个追加入口。`ConversationDetailPanel` 保存瞬态 `appendingQueuedMessageId`，在编排函数中先按 id 快照队列项并 `remove`，再调用 `feedback.steer(item.draft.displayText, item.draft.blocks)`；以 `steer` 返回的 `FeedbackItem` 判定成功，彻底失败才调用 `requeueFront`。自动 flush 继续使用既有队列状态和就绪门控，追加进行期间暂停 flush；无活动回合的降级结果由反馈通道自身处理，编排层不得再次入队。
+**Architecture：** 沿用现有 `MessageQueueDisplay → ChatInput/ConversationShell → ConversationDetailPanel` 调用链。`MessageQueueDisplay` 在真实等待队列行提供“追加”操作；`ConversationDetailPanel` 保存瞬态 `appendingQueuedMessageId`，在编排函数中先用 `getItem` 从权威 queueRef 读取当前项并执行 payload 门控，再用 `remove` 的原子返回值确认仍拥有该 queued id，随后调用 `feedback.steer(item.draft.displayText, item.draft.blocks)`；若 remove 返回空则立即结束。以 `steer` 返回的 `FeedbackItem` 判定成功，彻底失败才调用 `requeueFront`。自动 flush 继续使用既有队列状态和就绪门控，追加进行期间暂停 flush；无活动回合的降级结果由反馈通道自身处理，编排层不得再次入队。
 
 **Tech Stack：** React 19、TypeScript strict、现有 React hooks、`next-intl`、Vitest、Testing Library、pnpm。复用 `PromptDraft`、`QueuedMessage`、`FeedbackItem`、`buildSteerPayload`、`notify` 和现有实时反馈错误文案；不增加依赖或新业务模块。
 
@@ -12,8 +12,8 @@
 
 - 本计划对应的实现只触及以下既有前端文件和测试文件：`src/components/message/message-list-view.tsx`、`src/components/chat/message-queue-display.tsx`、`src/hooks/use-message-queue.ts`、`src/hooks/use-session-feedback.ts`、`src/components/conversations/conversation-detail-panel.tsx`、`src/i18n/messages/*.json`，以及这些模块已有的测试文件；不创建新模块、不增加依赖。
 - `appendingQueuedMessageId` 是组件级瞬态状态，不写入 `QueuedMessage` 持久结构，也不改变队列恢复格式。
-- 追加按钮只出现一个入口。若等待消息由 `MessageListView` 的气泡操作区渲染，`MessageQueueDisplay` 只接收并应用禁用状态；不得同时在独立队列列表项上再渲染一个追加按钮。
-- 追加开始前必须从权威队列中按 id 取得完整 `QueuedMessage`，再执行 `remove`；失败恢复必须使用原始 `draft`、`modeId` 和 `adoptSendTimeMode` 语义，并通过 `requeueFront` 回到当前队首。
+- 追加按钮只出现一个入口，当前实现位于真实等待队列行；历史消息没有可验证的 queuedId，不从 MessageListView 提供第二个入口。
+- 追加开始前通过 `getItem(id)` 读取权威 queueRef 中的完整 `QueuedMessage` 并执行 payload 门控，再调用返回实际项的原子 `remove(id)`；若 flush 已移除或 id 不存在，立即返回且不调用 `steer`。失败恢复必须使用原始 `draft`、`modeId` 和 `adoptSendTimeMode` 语义，并通过 `requeueFront` 回到当前队首。
 - 同一时间最多一个追加操作。入口回调和按钮事件处理都要有同步短路，不能只依赖 React 下一次 render 后的 `disabled` 属性。
 - 追加期间，当前项以及其他项的编辑、删除、重排和追加操作按现有组件边界禁用；自动 flush 看到 `appendingQueuedMessageId` 时必须暂停，追加结束后由状态变化重新触发既有 flush。
 - `useSessionFeedback.steer(text, blocks)` 保持现有调用语义和返回 `FeedbackItem`；成功包括实时反馈通道已经确认的结果。反馈通道内部若已将内容降级入队，编排层只能把它视为成功，不能再调用 `requeueFront`，避免双入队。
@@ -62,16 +62,16 @@ pnpm test -- src/components/message/message-list-view.test.tsx src/components/ch
 
 **接口：**
 
-- 复用 `UseMessageQueueReturn.remove(id)` 和 `requeueFront(draft, modeId)`；不新增独立队列模块。
+- 复用 `UseMessageQueueReturn.getItem(id)`、返回实际项的 `remove(id)` 和 `requeueFront(draft, modeId, opts?)`；后者的 `opts` 是可选向后兼容扩展，不新增独立队列模块。
 - 新增面板内部编排函数 `handleAppendQueuedAsFeedback(id: string): Promise<void>`，只接收队列 id。
 - `appendingQueuedMessageId: string | null` 只由详情面板维护，按钮和队列显示组件读取它；`use-message-queue.ts` 继续作为队列状态唯一来源。
 
 **实现步骤：**
 
-1. 编排函数入口先检查 `appendingQueuedMessageId !== null`，再从当前 `msgQueue` 查找 id；找不到时直接返回，不修改队列。
-2. 在第一次异步等待前保存完整 `QueuedMessage`，调用 `mqRemove(id)`，随后设置 `appendingQueuedMessageId(id)`；这样 flush、编辑和删除不会再看到或操作正在搬运的项。
+1. 编排函数入口先检查 `appendingQueuedMessageId !== null`，再用 `getItem(id)` 从权威 queueRef 查找 id；找不到或 payload 为空时直接返回，不修改队列。
+2. 在第一次异步等待前调用 `mqRemove(id)`；只接受它返回的权威队列项。返回 `undefined` 表示 flush 已先移除该 id，立即结束且不得调用 steer；成功移除后再设置 `appendingQueuedMessageId(id)`，这样 flush、编辑和删除不会再看到或操作正在搬运的项。
 3. 成功路径只清理追加状态，让实时反馈乐观条目负责显示；失败路径将保存的原始 draft 和 mode 信息交给 `mqRequeueFront`，使消息回到当前队首，最后在 `finally` 清理追加状态。
-4. 核对 `use-message-queue.ts` 的恢复行为，确保回队首不会丢失 `adoptSendTimeMode` 的发送时机语义；为 `requeueFront` 增加覆盖该字段的测试，不改变其他 enqueue/dequeue/reorder 行为或既有调用者语义。
+4. 核对 `use-message-queue.ts` 的恢复行为，确保回队首不会丢失 `adoptSendTimeMode` 的发送时机语义；`requeueFront` 的可选 `opts` 扩展必须保持未传参数的旧调用行为，为该字段增加覆盖测试，不改变其他 enqueue/dequeue/reorder 行为。
 5. 将自动 flush effect 的追加中门控写入现有依赖，使追加完成或失败后能重新进入既有 flush，不改变正常队列 FIFO 和 `TurnBusyError` 回退逻辑。
 
 **验证命令：**

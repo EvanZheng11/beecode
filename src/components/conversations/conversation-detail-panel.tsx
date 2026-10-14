@@ -257,7 +257,7 @@ const ConversationTabView = memo(function ConversationTabView({
   groupId,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
-  // Composer-namespace copy for queue-row feedback failures.
+  // 复用 composer 命名空间中的队列追加失败文案。
   const tCmp = useTranslations("Folder.chat.messageInput")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
@@ -654,6 +654,7 @@ const ConversationTabView = memo(function ConversationTabView({
     requeueFront: mqRequeueFront,
     getQueueLength: mqGetQueueLength,
     dequeue: mqDequeue,
+    getItem: mqGetItem,
     remove: mqRemove,
     reorder: mqReorder,
     updateItem: mqUpdateItem,
@@ -830,7 +831,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // send per round-trip.
   const lastFlushBounceAtRef = useRef(0)
   // 正在"追加为实时反馈"的队列项 id。编排函数（见下方
-  // handleAppendQueuedAsFeedback）先按 id 快照并 remove，再提交反馈：搬运期间
+  // handleAppendQueuedAsFeedback）先读取权威项并原子 remove，再提交反馈：搬运期间
   // 该项已不在队列，flush、编辑和删除不会再看到它。此状态用于防重复点击、
   // 禁用队列控件，并在追加结束前暂停自动 flush —— 追加完成或失败回队首后
   // 由状态变化重新进入既有 flush。ref 与 state 同步维护：ref 保证同 tick 的
@@ -873,6 +874,7 @@ const ConversationTabView = memo(function ConversationTabView({
     const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
     const timer = setTimeout(() => {
       if (!connectionReadyRef.current) return
+      if (appendingQueuedIdRef.current !== null) return
       const next = autoSendQueueRef.current()
       if (next) {
         // Mark this as the queue auto-flush: it sends the dequeued head now and,
@@ -2150,13 +2152,15 @@ const ConversationTabView = memo(function ConversationTabView({
       // 同步短路：同一时刻最多一个追加。ref 先于 state 拒绝同 tick 的
       // 第二次点击，state 只负责渲染后的禁用。
       if (appendingQueuedIdRef.current !== null) return
-      const item = msgQueue.find((m) => m.id === id)
-      if (!item) return
-      const payload = buildSteerPayload(item.draft)
+      const current = mqGetItem(id)
+      if (!current) return
+      const payload = buildSteerPayload(current.draft)
       // 空文本没有可提交的反馈内容，保留原队列项及其附件，不调用 steer。
       if (!payload) return
+      // 只有原子移除成功才拥有该 queued id；flush 已取走或项不存在时直接返回。
+      const item = mqRemove(id)
+      if (!item) return
       appendingQueuedIdRef.current = id
-      mqRemove(id)
       setAppendingQueuedId(id)
       try {
         // steer 返回 FeedbackItem 即表示反馈通道已接受内容，包括通道内部
@@ -2180,7 +2184,7 @@ const ConversationTabView = memo(function ConversationTabView({
       }
     },
     [
-      msgQueue,
+      mqGetItem,
       mqRemove,
       feedbackSteer,
       mqRequeueFront,
@@ -2316,12 +2320,10 @@ const ConversationTabView = memo(function ConversationTabView({
       onSaveQueueEdit={handleSaveQueueEdit}
       onCancelQueueEdit={handleQueueCancelEdit}
       onSteer={
-        // Any working delivery channel, not just the native push: the pull
-        // tool records a waiting note the agent reads on its next check, and
-        // `steerChannel` swaps the copy so pull sessions never promise an
-        // instant insert. Sessions with NEITHER channel keep the historical
-        // prompting branch (Stop button alone, Enter queues). The prompting
-        // scope itself is enforced where the button renders.
+        // 任何可用反馈通道都能发送：pull tool 会记录一条代理下次检查时读取的
+        // 留言，`steerChannel` 会切换文案，避免 pull 会话承诺立即插入。两个通道
+        // 都不可用时保留历史 prompting 分支（只有停止按钮，Enter 进入队列）。
+        // prompting 范围由按钮渲染处负责门控。
         feedback.featureEnabled && feedback.steerAvailable
           ? handleSteer
           : undefined

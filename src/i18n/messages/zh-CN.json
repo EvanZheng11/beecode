@@ -3205,9 +3205,7 @@
         "saveEdit": "保存",
         "cancelEdit": "取消编辑",
         "editItem": "编辑",
-        "deleteItem": "删除",
-        "steerItemNow": "插入当前回合",
-        "steerItemAsNote": "作为留言，供下次检查时读取"
+        "deleteItem": "删除"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "设置 > Agents",

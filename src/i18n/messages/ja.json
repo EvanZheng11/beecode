@@ -3205,9 +3205,7 @@
         "saveEdit": "保存",
         "cancelEdit": "編集をキャンセル",
         "editItem": "編集",
-        "deleteItem": "削除",
-        "steerItemNow": "現在のターンに挿入",
-        "steerItemAsNote": "メモとして送信し次回チェック時に読ませる"
+        "deleteItem": "削除"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > エージェント",
