@@ -200,6 +200,49 @@ describe("MessageQueueDisplay click-to-insert", () => {
     expect(screen.getAllByTitle(appendLabel)).toHaveLength(2)
   })
 
+  it("native 附件-only 且空显示文本时隐藏无法提交的追加入口", () => {
+    renderDisplay({
+      queue: [
+        {
+          ...itemWithAttachment("q1", ""),
+          draft: {
+            blocks: [{ type: "image", data: "QUJD", mime_type: "image/png" }],
+            displayText: "",
+          },
+        },
+        item("q2", "   "),
+        {
+          ...item("q3", ""),
+          draft: { blocks: [], displayText: "仅显示文本" },
+        },
+      ],
+      onSteerItem: vi.fn(async () => {}),
+      steerChannel: "native",
+    })
+    expect(screen.queryAllByRole("button", { name: appendLabel })).toHaveLength(
+      0
+    )
+  })
+
+  it("文本 blocks 有内容时使用真实 payload 门控而非显示文本", async () => {
+    const onSteerItem = vi.fn(async () => {})
+    renderDisplay({
+      queue: [
+        {
+          ...item("q1", "完整文本"),
+          draft: {
+            blocks: [{ type: "text", text: "完整文本" }],
+            displayText: "",
+          },
+        },
+      ],
+      onSteerItem,
+      steerChannel: "native",
+    })
+    await userEvent.click(screen.getByRole("button", { name: appendLabel }))
+    expect(onSteerItem).toHaveBeenCalledWith("q1")
+  })
+
   it("编辑中的队列项隐藏追加按钮，其他行仍传出正确 id", async () => {
     const onSteerItem = vi.fn(async () => {})
     renderDisplay({

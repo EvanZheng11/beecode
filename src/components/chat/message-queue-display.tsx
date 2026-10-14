@@ -5,7 +5,7 @@ import { Reorder, useDragControls } from "motion/react"
 import { Clock, GripVertical, Pencil, X, Zap } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
-import { draftRidesBlocks } from "@/lib/prompt-draft"
+import { buildSteerPayload, draftRidesBlocks } from "@/lib/prompt-draft"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
 
 interface MessageQueueDisplayProps {
@@ -75,6 +75,7 @@ function QueueItem({
   const canSteer =
     Boolean(onSteerItem) &&
     !isEditing &&
+    buildSteerPayload(item.draft) !== null &&
     (steerChannel === "native" || !draftRidesBlocks(item.draft))
   const appendLabel = canSteer
     ? messageListT("appendAsFeedback" as Parameters<typeof messageListT>[0])
