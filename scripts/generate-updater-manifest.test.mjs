@@ -62,7 +62,7 @@ test("生成全部平台键、URL 与签名", (t) => {
   )
   assert.equal(
     manifest.platforms["windows-aarch64-nsis"].url,
-    `https://example.test/download/codeg_${VERSION}_arm64-setup.nsis.zip`
+    `https://example.test/download/codeg_${VERSION}_arm64-setup.exe`
   )
   assert.equal(manifest.platforms["darwin-x86_64"].signature, SIG)
 })
@@ -72,7 +72,7 @@ test("桌面产物缺少 .sig 资产时拒绝生成", (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   const broken = assets.filter(
-    (asset) => asset.name !== `codeg_${VERSION}_x64-setup.nsis.zip.sig`
+    (asset) => asset.name !== `codeg_${VERSION}_x64-setup.exe.sig`
   )
   writeFileSync(
     releaseJson,
@@ -149,5 +149,70 @@ test("CLI 入口写出完整的 latest.json", (t) => {
   assert.deepEqual(
     Object.keys(written.platforms).sort(),
     Object.keys(expectedAssets(VERSION)).sort()
+  )
+})
+
+// v0.35.2 发布事故（run 38522104695）回归：createUpdaterArtifacts 为 bool true
+// 时（v2 模式）tauri-cli 2.11.4 直接签原包——Linux 是 *.AppImage.sig，Windows 是
+// *-setup.exe.sig，不再有 tar.gz/zip 包装。这里用事故版本的字面量资产名构造
+// release（不经 expectedAssets 推导），断言生成器按 v2 名字取资产与签名。
+test("v0.35.2 回归：Linux/Windows 期望资产是 .AppImage / -setup.exe", (t) => {
+  const v2Version = "0.35.2"
+  const names = [
+    `codeg_${v2Version}_amd64.AppImage`,
+    `codeg_${v2Version}_x64-setup.exe`,
+    `codeg_${v2Version}_arm64-setup.exe`,
+    "codeg_x64.app.tar.gz",
+    "codeg_aarch64.app.tar.gz",
+  ]
+
+  const assets = expectedAssets(v2Version)
+  assert.equal(assets["linux-x86_64"], names[0])
+  assert.equal(assets["linux-x86_64-appimage"], names[0])
+  assert.equal(assets["windows-x86_64"], names[1])
+  assert.equal(assets["windows-x86_64-nsis"], names[1])
+  assert.equal(assets["windows-aarch64"], names[2])
+  assert.equal(assets["windows-aarch64-nsis"], names[2])
+  // macOS 在 v2 下仍产 .app.tar.gz，不受本修复影响。
+  assert.equal(assets["darwin-x86_64"], names[3])
+  assert.equal(assets["darwin-aarch64"], names[4])
+
+  const dir = mkdtempSync(join(tmpdir(), "codeg-updater-manifest-v2-"))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const sigDir = join(dir, "sigs")
+  mkdirSync(sigDir)
+  const releaseAssets = []
+  for (const name of names) {
+    writeFileSync(join(sigDir, `${name}.sig`), SIG)
+    releaseAssets.push(
+      { name, browser_download_url: `https://example.test/download/${name}` },
+      {
+        name: `${name}.sig`,
+        browser_download_url: `https://example.test/download/${name}.sig`,
+      }
+    )
+  }
+  const releaseJson = join(dir, "release.json")
+  writeFileSync(
+    releaseJson,
+    JSON.stringify({ body: "发布说明", assets: releaseAssets })
+  )
+
+  const platforms = buildManifest({
+    releaseJson,
+    sigDir,
+    version: v2Version,
+  }).platforms
+  assert.equal(
+    platforms["linux-x86_64"].url,
+    `https://example.test/download/${names[0]}`
+  )
+  assert.equal(
+    platforms["windows-x86_64-nsis"].url,
+    `https://example.test/download/${names[1]}`
+  )
+  assert.equal(
+    platforms["windows-aarch64-nsis"].url,
+    `https://example.test/download/${names[2]}`
   )
 })

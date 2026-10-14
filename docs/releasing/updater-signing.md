@@ -74,8 +74,10 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # 交互输入，不回显
 - 桌面 updater 包 + 同名 `.sig`（Linux arm64 桌面只打 deb/rpm，不产出
   updater 资产）：
   - macOS：`codeg_{x64,aarch64}.app.tar.gz`；
-  - Windows：`codeg_<version>_{x64,arm64}-setup.nsis.zip`；
-  - Linux x64：`codeg_<version>_amd64.AppImage.tar.gz`。
+  - Windows：`codeg_<version>_{x64,arm64}-setup.exe`；
+  - Linux x64：`codeg_<version>_amd64.AppImage`。
+  （`createUpdaterArtifacts` 为 bool true 时 tauri-cli 直接签原包；
+  `.AppImage.tar.gz` / `.nsis.zip` 包装只在 `"v1Compatible"` 模式下产出。）
 - 服务器：`codeg-server-{linux,darwin}-{x64,arm64}.tar.gz` 与
   `codeg-server-windows-{x64,arm64}.zip` + 同名 `.sig`。
 - `latest.json`：由独立 job `generate-updater-manifest` 在 `build-tauri` 与
