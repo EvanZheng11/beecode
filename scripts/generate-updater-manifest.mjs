@@ -6,10 +6,11 @@
 // 用自己那份平台表覆盖先写者，静默丢平台条目；这里等全部产物就位后一次性
 // 生成，并在发布前校验签名资产齐全。
 //
-// 资产命名对照 tauri-cli 2.11.4（tauri-bundler updater_bundle.rs）与
-// tauri-action v0.6.1（getAssetName 对 macOS .app.tar.gz 插入 arch）实测规则：
-// macOS `codeg_{x64,aarch64}.app.tar.gz`；Windows `codeg_<v>_{x64,arm64}-setup.nsis.zip`；
-// Linux `codeg_<v>_amd64.AppImage.tar.gz`。
+// 资产命名对照 tauri-cli 2.11.4（createUpdaterArtifacts 为 bool true 即 v2
+// 模式，tauri-bundler updater_bundle.rs 只在 "v1Compatible" 下才产 tar.gz/zip
+// 包装）与 tauri-action v0.6.1（getAssetName 对 macOS .app.tar.gz 插入 arch）实测规则：
+// macOS `codeg_{x64,aarch64}.app.tar.gz`；Windows `codeg_<v>_{x64,arm64}-setup.exe`；
+// Linux `codeg_<v>_amd64.AppImage`。
 //
 // 用法：
 //   node scripts/generate-updater-manifest.mjs \
@@ -27,9 +28,9 @@ import { pathToFileURL } from "node:url"
 export function expectedAssets(version) {
   const macX64 = "codeg_x64.app.tar.gz"
   const macArm = "codeg_aarch64.app.tar.gz"
-  const appImage = `codeg_${version}_amd64.AppImage.tar.gz`
-  const nsisX64 = `codeg_${version}_x64-setup.nsis.zip`
-  const nsisArm = `codeg_${version}_arm64-setup.nsis.zip`
+  const appImage = `codeg_${version}_amd64.AppImage`
+  const nsisX64 = `codeg_${version}_x64-setup.exe`
+  const nsisArm = `codeg_${version}_arm64-setup.exe`
   return {
     "darwin-x86_64": macX64,
     "darwin-x86_64-app": macX64,

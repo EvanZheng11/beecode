@@ -657,7 +657,7 @@ jobs:
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # updater 签名密钥：tauri CLI 用它给 createUpdaterArtifacts 产出的
-          # *-setup.nsis.zip 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
+          # *-setup.exe 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -729,9 +729,10 @@ jobs:
 
       # Linux arm64 只打 deb/rpm，按设计不产出 updater 资产；其余桌面目标
       # 必须在这里就看到非空的 updater .sig，避免未签名包走到发布。
-      # 产物名对照 tauri-cli 2.11.4 / tauri-action v0.6.1：macOS 在 bundle/macos，
-      # AppImage 打包成 bundle/appimage/*.AppImage.tar.gz，Windows updater zip
-      # 归一到 bundle/nsis/*.nsis.zip。
+      # 产物名对照 tauri-cli 2.11.4 / tauri-action v0.6.1：createUpdaterArtifacts
+      # 为 bool true 即 v2 模式，直接签原包——macOS 在 bundle/macos 签
+      # codeg.app.tar.gz，Linux 在 bundle/appimage 签 *.AppImage，Windows 在
+      # bundle/nsis 签 *-setup.exe；tar.gz/zip 包装只在 "v1Compatible" 模式下产出。
       - name: 校验 updater 产物已签名
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         shell: bash
@@ -740,8 +741,8 @@ jobs:
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           case "${{ matrix.target }}" in
             *apple-darwin) candidates=("$bundle/macos/codeg.app.tar.gz.sig") ;;
-            x86_64-unknown-linux-gnu) candidates=("$bundle"/appimage/*.AppImage.tar.gz.sig) ;;
-            *windows*) candidates=("$bundle"/nsis/*.nsis.zip.sig) ;;
+            x86_64-unknown-linux-gnu) candidates=("$bundle"/appimage/*.AppImage.sig) ;;
+            *windows*) candidates=("$bundle"/nsis/*-setup.exe.sig) ;;
             *) echo "::error::未知桌面目标：${{ matrix.target }}"; exit 1 ;;
           esac
           for sig in "${candidates[@]}"; do
@@ -1283,7 +1284,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.create-draft-release.outputs.source_ref }}
+          # 该 job 只读 draft release 资产并运行 workflow 自带脚本，与待发布源码
+          # 无关；固定检出触发本次运行的 commit，使 dispatch 旧 tag 时也用修复后
+          # 的生成器（tag 源码里仍是旧脚本），tag 本身不动。
+          ref: ${{ github.sha }}
 
       - name: 汇总 updater 清单并执行签名门禁
         shell: bash
