@@ -4,6 +4,7 @@ import {
   applyReorder,
   buildOwnerHeaderIndex,
   buildRows,
+  buildSectionHeaderIndex,
   computeStickyState,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
@@ -16,6 +17,7 @@ import {
   RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
+  sectionHeaderFlatIndices,
   selectChatConversationsWithReuse,
   selectPinnedWithReuse,
   selectRecentConversationsWithReuse,
@@ -1620,6 +1622,83 @@ describe("sticky overlay helpers", () => {
     })
   })
 
+  describe("sectionHeaderFlatIndices", () => {
+    it("按实际行顺序返回置顶和顶层段落标题索引", () => {
+      // 置顶段落恒在最上，随后是 folders / chats / recent 三个可排序段落。
+      const withSections: SidebarRow[] = [
+        { kind: "section", section: "pinned", expanded: true, count: 1 }, // 0
+        { kind: "conversation", conversation: conv(9, 10), depth: 0 }, // 1
+        { kind: "section", section: "folders", expanded: true, count: 1 }, // 2
+        { kind: "folder", folderId: 10 }, // 3
+        { kind: "section", section: "chats", expanded: true, count: 1 }, // 4
+        { kind: "section", section: "recent", expanded: true, count: 1 }, // 5
+      ]
+      expect(sectionHeaderFlatIndices(withSections)).toEqual([0, 2, 4, 5])
+    })
+
+    it("空行数组返回空索引", () => {
+      expect(sectionHeaderFlatIndices([])).toEqual([])
+    })
+  })
+
+  describe("buildSectionHeaderIndex", () => {
+    it("把段落之间的普通行归属到当前段落", () => {
+      // 段落内的空提示、分组、文件夹、会话行都不重置归属，各自沿用最近的
+      // 段落标题索引。
+      const withSections: SidebarRow[] = [
+        { kind: "section", section: "pinned", expanded: true, count: 1 }, // 0
+        { kind: "conversation", conversation: conv(9, 10), depth: 0 }, // 1
+        { kind: "section", section: "folders", expanded: true, count: 1 }, // 2
+        { kind: "folder-group", groupId: 7, expanded: true }, // 3
+        { kind: "group-empty", groupId: 7 }, // 4
+        { kind: "folder", folderId: 10 }, // 5
+        { kind: "conversation", conversation: conv(1, 10), depth: 0 }, // 6
+        { kind: "folders-empty" }, // 7
+        { kind: "section", section: "chats", expanded: true, count: 1 }, // 8
+        { kind: "chats-empty" }, // 9
+        { kind: "section", section: "recent", expanded: true, count: 1 }, // 10
+        {
+          kind: "conversation",
+          conversation: conv(1, 10),
+          depth: 0,
+          recent: true,
+        }, // 11
+        { kind: "recent-more", remaining: 3 }, // 12
+      ]
+      expect(Array.from(buildSectionHeaderIndex(withSections))).toEqual([
+        0, 0, 2, 2, 2, 2, 2, 2, 8, 8, 10, 10, 10,
+      ])
+
+      // 首个段落之前的行仍为 -1，空数组不产生任何归属。
+      const beforeFirst: SidebarRow[] = [
+        { kind: "conversation", conversation: conv(9, 10), depth: 0 }, // 0
+        { kind: "section", section: "folders", expanded: true, count: 1 }, // 1
+        { kind: "folders-empty" }, // 2
+      ]
+      expect(Array.from(buildSectionHeaderIndex(beforeFirst))).toEqual([
+        -1, 1, 1,
+      ])
+      expect(Array.from(buildSectionHeaderIndex([]))).toEqual([])
+    })
+
+    it("自定义段落顺序不依赖段落名称", () => {
+      // 用户可把三个段落排成 chats → folders → recent：索引函数只按实际行顺序
+      // 工作，不关心 section 的取值。
+      const custom: SidebarRow[] = [
+        { kind: "section", section: "chats", expanded: true, count: 1 }, // 0
+        { kind: "chats-empty" }, // 1
+        { kind: "section", section: "folders", expanded: true, count: 1 }, // 2
+        { kind: "folders-empty" }, // 3
+        { kind: "section", section: "recent", expanded: true, count: 1 }, // 4
+        { kind: "recent-more", remaining: 2 }, // 5
+      ]
+      expect(sectionHeaderFlatIndices(custom)).toEqual([0, 2, 4])
+      expect(Array.from(buildSectionHeaderIndex(custom))).toEqual([
+        0, 0, 2, 2, 4, 4,
+      ])
+    })
+  })
+
   describe("folderHeaderFlatIndices", () => {
     it("lists folder header indices in ascending order", () => {
       expect(folderHeaderFlatIndices(rows)).toEqual([0, 3, 4])
@@ -1719,6 +1798,154 @@ describe("sticky overlay helpers", () => {
           headerHeight: 32,
         }).translateY
       ).toBe(-17)
+    })
+
+    it("默认槽位保持现有文件夹吸顶几何", () => {
+      // 省略 inset 与显式传 0 必须完全一致：文件夹调用方不传该参数时保持原有
+      // 阈值、推顶区间、nextHeaderOffset=null、d < 0 保护与取整行为。
+      const scenarios = [
+        { ...base, scrollOffset: 0 }, // 真实标题仍在视口顶部 → 不显示
+        { ...base, scrollOffset: 40 }, // 已滚出且超过一条高 → 固定吸顶
+        { ...base, scrollOffset: 80 }, // 推顶窗口内 → 负位移
+        { ...base, scrollOffset: 64 }, // d === headerHeight 的排他边界
+        { ...base, scrollOffset: 120, nextHeaderOffset: 50 }, // d < 0
+        {
+          scrollOffset: 1000,
+          activeHeaderOffset: 320,
+          nextHeaderOffset: null,
+          headerHeight: 32,
+        }, // 最后一个文件夹 → 无下一个标题
+        {
+          scrollOffset: 80,
+          activeHeaderOffset: 0,
+          nextHeaderOffset: 95.4,
+          headerHeight: 32,
+        }, // 小数行高 → 取整
+      ]
+      for (const scenario of scenarios) {
+        expect(computeStickyState(scenario)).toEqual(
+          computeStickyState({ ...scenario, inset: 0 })
+        )
+      }
+
+      expect(computeStickyState({ ...base, scrollOffset: 0 })).toEqual({
+        visible: false,
+        translateY: 0,
+      })
+      expect(computeStickyState({ ...base, scrollOffset: 40 })).toEqual({
+        visible: true,
+        translateY: 0,
+      })
+      expect(computeStickyState({ ...base, scrollOffset: 80 })).toEqual({
+        visible: true,
+        translateY: -16,
+      })
+      expect(computeStickyState({ ...base, scrollOffset: 64 })).toEqual({
+        visible: true,
+        translateY: 0,
+      })
+      expect(
+        computeStickyState({ ...base, scrollOffset: 120, nextHeaderOffset: 50 })
+      ).toEqual({ visible: true, translateY: 0 })
+      expect(
+        computeStickyState({
+          scrollOffset: 1000,
+          activeHeaderOffset: 320,
+          nextHeaderOffset: null,
+          headerHeight: 32,
+        })
+      ).toEqual({ visible: true, translateY: 0 })
+      expect(
+        computeStickyState({
+          scrollOffset: 80,
+          activeHeaderOffset: 0,
+          nextHeaderOffset: 95.4,
+          headerHeight: 32,
+        }).translateY
+      ).toBe(-17)
+    })
+
+    it("使用文件夹下方槽位计算更早的推顶", () => {
+      // inset = 32（段落条高）：推顶窗口变为 d < 64，位移 = round(d - 64)。
+      expect(
+        computeStickyState({ ...base, scrollOffset: 40, inset: 32 })
+      ).toEqual({ visible: true, translateY: -8 })
+      expect(
+        computeStickyState({ ...base, scrollOffset: 64, inset: 32 })
+      ).toEqual({ visible: true, translateY: -32 })
+      // 同一滚动位置在默认槽位下尚未进入推顶窗口。
+      expect(computeStickyState({ ...base, scrollOffset: 40 })).toEqual({
+        visible: true,
+        translateY: 0,
+      })
+    })
+
+    it("槽位边界和标题到位边界保持严格语义", () => {
+      // d === inset + headerHeight（64）是排他边界 → 差一像素才开始推顶。
+      expect(
+        computeStickyState({ ...base, scrollOffset: 32, inset: 32 })
+      ).toEqual({ visible: true, translateY: 0 })
+      expect(
+        computeStickyState({ ...base, scrollOffset: 33, inset: 32 })
+      ).toEqual({ visible: true, translateY: -1 })
+      // d === 0：下一个标题完全到位 → 位移 = -(inset + headerHeight)。
+      expect(
+        computeStickyState({ ...base, scrollOffset: 96, inset: 32 })
+      ).toEqual({ visible: true, translateY: -64 })
+      expect(
+        computeStickyState({ ...base, scrollOffset: 64, nextHeaderOffset: 64 })
+      ).toEqual({ visible: true, translateY: -32 })
+      // scrollOffset === activeHeaderOffset：真实标题接管，浮层不显示。
+      expect(computeStickyState({ ...base, scrollOffset: 0 })).toEqual({
+        visible: false,
+        translateY: 0,
+      })
+      expect(
+        computeStickyState({
+          scrollOffset: 96,
+          activeHeaderOffset: 96,
+          nextHeaderOffset: null,
+          headerHeight: 32,
+          inset: 32,
+        })
+      ).toEqual({ visible: false, translateY: 0 })
+    })
+
+    it("按百分比缩放换算段落行顶隙和条高", () => {
+      // 只验证输入换算：行高不在纯函数中读取 DOM，而由调用方按缩放算好后传入。
+      const scales = [
+        // 100% 缩放：remPx = 16 → 顶隙 12px、条高 32px
+        { remPx: 16, topGap: 12, barHeight: 32 },
+        // 125% 缩放：remPx = 20 → 顶隙 15px、条高 40px
+        { remPx: 20, topGap: 15, barHeight: 40 },
+      ]
+      for (const { remPx, topGap, barHeight } of scales) {
+        expect(0.75 * remPx).toBe(topGap)
+        expect(2 * remPx).toBe(barHeight)
+
+        const rowTop = 100
+        // 条顶部 = 行顶部 + 顶隙。
+        const barTop = rowTop + 0.75 * remPx
+        expect(barTop).toBe(rowTop + topGap)
+        // 条刚好滚出视口顶部 → 浮层开始吸顶（下一个条仍有一条高以上距离）。
+        expect(
+          computeStickyState({
+            scrollOffset: barTop + 1,
+            activeHeaderOffset: barTop,
+            nextHeaderOffset: barTop + barHeight + 1,
+            headerHeight: barHeight,
+          })
+        ).toEqual({ visible: true, translateY: 0 })
+        // 下一个标题条进入一条高的一半 → 位移 = round(d - 条高)，取整到像素。
+        expect(
+          computeStickyState({
+            scrollOffset: barTop + barHeight / 2,
+            activeHeaderOffset: barTop,
+            nextHeaderOffset: barTop + barHeight,
+            headerHeight: barHeight,
+          }).translateY
+        ).toBe(-barHeight / 2)
+      }
     })
   })
 })

@@ -272,3 +272,57 @@ describe("SidebarSectionHeader recent-section filter", () => {
     expect(queryByLabelText(/Show in Recent/)).toBeNull()
   })
 })
+
+describe("SidebarSectionHeader 吸顶抑制", () => {
+  it("抑制时根节点不可交互且对读屏隐藏", () => {
+    const { container } = renderWithIntl(
+      <SidebarSectionHeader
+        section="folders"
+        expanded
+        onToggle={onToggle}
+        onOpenFolder={onOpenFolder}
+        suppressed
+      />
+    )
+    // 抑制只加在最外层根节点：inert 阻止交互，aria-hidden 隐藏整棵子树。
+    const root = container.firstElementChild as HTMLElement
+    expect(root).toHaveAttribute("inert")
+    expect(root).toHaveAttribute("aria-hidden", "true")
+    // 标题按钮自身结构不变，aria-expanded 仍保留。
+    const toggle = screen.getByText("Folders").closest("button")
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    // 但按钮已随整棵子树脱离可访问树，读屏/角色查询找不到它。
+    expect(screen.queryByRole("button", { name: "Folders" })).toBeNull()
+  })
+
+  it("取消抑制后恢复可访问性", () => {
+    const { container, rerender } = renderWithIntl(
+      <SidebarSectionHeader
+        section="folders"
+        expanded
+        onToggle={onToggle}
+        onOpenFolder={onOpenFolder}
+        suppressed
+      />
+    )
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarSectionHeader
+          section="folders"
+          expanded
+          onToggle={onToggle}
+          onOpenFolder={onOpenFolder}
+          suppressed={false}
+        />
+      </NextIntlClientProvider>
+    )
+    // 取消抑制后两个属性一并移除，标题恢复为可访问控件。
+    const root = container.firstElementChild as HTMLElement
+    expect(root).not.toHaveAttribute("inert")
+    expect(root).not.toHaveAttribute("aria-hidden")
+    expect(screen.getByRole("button", { name: "Folders" })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    )
+  })
+})

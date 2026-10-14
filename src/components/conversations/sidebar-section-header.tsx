@@ -52,6 +52,7 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   recentFilter,
   onRecentFilterChange,
   topGap = false,
+  suppressed = false,
 }: {
   section: SidebarSectionKey
   expanded: boolean
@@ -108,6 +109,12 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
    * accounted for instead of overlapping the previous row.
    */
   topGap?: boolean
+  /**
+   * 段落浮层正在替当前段落显示时置为 true：浮层是正式的可访问控件，
+   * 而 virtua 缓冲区里可能还挂着同一段落的真实行，用 `inert` + `aria-hidden`
+   * 抑制它，避免重复的 tab 停靠与双份朗读。与 FolderHeader 的既有约定一致。
+   */
+  suppressed?: boolean
 }) {
   const t = useTranslations("Folder.sidebar")
   // Tooltips/aria-labels for the folders-section actions reuse the existing
@@ -172,7 +179,11 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
     "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
   )
   return (
-    <div className={cn(topGap && "pt-[0.75rem]")}>
+    <div
+      className={cn(topGap && "pt-[0.75rem]")}
+      inert={suppressed || undefined}
+      aria-hidden={suppressed || undefined}
+    >
       <div className="group/header relative h-[2rem]">
         <button
           type="button"

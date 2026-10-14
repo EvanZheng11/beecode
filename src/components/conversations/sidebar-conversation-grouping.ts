@@ -1668,6 +1668,39 @@ export function folderHeaderFlatIndices(rows: readonly SidebarRow[]): number[] {
 }
 
 /**
+ * 所有段落标题行（`kind === "section"`）的扁平索引，升序（镜像
+ * {@link folderHeaderFlatIndices}）。
+ */
+export function sectionHeaderFlatIndices(
+  rows: readonly SidebarRow[]
+): number[] {
+  const indices: number[] = []
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].kind === "section") indices.push(i)
+  }
+  return indices
+}
+
+/**
+ * 每个扁平行所属的段落标题行索引：段落标题行归属自己，其后的普通行沿用最近
+ * 的段落标题。与 {@link buildOwnerHeaderIndex} 的文件夹归属不同，这里**不重置**
+ * —— `folder-group`、空提示、`recent-more` 与会话行都只是段落内的普通行，归属
+ * 自然落到所在段落；首个段落之前的行写入 -1。用于从视口顶部行索引 O(1) 解析
+ * 当前段落。
+ */
+export function buildSectionHeaderIndex(
+  rows: readonly SidebarRow[]
+): Int32Array {
+  const out = new Int32Array(rows.length)
+  let current = -1
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].kind === "section") current = i
+    out[i] = current
+  }
+  return out
+}
+
+/**
  * The next folder header flat index strictly after `activeHeaderIndex`, or
  * `null` when `activeHeaderIndex` is the last folder. `headerIndices` must be
  * ascending (as produced by {@link folderHeaderFlatIndices}).
@@ -1708,21 +1741,32 @@ export function headerIndexForFolder(
  *   one header height of the top it pushes the overlay up so the incoming header
  *   displaces it. Rounded to whole pixels to avoid sub-pixel shimmer against the
  *   real (still-mounted within the buffer) header underneath.
+ *
+ * `inset` 是该标题所在槽位距视口顶部的距离（文件夹吸顶层叠在段落条下方时为
+ * 段落条高）；省略时为 0，行为与只考虑单个吸顶层时完全一致。推顶窗口与最终位移
+ * 都相应提前 `inset` 像素：窗口为 `d < inset + headerHeight`，位移为
+ * `round(d - inset - headerHeight)`。
  */
 export function computeStickyState(args: {
   scrollOffset: number
   activeHeaderOffset: number
   nextHeaderOffset: number | null
   headerHeight: number
+  inset?: number
 }): { visible: boolean; translateY: number } {
-  const { scrollOffset, activeHeaderOffset, nextHeaderOffset, headerHeight } =
-    args
+  const {
+    scrollOffset,
+    activeHeaderOffset,
+    nextHeaderOffset,
+    headerHeight,
+    inset = 0,
+  } = args
   const visible = scrollOffset > activeHeaderOffset
   let translateY = 0
   if (visible && nextHeaderOffset != null) {
     const d = nextHeaderOffset - scrollOffset
-    if (d >= 0 && d < headerHeight) {
-      translateY = Math.round(d - headerHeight)
+    if (d >= 0 && d < inset + headerHeight) {
+      translateY = Math.round(d - inset - headerHeight)
     }
   }
   return { visible, translateY }

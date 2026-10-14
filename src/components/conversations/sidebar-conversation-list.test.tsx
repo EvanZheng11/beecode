@@ -6,7 +6,8 @@ import {
   useImperativeHandle,
   useState,
 } from "react"
-import { act, fireEvent, render } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -62,7 +63,8 @@ const stableTabFns = vi.hoisted(() => ({
   openTab: () => {},
   closeConversationTab: () => {},
   closeTabsByFolder: () => {},
-  openNewConversationTab: () => {},
+  openNewConversationTab: vi.fn(),
+  openChatModeTab: vi.fn(),
 }))
 
 const stableAgents = vi.hoisted(() => ({ sortedTypes: ["claude_code"] }))
@@ -85,12 +87,43 @@ vi.mock("@/components/agent-icon", () => ({
   },
 }))
 
-// Controllable virtua geometry for the sticky-overlay tests. All rows are 32px
-// (h-[2rem]), so offsets are index*32 and findItemIndex is floor(offset/32).
+// 用于吸顶测试的可控 virtua 几何。默认每行 32px；需要覆盖真实测量时由测试写入
+// itemSizes，所有偏移都按行高累加计算。
 const virtuaCtl = vi.hoisted(() => ({
   scrollOffset: 0,
+  viewportSize: 600,
+  itemSizes: [] as number[],
+  rowKinds: [] as string[],
+  rowSections: [] as Array<string | null>,
   onScroll: null as ((offset: number) => void) | null,
+  handle: null as {
+    getItemOffset: (index: number) => number
+    getItemSize: (index: number) => number
+    scrollSize: number
+  } | null,
   scrollToIndex: vi.fn(),
+  sizeFor(index: number) {
+    return this.itemSizes[index] ?? 32
+  },
+  offsetFor(index: number) {
+    let offset = 0
+    for (let rowIndex = 0; rowIndex < index; rowIndex++) {
+      offset += this.sizeFor(rowIndex)
+    }
+    return offset
+  },
+}))
+
+const appearanceCtl = vi.hoisted(() => ({ zoomLevel: 100 }))
+
+// 浮层交互测试的最小测试替身：导入操作只 spy 不真正开窗；克隆与打开文件夹
+// 对话框只记录父组件传入的 open 状态，不挂真实对话框实现。
+const apiCtl = vi.hoisted(() => ({
+  openImportSessionsWindow: vi.fn(async () => {}),
+}))
+const dialogCtl = vi.hoisted(() => ({
+  cloneOpen: false,
+  browserOpen: false,
 }))
 
 // Render EVERY row (data.map) rather than only a window, so the render-count
@@ -111,26 +144,44 @@ vi.mock("virtua", () => ({
     onScroll?: (offset: number) => void
     ref?: Ref<unknown>
   }) => {
+    virtuaCtl.rowKinds = (data as Array<{ kind: string }>).map(
+      (row) => row.kind
+    )
+    virtuaCtl.rowSections = (data as Array<{ section?: string }>).map(
+      (row) => row.section ?? null
+    )
     virtuaCtl.onScroll = onScroll ?? null
-    useImperativeHandle(ref, () => ({
+    const handle = {
       get scrollOffset() {
         return virtuaCtl.scrollOffset
       },
       get scrollSize() {
-        return data.length * 32
+        return virtuaCtl.offsetFor(data.length)
       },
       get viewportSize() {
-        return 600
+        return virtuaCtl.viewportSize
       },
-      findItemIndex: (offset: number) =>
-        Math.max(0, Math.min(data.length - 1, Math.floor(offset / 32))),
-      getItemOffset: (index: number) => index * 32,
-      getItemSize: () => 32,
+      findItemIndex: (offset: number) => {
+        if (data.length === 0) return -1
+        for (let index = 0; index < data.length; index++) {
+          const size = virtuaCtl.sizeFor(index)
+          if (offset < virtuaCtl.offsetFor(index) + size) return index
+        }
+        return data.length - 1
+      },
+      getItemOffset: (index: number) => virtuaCtl.offsetFor(index),
+      getItemSize: (index: number) => virtuaCtl.sizeFor(index),
       scrollToIndex: virtuaCtl.scrollToIndex,
       scrollTo: () => {},
       scrollBy: () => {},
-    }))
-    return <>{data.map((row, i) => children(row, i))}</>
+    }
+    virtuaCtl.handle = handle
+    useImperativeHandle(ref, () => handle)
+
+    // 内容根节点带稳定标记，供后续几何/边界断言定位虚拟列表内容容器。
+    return (
+      <div data-virtua-content>{data.map((row, i) => children(row, i))}</div>
+    )
   },
 }))
 
@@ -167,14 +218,21 @@ vi.mock("@/components/ui/scroll-area", () => ({
   ScrollArea: ({
     children,
     onViewportRef,
+    className,
   }: {
     children?: ReactNode
     onViewportRef?: (el: HTMLElement | null) => void
+    className?: string
   }) => {
     useEffect(() => {
       onViewportRef?.(document.createElement("div"))
     }, [onViewportRef])
-    return <>{children}</>
+    // 保留滚动容器标记与 className，供后续断言浮层是它的兄弟节点、内容无新增占位。
+    return (
+      <div data-sidebar-scroll-area className={className}>
+        {children}
+      </div>
+    )
   },
 }))
 
@@ -186,7 +244,10 @@ vi.mock("@/hooks/use-appearance", () => ({
   useThemeColor: () => ({ themeColor: "blue" }),
   // 100% — the folder-drag row height reads this, so the drag cases below
   // measure against the same 32px row the real hook yields at that zoom.
-  useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
+  useZoomLevel: () => ({
+    zoomLevel: appearanceCtl.zoomLevel,
+    setZoomLevel: () => {},
+  }),
 }))
 
 vi.mock("@/hooks/use-sorted-available-agents", () => ({
@@ -243,7 +304,26 @@ vi.mock("@/contexts/workbench-route-context", () => {
 vi.mock("./conversation-manage-dialog", () => ({
   ConversationManageDialog: () => null,
 }))
-vi.mock("@/components/layout/clone-dialog", () => ({ CloneDialog: () => null }))
+vi.mock("@/components/layout/clone-dialog", () => ({
+  CloneDialog: ({ open }: { open: boolean }) => {
+    dialogCtl.cloneOpen = open
+    return null
+  },
+}))
+vi.mock("@/components/layout/workspace-folder-dialog", () => ({
+  WorkspaceFolderDialog: ({ open }: { open: boolean }) => {
+    dialogCtl.browserOpen = open
+    return null
+  },
+}))
+// 「导入本地会话」按钮直接调用 api 模块，用 spy 替换该导出，其余实现保持真实。
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>()
+  return {
+    ...actual,
+    openImportSessionsWindow: apiCtl.openImportSessionsWindow,
+  }
+})
 // The sub-session realtime sync hook reaches @/lib/platform (transport), which
 // these tests don't load; stub it to a no-op — it has its own unit tests.
 vi.mock("@/hooks/use-subsession-sync", () => ({ useSubsessionSync: () => {} }))
@@ -330,8 +410,19 @@ beforeEach(() => {
     ...stableWorkspaceFns,
   })
   virtuaCtl.scrollOffset = 0
+  virtuaCtl.viewportSize = 600
+  virtuaCtl.itemSizes = []
+  virtuaCtl.rowKinds = []
+  virtuaCtl.rowSections = []
   virtuaCtl.onScroll = null
+  virtuaCtl.handle = null
   virtuaCtl.scrollToIndex.mockClear()
+  apiCtl.openImportSessionsWindow.mockClear()
+  stableTabFns.openNewConversationTab.mockClear()
+  stableTabFns.openChatModeTab.mockClear()
+  dialogCtl.cloneOpen = false
+  dialogCtl.browserOpen = false
+  appearanceCtl.zoomLevel = 100
 })
 
 describe("SidebarConversationList — single status event re-render scope", () => {
@@ -654,6 +745,1046 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
     return document.querySelectorAll(`[data-folder-id="${folderId}"]`).length
   }
 
+  // 吸顶交互测试统一使用显式开启最近段落的渲染入口，复用同一批夹具。
+  function renderSticky(showRecent = true) {
+    return render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          sortMode="created"
+          showRecent={showRecent}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  // 浮层副本是当前段落唯一的可访问入口：真实行被 aria-hidden 抑制。
+  const accessibleTitle = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === label &&
+        button.closest('[aria-hidden="true"]') === null
+    )
+  const sectionOverlayOf = (label: string) =>
+    (accessibleTitle(label)?.closest("[data-sticky-section]") as
+      | HTMLElement
+      | undefined) ?? null
+
+  // 让 rAF 合并的吸顶重算可以连续触发多次：回调改到微任务执行，避免同步
+  // stub 的「先回调、后赋值」把 stickyRafRef 占住而吞掉后续滚动。
+  async function scrollToOffset(offset: number) {
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      queueMicrotask(() => cb(0))
+      return 0
+    })
+    try {
+      act(() => {
+        virtuaCtl.scrollOffset = offset
+        virtuaCtl.onScroll?.(offset)
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+
+  // Radix 菜单在 setTimeout(0) 后才挂载外部点击监听，jsdom 没有 PointerEvent，
+  // 因此沿用仓库既有做法：用 MouseEvent 走 pointerdown/pointerup/click。
+  async function settleMenu() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+  function pressMenu(target: Element) {
+    for (const type of ["pointerdown", "pointerup", "click"]) {
+      fireEvent(
+        target,
+        new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 })
+      )
+    }
+  }
+
+  it("聊天10条、文件夹15条、最近10条在20行视口底部保留完整布局", async () => {
+    const folders = Array.from({ length: 15 }, (_, index) =>
+      folder(index + 1, `文件夹${index + 1}`)
+    )
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: Array.from({ length: 10 }, (_, index) =>
+        conv(100 + index, 99, { kind: "chat" })
+      ),
+    })
+    // 收起文件夹，使 15 个文件夹标题正好组成 15 行；Recent 复用 10 条聊天。
+    localStorage.setItem(
+      "workspace:sidebar-folder-expanded",
+      JSON.stringify(
+        Object.fromEntries(folders.map((item) => [item.id, false]))
+      )
+    )
+
+    // 行序与行高独立构造：3 个标题行 + 10 聊天 + 15 文件夹 + 10 最近 = 38 行；
+    // 段落行按生产实测 44px（pt-[0.75rem] + 32px 条高），其余 32px。期望滚动
+    // 总高直接由这个数组求和，不读取 mock 记录的行。
+    const expectedKinds = [
+      "section",
+      ...Array(10).fill("conversation"),
+      "section",
+      ...Array(15).fill("folder"),
+      "section",
+      ...Array(10).fill("conversation"),
+    ]
+    const expectedSizes = expectedKinds.map((kind) =>
+      kind === "section" ? 44 : 32
+    )
+    const expectedScrollSize = expectedSizes.reduce(
+      (total, size) => total + size,
+      0
+    )
+    virtuaCtl.itemSizes = expectedSizes
+    virtuaCtl.viewportSize = 20 * 32
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+    // 先对账行模型，后续可见窗口只依赖上面的独立期望。
+    expect(virtuaCtl.rowKinds).toEqual(expectedKinds)
+    expect(virtuaCtl.handle!.scrollSize).toBe(expectedScrollSize)
+
+    const scrollOffset = expectedScrollSize - virtuaCtl.viewportSize
+    await scrollToOffset(scrollOffset)
+    // 浮层不进内容流：滚到底部后总高与底部边界不变。
+    expect(virtuaCtl.handle!.scrollSize).toBe(expectedScrollSize)
+
+    // 三个吸顶浮层：聊天标题、文件夹标题，以及位于 section 栈总高（inset）
+    // 之下的当前文件夹标题。
+    expect(
+      Array.from(document.querySelectorAll("[data-sticky-section]")).map(
+        (node) => node.getAttribute("data-sticky-section")
+      )
+    ).toEqual(["chats", "folders"])
+    const folderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(folderOverlay?.getAttribute("data-sticky-folder")).toBe("7")
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    // 文件夹浮层是累计栈末项：槽位 64px（section 栈总高 = 总 inset）加上
+    // 下一个文件夹标题的推顶 round(20 - 64 - 32) = -76px，得到 -12px。
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(-12px)" })
+
+    // 底部可见窗口独立推导：两个吸顶条各 32px 盖住顶部，其下内容从
+    // scrollOffset + 64 开始；按上面的行高数组求出可见的内容行索引。
+    const sectionStackHeight = 2 * 32
+    const contentVisibleFrom = scrollOffset + sectionStackHeight
+    const visibleIndices: number[] = []
+    let rowTop = 0
+    expectedSizes.forEach((size, index) => {
+      if (rowTop + size > contentVisibleFrom) visibleIndices.push(index)
+      rowTop += size
+    })
+    // 2 个吸顶标题 + 18 行内容 = 用户给出的 20 行。
+    expect(visibleIndices).toHaveLength(18)
+    expect(visibleIndices.length + 2).toBe(20)
+
+    const contentRows = Array.from(
+      document.querySelectorAll("[data-virtua-content] > *")
+    )
+    const kindOf = (row: Element) =>
+      row.querySelector("[data-folder-id]")
+        ? "folder"
+        : row.querySelector("[data-conversation-id]")
+          ? "conversation"
+          : "section"
+    // 可见内容依次为：文件夹剩 7 条 → 最近标题 → 最近 10 条。
+    expect(visibleIndices.map((index) => kindOf(contentRows[index]))).toEqual([
+      ...Array(7).fill("folder"),
+      "section",
+      ...Array(10).fill("conversation"),
+    ])
+
+    // 可见的 7 行文件夹是完整文件夹序列的最后 7 个；可见的 10 行会话是
+    // conv-100..109 的最近副本（最近按时间倒序，这里只校验集合）。
+    const folderIdOf = (row: Element) =>
+      Number(
+        row.querySelector("[data-folder-id]")?.getAttribute("data-folder-id")
+      )
+    const visibleRows = visibleIndices.map((index) => contentRows[index])
+    expect(
+      visibleRows
+        .filter((row) => row.querySelector("[data-folder-id]"))
+        .map(folderIdOf)
+    ).toEqual(
+      contentRows
+        .filter((row) => row.querySelector("[data-folder-id]"))
+        .map(folderIdOf)
+        .slice(-7)
+    )
+    expect(
+      visibleRows
+        .filter((row) => row.querySelector("[data-conversation-id]"))
+        .map((row) =>
+          Number(
+            row
+              .querySelector("[data-conversation-id]")
+              ?.getAttribute("data-conversation-id")
+          )
+        )
+        .sort((a, b) => a - b)
+    ).toEqual(Array.from({ length: 10 }, (_, index) => 100 + index))
+
+    // 浮层是唯一可访问的段落标题入口；最近标题仍是真实行。
+    for (const label of ["Chat", "Folders", "Recent"]) {
+      expect(screen.getAllByRole("button", { name: label })).toHaveLength(1)
+    }
+  })
+
+  it("末项浮层被下一个标题推顶时负位移且累计栈前项保留", async () => {
+    // 行序：chats 标题 / 聊天 / folders 标题 / 文件夹1 / 会话 / 文件夹2 / 会话 /
+    // recent 标题 / 3 条最近副本；文件夹 1 是累计栈的末项浮层。
+    useAppWorkspaceStore.setState({
+      conversations: [conv(31, 99, { kind: "chat" }), conv(11, 1), conv(21, 2)],
+    })
+    virtuaCtl.itemSizes = [44, 32, 44, 32, 32, 32, 32, 44, 32, 32, 32]
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+
+    // 段落交接边界：最近标题进入第 3 个槽位，前两项保持 0px / 32px；
+    // 只有栈末项（最近标题）移动到 64px。
+    await scrollToOffset(196)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toBeNull()
+    await scrollToOffset(197)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+
+    // 文件夹 1 让位给文件夹 2：槽位 64px（section 栈总高）+ 推顶位移
+    // round(1 - 96) = -95px，得到负 transform；两个 section 浮层保持不动。
+    await scrollToOffset(183)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    const folderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(folderOverlay?.getAttribute("data-sticky-folder")).toBe("1")
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(-31px)" })
+
+    // 下一个标题完全接管：末项浮层移除，前两项仍留在累计栈中。
+    await scrollToOffset(184)
+    expect(document.querySelector("[data-sticky-folder]")).toBeNull()
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    // 文件夹 2 接管后回到 section 栈总高对应的 64px 槽位。
+    await scrollToOffset(185)
+    const nextFolderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(nextFolderOverlay?.getAttribute("data-sticky-folder")).toBe("2")
+    expect(nextFolderOverlay).toHaveStyle({ transform: "translateY(64px)" })
+  })
+
+  it("第三段接近时只推顶末标题且反向滚动按槽位逐个退出", async () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    renderSticky()
+    const firstSectionIndex = virtuaCtl.rowSections.findIndex(Boolean)
+    const secondSectionIndex = virtuaCtl.rowSections.findIndex(
+      (section, index) => index > firstSectionIndex && section !== null
+    )
+    const recentIndex = virtuaCtl.rowSections.indexOf("recent")
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 12 - 80)
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toBeNull()
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 12 - 64 + 1)
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+    // 反向滚动到第二段落尚未进入第二槽位的位置：首段仍在栈中，后两段退出。
+    await scrollToOffset(virtuaCtl.offsetFor(secondSectionIndex) - 24)
+    expect(sectionOverlayOf("Folders")).not.toBeNull()
+    expect(sectionOverlayOf("Chat")).toBeNull()
+    expect(sectionOverlayOf("Recent")).toBeNull()
+    expect(screen.getAllByRole("button", { name: "Folders" })).toHaveLength(1)
+  })
+
+  it("两个段落累计后文件夹层使用总高度槽位并独立推顶", async () => {
+    appearanceCtl.zoomLevel = 125
+    useAppWorkspaceStore.setState({
+      conversations: [conv(31, 99, { kind: "chat" }), conv(11, 1), conv(21, 2)],
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+    virtuaCtl.itemSizes = virtuaCtl.rowKinds.map((kind) =>
+      kind === "section" ? 55 : 40
+    )
+    const foldersIndex = virtuaCtl.rowSections.indexOf("folders")
+    const firstFolderIndex = virtuaCtl.rowKinds.findIndex(
+      (kind, index) => index > foldersIndex && kind === "folder"
+    )
+    await scrollToOffset(virtuaCtl.offsetFor(firstFolderIndex) + 20)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(40px)",
+    })
+    expect(document.querySelector("[data-sticky-folder]")).toHaveStyle({
+      transform: "translateY(20px)",
+    })
+    // 下一个文件夹推顶只影响文件夹自身，两个 section 继续保持各自槽位。
+    await scrollToOffset(virtuaCtl.offsetFor(firstFolderIndex) + 40)
+    expect(document.querySelector("[data-sticky-folder]")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(40px)",
+    })
+  })
+
+  it("列表顶部只显示真实段落标题", () => {
+    virtuaCtl.scrollOffset = 0
+    const { getAllByText, getByRole } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    // 滚动偏移为 0：段落标题只有真实行一份，没有被浮层复制，也没有被抑制隐藏。
+    for (const label of ["Folders", "Chat", "Recent"]) {
+      const titles = getAllByText(label)
+      expect(titles).toHaveLength(1)
+      expect(titles[0].closest('[aria-hidden="true"]')).toBeNull()
+    }
+    // 真实标题本身仍是可访问的折叠开关。
+    for (const label of ["Folders", "Chat", "Recent"]) {
+      expect(getByRole("button", { name: label })).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      )
+    }
+  })
+
+  it("段落行使用44像素实测高度且不把顶隙重复计入条高", () => {
+    virtuaCtl.itemSizes = [44, ...Array(20).fill(32)]
+    virtuaCtl.scrollOffset = 50
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    expect(virtuaCtl.handle?.getItemOffset(1)).toBe(44)
+    expect(virtuaCtl.handle?.getItemSize(0)).toBe(44)
+    expect(virtuaCtl.handle?.getItemSize(1)).toBe(32)
+    const overlay = folders[1].closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    )
+    expect(overlay).not.toBeNull()
+    expect(overlay).toHaveStyle({ transform: "translateY(0px)" })
+    expect(overlay?.className).not.toContain("pt-[0.75rem]")
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(folderButtons).toHaveLength(2)
+    const folderOverlay = folderButtons[1].closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    )
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(32px)" })
+  })
+
+  it("自定义段落顺序按实际行索引吸顶", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    useAppWorkspaceStore.setState({
+      conversations: [conv(11, 1), conv(31, 99, { kind: "chat" })],
+    })
+    const view = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+
+    const expectPinned = (label: string, offset: number) => {
+      virtuaCtl.scrollOffset = offset
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SidebarConversationList
+            showCompleted
+            showRecent
+            sortMode="created"
+            sectionOrder={["chats", "folders", "recent"]}
+          />
+        </NextIntlClientProvider>
+      )
+      const buttons = Array.from(document.querySelectorAll("button")).filter(
+        (button) => button.textContent === label
+      )
+      expect(buttons).toHaveLength(2)
+    }
+
+    expectPinned("Chat", 40)
+    expectPinned("Folders", 100)
+    expectPinned("Recent", 300)
+  })
+
+  it("下一个段落进入一条高时按整数像素推顶", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1),
+        conv(12, 1),
+        conv(21, 2),
+        conv(22, 2),
+        conv(23, 2),
+        conv(31, 99, { kind: "chat" }),
+      ],
+    })
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const nextSectionIndex = virtuaCtl.rowKinds.findIndex(
+      (kind, index) => index > 0 && kind === "section"
+    )
+    expect(nextSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) - 4
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    expect(
+      folders[1].closest("[data-sticky-section], [data-sticky-folder]")
+    ).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+
+    vi.unstubAllGlobals()
+  })
+
+  it("下一段落触顶后累计保留此前标题并分配独立槽位", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    const nextSectionIndex = 8
+    virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) + 13
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const oldSectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const nextSectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Chat")
+    expect(oldSectionButtons).toHaveLength(2)
+    expect(nextSectionButtons).toHaveLength(2)
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+  })
+
+  it("缩放后顶隙、段落条高和文件夹内缩放正确", () => {
+    appearanceCtl.zoomLevel = 125
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    expect(sectionButtons).toHaveLength(2)
+    expect(
+      sectionButtons[1].closest("[data-sticky-section], [data-sticky-folder]")
+    ).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(
+      sectionButtons[1].closest("[data-sticky-section], [data-sticky-folder]")
+        ?.className
+    ).not.toContain("pt-[0.75rem]")
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(folderButtons).toHaveLength(2)
+    const folderOverlay = folderButtons[1].closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    )
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(40px)" })
+  })
+
+  it("滚动到最后一个段落后浮层持续吸顶", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const lastSectionIndex = virtuaCtl.rowKinds.reduce(
+      (last, kind, index) => (kind === "section" ? index : last),
+      -1
+    )
+    expect(lastSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(lastSectionIndex) + 40
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    const recent = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Recent"
+    )
+    expect(recent).toHaveLength(2)
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it("浮层不改变滚动总高度并保留底部边界", () => {
+    virtuaCtl.itemSizes = [44, 36, 30]
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const initialScrollSize = virtuaCtl.handle?.scrollSize
+    const expectedScrollSize = virtuaCtl.rowKinds.reduce(
+      (total, _, index) => total + virtuaCtl.sizeFor(index),
+      0
+    )
+    expect(initialScrollSize).toBe(expectedScrollSize)
+
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = expectedScrollSize - 1
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const recentButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Recent")
+    expect(recentButtons).toHaveLength(2)
+    expect(sectionOverlayOf("Recent")).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+    expect(virtuaCtl.handle?.scrollSize).toBe(initialScrollSize)
+    vi.unstubAllGlobals()
+  })
+
+  it("段落浮层存在时文件夹浮层位于段落条下方", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const folderButtons = document.querySelectorAll('[data-folder-id="1"]')
+    expect(sectionButtons).toHaveLength(2)
+    expect(folderButtons).toHaveLength(2)
+    const sectionOverlay = sectionButtons[1].closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    )
+    const folderOverlay = folderButtons[1].closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    )
+    expect(sectionOverlay).not.toBeNull()
+    expect(folderOverlay).not.toBeNull()
+    expect(
+      Boolean(
+        folderOverlay!.compareDocumentPosition(sectionOverlay!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+    ).toBe(true)
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(32px)" })
+  })
+
+  it("段落交界仅推顶栈末标题且文件夹层独立保持总槽位", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const nextSectionIndex = virtuaCtl.rowKinds.findIndex(
+      (kind, index) => index > 0 && kind === "section"
+    )
+    expect(nextSectionIndex).toBeGreaterThan(0)
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(nextSectionIndex) - 4
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+
+    const sectionButtons = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    const folderButtons = document.querySelectorAll('[data-folder-id="2"]')
+    expect(
+      sectionButtons[1].closest("[data-sticky-section], [data-sticky-folder]")
+    ).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(
+      folderButtons[1].closest("[data-sticky-section], [data-sticky-folder]")
+    ).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it("没有文件夹行时段落仍可吸顶", () => {
+    useAppWorkspaceStore.setState({
+      folders: [],
+      allFolders: [],
+      conversations: [conv(31, 99, { kind: "chat" })],
+    })
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const chatIndex = virtuaCtl.rowSections.findIndex(
+      (section) => section === "chats"
+    )
+    expect(chatIndex).toBeGreaterThanOrEqual(0)
+    const targetIndex = chatIndex
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    act(() => {
+      virtuaCtl.scrollOffset = virtuaCtl.offsetFor(targetIndex) + 20
+      virtuaCtl.onScroll?.(virtuaCtl.scrollOffset)
+    })
+    const chatButtons = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Chat"
+    )
+    expect(chatButtons).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+
+  it("折叠段落仍保留标题吸顶", () => {
+    localStorage.setItem(
+      "workspace:sidebar-section-collapsed",
+      JSON.stringify({ folders: true })
+    )
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    virtuaCtl.scrollOffset = 20
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const collapsedFolders = Array.from(
+      document.querySelectorAll("button")
+    ).filter((button) => button.textContent === "Folders")
+    expect(collapsedFolders).toHaveLength(2)
+    act(() => fireEvent.click(collapsedFolders[1]))
+    expect(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent === "Folders" &&
+          !button.closest('[aria-hidden="true"]')
+      )
+    ).toHaveAttribute("aria-expanded", "true")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it("空段落仍保留标题吸顶", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [],
+    })
+    virtuaCtl.itemSizes = Array(20).fill(32)
+    virtuaCtl.scrollOffset = 20
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted showRecent sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    const folders = Array.from(document.querySelectorAll("button")).filter(
+      (button) => button.textContent === "Folders"
+    )
+    expect(folders).toHaveLength(2)
+    act(() => fireEvent.click(folders[1]))
+    expect(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent === "Folders" &&
+          !button.closest('[aria-hidden="true"]')
+      )
+    ).toHaveAttribute("aria-expanded", "false")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it("段落浮层标题点击只切换当前段落", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 20 // 滚过段落标题条，段落浮层已出现
+    renderSticky()
+
+    expect(headerCount(1)).toBe(1)
+    const before = accessibleTitle("Folders")
+    expect(
+      before?.closest("[data-sticky-section], [data-sticky-folder]")
+    ).not.toBeNull()
+    expect(before).toHaveAttribute("aria-expanded", "true")
+
+    act(() => fireEvent.click(before!))
+    // 段落折叠：该段正文行消失，但段落浮层仍在，展开状态切换到 false。
+    expect(headerCount(1)).toBe(0)
+    const collapsed = accessibleTitle("Folders")
+    expect(
+      collapsed?.closest("[data-sticky-section], [data-sticky-folder]")
+    ).not.toBeNull()
+    expect(collapsed).toHaveAttribute("aria-expanded", "false")
+    // 段落折叠不触发文件夹浮层那种「回滚到标题」的 scrollToIndex。
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+
+    act(() => fireEvent.click(collapsed!))
+    // 再次点击恢复展开，正文行回来，仍无新增滚动。
+    expect(headerCount(1)).toBe(1)
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "true")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it("文件夹浮层保留折叠后定位，段落浮层点击不触发滚动", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 130 // 文件夹 2 浮层可见
+    renderSticky()
+
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    try {
+      const folderHeaders = document.querySelectorAll('[data-folder-id="2"]')
+      expect(folderHeaders).toHaveLength(2)
+      // 文件夹浮层点击仍走既有路径：折叠后定位到文件夹标题（扁平索引 4）。
+      act(() => fireEvent.click(folderHeaders[1] as HTMLElement))
+      expect(virtuaCtl.scrollToIndex).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({ align: "start" })
+      )
+
+      // 段落浮层不接同一条回调链：只切换展开状态，不调用 scrollToIndex。
+      virtuaCtl.scrollToIndex.mockClear()
+      act(() => {
+        virtuaCtl.scrollOffset = 20
+        virtuaCtl.onScroll?.(20)
+      })
+      const sectionTitle = accessibleTitle("Folders")
+      expect(
+        sectionTitle?.closest("[data-sticky-section], [data-sticky-folder]")
+      ).not.toBeNull()
+      act(() => fireEvent.click(sectionTitle!))
+      expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("文件夹段落浮层保留四个操作按钮", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    renderSticky()
+
+    const overlay = sectionOverlayOf("Folders")
+    expect(overlay).not.toBeNull()
+    const labels = [
+      "New group",
+      "Import local sessions",
+      "Clone Repository",
+      "Open Folder",
+    ]
+    for (const label of labels) {
+      // 浮层与真实行各有一个按钮，但只有浮层副本不在 aria-hidden 子树里。
+      const all = screen.getAllByLabelText(label)
+      expect(all).toHaveLength(2)
+      expect(
+        all.filter((el) => el.closest('[aria-hidden="true"]') !== null)
+      ).toHaveLength(1)
+      expect(within(overlay!).getByLabelText(label)).toBeInTheDocument()
+      expect(screen.getAllByRole("button", { name: label })).toHaveLength(1)
+    }
+
+    // 依次点击四个按钮，断言各自走现有处理链路。新建分组放在最后，避免模态
+    // 对话框把列表从可访问树里隐藏后影响前面的按钮查询。
+    act(() =>
+      fireEvent.click(within(overlay!).getByLabelText("Import local sessions"))
+    )
+    expect(apiCtl.openImportSessionsWindow).toHaveBeenCalledTimes(1)
+    act(() =>
+      fireEvent.click(within(overlay!).getByLabelText("Clone Repository"))
+    )
+    expect(dialogCtl.cloneOpen).toBe(true)
+    act(() => fireEvent.click(within(overlay!).getByLabelText("Open Folder")))
+    expect(dialogCtl.browserOpen).toBe(true)
+    act(() => fireEvent.click(within(overlay!).getByLabelText("New group")))
+    expect(
+      screen.getByText(enMessages.Folder.sidebar.folderGroup.newGroupTitle)
+    ).toBeInTheDocument()
+
+    // 四个按钮都是切换按钮的兄弟节点：段落展开状态与持久化都没有变化。
+    expect(
+      localStorage.getItem("workspace:sidebar-section-collapsed")
+    ).toBeNull()
+    // 模态对话框会把列表从可访问树上隐藏，因此这里直接按浮层节点取标题。
+    const overlayTitle = Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === "Folders" &&
+        button.closest("[data-sticky-section], [data-sticky-folder]") !== null
+    )
+    expect(overlayTitle).toHaveAttribute("aria-expanded", "true")
+  })
+
+  it("聊天和最近浮层保留新建与过滤操作", async () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    renderSticky()
+
+    // 聊天段落浮层：保留新建聊天入口。
+    const chatsIndex = virtuaCtl.rowSections.findIndex((s) => s === "chats")
+    await scrollToOffset(virtuaCtl.offsetFor(chatsIndex) + 20)
+    const chatsOverlay = sectionOverlayOf("Chat")
+    expect(chatsOverlay).not.toBeNull()
+    expect(within(chatsOverlay!).getByLabelText("New chat")).toBeInTheDocument()
+    fireEvent.click(within(chatsOverlay!).getByLabelText("New chat"))
+    expect(stableTabFns.openChatModeTab).toHaveBeenCalledTimes(1)
+
+    // 最近段落浮层：保留新建会话入口与过滤菜单。
+    const recentIndex = virtuaCtl.rowSections.findIndex((s) => s === "recent")
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 20)
+    const recentOverlay = sectionOverlayOf("Recent")
+    expect(recentOverlay).not.toBeNull()
+    expect(
+      within(recentOverlay!).getByLabelText("New Conversation")
+    ).toBeInTheDocument()
+    fireEvent.click(within(recentOverlay!).getByLabelText("New Conversation"))
+    expect(
+      within(recentOverlay!).getByLabelText("New Conversation")
+    ).toBeInTheDocument()
+    const trigger = within(recentOverlay!).getByLabelText("Show in Recent: All")
+
+    // 从浮层菜单选择 Chat：走既有过滤回调与持久化，浮层保持在原位。
+    await settleMenu()
+    pressMenu(trigger)
+    await settleMenu()
+    const option = Array.from(
+      document.querySelectorAll('[role="menuitemradio"]')
+    ).find((el) => el.textContent === "Chat")
+    expect(option).toBeDefined()
+    pressMenu(option!)
+    await settleMenu()
+    expect(localStorage.getItem("workspace:sidebar-recent-filter")).toBe(
+      "chats"
+    )
+    const nextOverlay = sectionOverlayOf("Recent")
+    expect(nextOverlay).not.toBeNull()
+    expect(
+      within(nextOverlay!).getByLabelText("Show in Recent: Chat")
+    ).toBeInTheDocument()
+  })
+
+  it("浮层标题可通过键盘激活并保留无障碍状态", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 20
+    renderSticky()
+
+    // 浮层出现时，真实行 inert + aria-hidden，浮层是唯一可访问入口。
+    const realTitle = Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === "Folders" &&
+        button.closest('[aria-hidden="true"]') !== null
+    )
+    expect(realTitle).toBeDefined()
+    expect(realTitle?.closest("[inert]")).not.toBeNull()
+    expect(screen.getAllByRole("button", { name: "Folders" })).toHaveLength(1)
+
+    const overlayTitle = accessibleTitle("Folders")!
+    overlayTitle.focus()
+    expect(overlayTitle).toHaveFocus()
+    await user.keyboard("{Enter}")
+    // 键盘激活与鼠标点击得到相同的折叠状态。
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "false")
+    expect(headerCount(1)).toBe(0)
+    expect(screen.getAllByRole("button", { name: "Folders" })).toHaveLength(1)
+
+    accessibleTitle("Folders")!.focus()
+    await user.keyboard("{Enter}")
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "true")
+    expect(headerCount(1)).toBe(1)
+  })
+
+  it("最近隐藏时不参与段落候选", async () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    const view = renderSticky(false)
+    expect(virtuaCtl.rowSections).not.toContain("recent")
+    expect(screen.queryByText("Recent")).toBeNull()
+
+    // 滚到底部也不会凭空出现最近浮层。
+    await scrollToOffset(virtuaCtl.offsetFor(virtuaCtl.rowKinds.length - 1))
+    expect(screen.queryByText("Recent")).toBeNull()
+
+    // 重新开启后按真实行恢复：段落候选集合与浮层都回来。
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted sortMode="created" showRecent />
+      </NextIntlClientProvider>
+    )
+    expect(virtuaCtl.rowSections).toContain("recent")
+    const recentIndex = virtuaCtl.rowSections.findIndex((s) => s === "recent")
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 20)
+    // 真实行（已抑制）与浮层副本各一份，可访问入口只有一个。
+    expect(screen.getAllByText("Recent")).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: "Recent" })).toHaveLength(1)
+  })
+
+  it("浮层是滚动区域兄弟节点且不改变底部边界", () => {
+    virtuaCtl.itemSizes = [44, 32, 32]
+    virtuaCtl.scrollOffset = 60 // 段落浮层与文件夹 1 浮层同时可见
+    renderSticky()
+
+    const scrollArea = document.querySelector(
+      "[data-sidebar-scroll-area]"
+    ) as HTMLElement
+    const content = document.querySelector(
+      "[data-virtua-content]"
+    ) as HTMLElement
+    const sectionOverlay = sectionOverlayOf("Folders")
+    const folderOverlay = Array.from(
+      document.querySelectorAll('[data-folder-id="1"]')
+    )[1]?.closest(
+      "[data-sticky-section], [data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(sectionOverlay).not.toBeNull()
+    expect(folderOverlay).not.toBeNull()
+
+    // 浮层不在虚拟列表内容流里，只作为 ScrollArea 的兄弟覆盖节点存在。
+    expect(content.contains(sectionOverlay)).toBe(false)
+    expect(content.contains(folderOverlay)).toBe(false)
+    expect(scrollArea.contains(sectionOverlay)).toBe(false)
+    expect(sectionOverlay!.parentElement).toBe(scrollArea.parentElement)
+    expect(folderOverlay!.parentElement).toBe(scrollArea.parentElement)
+
+    // 滚动区域的内边距没有为吸顶新增顶部占位。
+    expect(scrollArea.className).toContain("pb-1.5")
+    expect(scrollArea.className).not.toMatch(/(^|\s)pt-/)
+    expect(scrollArea.className).not.toMatch(/(^|\s)py-/)
+
+    // 底部边界：虚拟列表总滚动高度等于受控行高总和，浮层出现也不改变。
+    const expectedScrollSize = virtuaCtl.rowKinds.reduce(
+      (total, _, index) => total + virtuaCtl.sizeFor(index),
+      0
+    )
+    expect(virtuaCtl.handle?.scrollSize).toBe(expectedScrollSize)
+  })
+
   it("hides the overlay at the top of the list", () => {
     virtuaCtl.scrollOffset = 0
     render(tree())
@@ -740,10 +1871,59 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
         document.querySelector('[data-folder-id="2"]') as HTMLElement
       ).parentElement as HTMLElement
       act(() => firePointer(grip, "pointerdown", { clientY: 100 }))
+      const sectionButtons = Array.from(
+        document.querySelectorAll("button")
+      ).filter((button) => button.textContent === "Folders")
+      expect(sectionButtons).toHaveLength(2)
       act(() => firePointer(window, "pointermove", { clientY: 120 })) // cross 6px
-      // Virtualizer unmounted → drag surface shows each folder once, overlay gone.
+      // 拖拽面板只显示文件夹目标，段落浮层和文件夹浮层都应消失。
+      expect(
+        Array.from(document.querySelectorAll("button")).filter(
+          (button) => button.textContent === "Folders"
+        )
+      ).toHaveLength(0)
       expect(headerCount(1)).toBe(1)
       act(() => firePointer(window, "pointercancel", { clientY: 120 }))
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it("拖拽开始时同时隐藏两个浮层，取消后按当前位置恢复", () => {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        top: 0,
+        bottom: 600,
+        left: 0,
+        right: 200,
+        width: 200,
+        height: 600,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect)
+    try {
+      virtuaCtl.itemSizes = Array(30).fill(32)
+      virtuaCtl.scrollOffset = 40 // 段落浮层与文件夹 1 浮层同时可见
+      renderSticky()
+      expect(sectionOverlayOf("Folders")).not.toBeNull()
+      expect(headerCount(1)).toBe(2)
+
+      // 拖拽非当前吸顶的文件夹 2（文件夹 1 的真实行已被浮层抑制）。
+      const grip = (
+        document.querySelector('[data-folder-id="2"]') as HTMLElement
+      ).parentElement as HTMLElement
+      act(() => firePointer(grip, "pointerdown", { clientY: 100 }))
+      act(() => firePointer(window, "pointermove", { clientY: 120 }))
+      // 拖拽面替代虚拟列表期间，两个浮层都不渲染。
+      expect(sectionOverlayOf("Folders")).toBeNull()
+      expect(headerCount(1)).toBe(1)
+
+      act(() => firePointer(window, "pointercancel", { clientY: 120 }))
+      // 取消拖拽后按当前滚动位置恢复两个浮层。
+      expect(sectionOverlayOf("Folders")).not.toBeNull()
+      expect(headerCount(1)).toBe(2)
     } finally {
       rectSpy.mockRestore()
     }

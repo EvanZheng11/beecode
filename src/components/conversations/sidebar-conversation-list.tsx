@@ -120,6 +120,7 @@ import {
   computeStickyState,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
+  sectionHeaderFlatIndices,
   formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
@@ -135,6 +136,7 @@ import {
   worktreeChildrenByParent,
   worktreeHeaderAlias,
   type DragSlot,
+  type SectionHeaderRow,
   type SidebarEntry,
   type SidebarLayout,
   type SidebarRow,
@@ -1136,14 +1138,16 @@ export function SidebarConversationList({
   const [dragLayout, setDragLayout] = useState<SidebarLayout | null>(null)
   const pendingLayoutRef = useRef<SidebarLayout | null>(null)
 
-  // Floating sticky folder header. `stickyFolderId` is the ONLY new render
-  // state and changes solely when the scroll crosses into a different folder —
-  // never on a status event or the per-minute `now` tick — so the card/header
-  // memo budget is untouched. The per-frame handoff translateY is written
-  // straight to the overlay node (no re-render); see `recomputeSticky`.
+  // 浮动标题按自然段落顺序累计堆叠；每个 section 都有自己的可访问浮层。
+  const [stickySections, setStickySections] = useState<SidebarSectionKey[]>([])
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const sectionOverlayRefs = useRef(
+    new Map<SidebarSectionKey, HTMLDivElement>()
+  )
   const stickyRafRef = useRef<number | null>(null)
+  const zoomLevelRef = useRef(zoomLevel)
+  zoomLevelRef.current = zoomLevel
   // Read by the imperative scroll path without re-subscribing virtua's listener.
   const draggingRef = useRef<SidebarEntry | null>(dragging)
   draggingRef.current = dragging
@@ -1632,10 +1636,16 @@ export function SidebarConversationList({
   // they have zero effect on the card/header memo path.
   const ownerHeaderIndex = useMemo(() => buildOwnerHeaderIndex(rows), [rows])
   const headerFlatIndices = useMemo(() => folderHeaderFlatIndices(rows), [rows])
+  const sectionFlatIndices = useMemo(
+    () => sectionHeaderFlatIndices(rows),
+    [rows]
+  )
   const ownerHeaderIndexRef = useRef(ownerHeaderIndex)
   ownerHeaderIndexRef.current = ownerHeaderIndex
   const headerFlatIndicesRef = useRef(headerFlatIndices)
   headerFlatIndicesRef.current = headerFlatIndices
+  const sectionFlatIndicesRef = useRef(sectionFlatIndices)
+  sectionFlatIndicesRef.current = sectionFlatIndices
 
   useImperativeHandle(ref, () => ({
     scrollToActive() {
@@ -1937,48 +1947,122 @@ export function SidebarConversationList({
     }
   }, [rows, conversationExpanded, loading, ensureChildrenLoaded])
 
-  // ── Sticky folder header overlay ──────────────────────────────────────────
-  // Resolve the folder currently scrolled through and the iOS handoff offset
-  // from the live virtua geometry. Imperative + ref-only so its identity stays
-  // stable (passing it to `<Virtualizer onScroll>` must not re-subscribe the
-  // listener) and so it never participates in the memoized render path.
+  // ── 段落与文件夹吸顶栈 ────────────────────────────────────────────────
+  // 所有滚动计算都读取 ref，保持 onScroll 与 RAF 回调的引用稳定；virtua 的
+  // 实测行高决定每个标题的真实位置，浮层位移只直接写入 DOM。
   const recomputeSticky = useCallback(() => {
     const handle = virtualizerRef.current
     const currentRows = rowsRef.current
-    const headers = headerFlatIndicesRef.current
-    if (
-      !handle ||
-      draggingRef.current !== null ||
-      currentRows.length === 0 ||
-      headers.length === 0
-    ) {
+    const reset = () => {
+      setStickySections((prev) => (prev.length === 0 ? prev : []))
       setStickyFolderId((prev) => (prev === null ? prev : null))
+      for (const overlay of sectionOverlayRefs.current.values()) {
+        overlay.style.transform = "translateY(0px)"
+      }
+      if (overlayRef.current) {
+        overlayRef.current.style.transform = "translateY(0px)"
+      }
+    }
+    if (!handle || currentRows.length === 0 || draggingRef.current !== null) {
+      reset()
       return
     }
+
     const scrollOffset = handle.scrollOffset
     const topIndex = Math.max(
       0,
       Math.min(currentRows.length - 1, handle.findItemIndex(scrollOffset))
     )
+    const remPx = (16 * zoomLevelRef.current) / 100
+    const sectionTopGap = 0.75 * remPx
+    const barTop = (index: number) =>
+      handle.getItemOffset(index) +
+      (currentRows[index]?.kind === "section" ? sectionTopGap : 0)
+    const defaultSectionBarHeight = 2 * remPx
+    const sectionBarHeightAt = (index: number) => {
+      const measuredBarHeight = handle.getItemSize(index) - sectionTopGap
+      return measuredBarHeight >= defaultSectionBarHeight
+        ? measuredBarHeight
+        : defaultSectionBarHeight
+    }
+    const sectionIndices = sectionFlatIndicesRef.current
+
+    // 标题越过自己的累计槽位才入栈；反向滚动和行数据变化都从实际位置重算。
+    const stickySectionEntries: Array<{ index: number; height: number }> = []
+    let sectionStackHeight = 0
+    for (const index of sectionIndices) {
+      if (scrollOffset + sectionStackHeight <= barTop(index)) break
+      const height = sectionBarHeightAt(index)
+      stickySectionEntries.push({ index, height })
+      sectionStackHeight += height
+    }
+    const nextSectionIndex = sectionIndices[stickySectionEntries.length]
+
+    for (const overlay of sectionOverlayRefs.current.values()) {
+      overlay.style.transform = "translateY(0px)"
+    }
+    if (stickySectionEntries.length > 0) {
+      const lastEntry = stickySectionEntries[stickySectionEntries.length - 1]
+      const previousStackHeight = sectionStackHeight - lastEntry.height
+      const lastSectionState = computeStickyState({
+        scrollOffset,
+        activeHeaderOffset: barTop(lastEntry.index),
+        nextHeaderOffset:
+          nextSectionIndex == null ? null : barTop(nextSectionIndex),
+        headerHeight: lastEntry.height,
+        inset: previousStackHeight,
+      })
+      let slotTop = 0
+      for (const entry of stickySectionEntries) {
+        const row = currentRows[entry.index]
+        if (row.kind !== "section") continue
+        const overlay = sectionOverlayRefs.current.get(row.section)
+        if (overlay) {
+          const translateY =
+            slotTop +
+            (entry.index === lastEntry.index ? lastSectionState.translateY : 0)
+          overlay.style.transform = `translateY(${translateY}px)`
+        }
+        slotTop += entry.height
+      }
+    }
+    const nextSections = stickySectionEntries.flatMap(({ index }) => {
+      const row = currentRows[index]
+      return row.kind === "section" ? [row.section] : []
+    })
+    setStickySections((prev) =>
+      prev.length === nextSections.length &&
+      prev.every((section, index) => section === nextSections[index])
+        ? prev
+        : nextSections
+    )
+
     const activeHeaderIndex = ownerHeaderIndexRef.current[topIndex]
     if (activeHeaderIndex < 0) {
       setStickyFolderId((prev) => (prev === null ? prev : null))
+      if (overlayRef.current) {
+        overlayRef.current.style.transform = "translateY(0px)"
+      }
       return
     }
+    const headers = headerFlatIndicesRef.current
     const nextHeaderIndex = nextHeaderAfter(headers, activeHeaderIndex)
-    const { visible, translateY } = computeStickyState({
+    const folderState = computeStickyState({
       scrollOffset,
       activeHeaderOffset: handle.getItemOffset(activeHeaderIndex),
       nextHeaderOffset:
         nextHeaderIndex == null ? null : handle.getItemOffset(nextHeaderIndex),
       headerHeight: handle.getItemSize(activeHeaderIndex) || 32,
+      inset: sectionStackHeight,
     })
     if (overlayRef.current) {
-      overlayRef.current.style.transform = `translateY(${translateY}px)`
+      overlayRef.current.style.transform = `translateY(${sectionStackHeight + folderState.translateY}px)`
     }
     const activeRow = currentRows[activeHeaderIndex]
     const nextFolderId =
-      visible && activeRow.kind === "folder" ? activeRow.folderId : null
+      folderState.visible && activeRow.kind === "folder"
+        ? activeRow.folderId
+        : null
     setStickyFolderId((prev) => (prev === nextFolderId ? prev : nextFolderId))
   }, [])
 
@@ -2024,7 +2108,9 @@ export function SidebarConversationList({
     folderExpanded,
     viewportEl,
     dragging,
+    stickySections,
     stickyFolderId,
+    zoomLevel,
     recomputeSticky,
   ])
 
@@ -2785,61 +2871,76 @@ export function SidebarConversationList({
     )
   }
 
+  // 段落标题的唯一构建器：真实行与段落浮层共用同一批 props 和回调，
+  // 保证浮层副本与真实行行为一致（折叠、新建、四个文件夹操作、最近过滤）。
+  // 默认真实行：带顶部空隙（与上方段落拉开距离）；浮层传 `topGap: false`，
+  // 否则置顶时顶部会露出 12px 透明缝；真实行按当前累计栈逐个抑制。
+  const sectionHeaderElement = (
+    row: SectionHeaderRow,
+    {
+      topGap = true,
+      suppressed = false,
+    }: { topGap?: boolean; suppressed?: boolean } = {}
+  ) => (
+    <SidebarSectionHeader
+      section={row.section}
+      expanded={row.expanded}
+      onToggle={toggleSection}
+      // The chats section gets an always-visible New-chat button (its primary
+      // entry point, reachable even when empty). `openChatModeTab` is a stable
+      // context callback, so the memo holds. Recent gets the same
+      // affordance, but starting a conversation in the ACTIVE FOLDER — the
+      // section spans folders and chats alike, and the folder is where a
+      // "continue where I left off" list lands you.
+      onNewChat={
+        row.section === "chats"
+          ? openChatModeTab
+          : row.section === "recent"
+            ? handleNewConversation
+            : undefined
+      }
+      // The folders section gets two right-edge hover actions mirroring the
+      // top-of-page NewFolderDropdown: Open Folder and Clone Repository.
+      // Both handlers are stable, so the memo holds.
+      onOpenFolder={
+        row.section === "folders" ? handleOpenFolderAction : undefined
+      }
+      onCloneRepository={
+        row.section === "folders" ? handleOpenCloneDialog : undefined
+      }
+      // Global "Import local sessions" entry (no folder anchor) — opens
+      // the same picker window as the folder context-menu item. Stable
+      // callback, so the memo holds.
+      onImportSessions={
+        row.section === "folders" ? handleOpenImportWindow : undefined
+      }
+      // "New group" — the one action in this cluster that organises the
+      // list rather than adding to it. Stable callback, so the memo holds.
+      onNewFolderGroup={
+        row.section === "folders" ? openNewGroupDialog : undefined
+      }
+      // Recent's kind filter (All / Chat / Folders). Stable callback, so
+      // the memo holds; the value only changes when the user picks another one.
+      recentFilter={row.section === "recent" ? recentFilter : undefined}
+      onRecentFilterChange={
+        row.section === "recent" ? changeRecentFilter : undefined
+      }
+      topGap={topGap}
+      suppressed={suppressed}
+    />
+  )
+
   const renderRow = (row: SidebarRow) => {
     if (row.kind === "section") {
       // Section headers are not folder-scoped, so they skip themeWrap.
-      return (
-        <SidebarSectionHeader
-          section={row.section}
-          expanded={row.expanded}
-          onToggle={toggleSection}
-          // The chats section gets an always-visible New-chat button (its primary
-          // entry point, reachable even when empty). `openChatModeTab` is a stable
-          // context callback, so the memo holds. Recent gets the same
-          // affordance, but starting a conversation in the ACTIVE FOLDER — the
-          // section spans folders and chats alike, and the folder is where a
-          // "continue where I left off" list lands you.
-          onNewChat={
-            row.section === "chats"
-              ? openChatModeTab
-              : row.section === "recent"
-                ? handleNewConversation
-                : undefined
-          }
-          // The folders section gets two right-edge hover actions mirroring the
-          // top-of-page NewFolderDropdown: Open Folder and Clone Repository.
-          // Both handlers are stable, so the memo holds.
-          onOpenFolder={
-            row.section === "folders" ? handleOpenFolderAction : undefined
-          }
-          onCloneRepository={
-            row.section === "folders" ? handleOpenCloneDialog : undefined
-          }
-          // Global "Import local sessions" entry (no folder anchor) — opens
-          // the same picker window as the folder context-menu item. Stable
-          // callback, so the memo holds.
-          onImportSessions={
-            row.section === "folders" ? handleOpenImportWindow : undefined
-          }
-          // "New group" — the one action in this cluster that organises the
-          // list rather than adding to it. Stable callback, so the memo holds.
-          onNewFolderGroup={
-            row.section === "folders" ? openNewGroupDialog : undefined
-          }
-          // Recent's kind filter (All / Chat / Folders). Stable callback, so
-          // the memo holds; the value only changes when the user picks another one.
-          recentFilter={row.section === "recent" ? recentFilter : undefined}
-          onRecentFilterChange={
-            row.section === "recent" ? changeRecentFilter : undefined
-          }
-          // Every section header carries a top gap: it separates "Folders" from
-          // the "Pinned" section above it, and — now that a fixed New chat /
-          // Search region sits above the scrolled list — gives the first section
-          // (Pinned, or Folders when nothing is pinned) the same breathing room
-          // below that region instead of butting right up against it.
-          topGap
-        />
-      )
+      // Every section header carries a top gap: it separates "Folders" from
+      // the "Pinned" section above it, and — now that a fixed New chat /
+      // Search region sits above the scrolled list — gives the first section
+      // (Pinned, or Folders when nothing is pinned) the same breathing room
+      // below that region instead of butting right up against it.
+      return sectionHeaderElement(row, {
+        suppressed: stickySections.includes(row.section),
+      })
     }
     if (row.kind === "folder-group") {
       const group = folderGroups.find((g) => g.id === row.groupId)
@@ -3122,6 +3223,14 @@ export function SidebarConversationList({
     return `${prefix}conv-${row.conversation.agent_type}-${row.conversation.id}`
   }
 
+  const stickySectionRows = stickySections.flatMap((section) => {
+    const row = rows.find(
+      (candidate): candidate is SectionHeaderRow =>
+        candidate.kind === "section" && candidate.section === section
+    )
+    return row ? [row] : []
+  })
+
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
       {(loading || refreshing) && (
@@ -3318,9 +3427,10 @@ export function SidebarConversationList({
                 is what occludes the rows scrolling beneath it — plain app-theme
                 sidebar, exactly the colour those rows are painted on.
               */}
-              {stickyFolderId !== null && (
+              {stickyFolderId !== null && !dragging && (
                 <div
                   ref={overlayRef}
+                  data-sticky-folder={stickyFolderId}
                   className={cn(
                     "pointer-events-none absolute left-0 right-0 top-0 z-10",
                     "px-1.5 [--conv-rail-axis:0.875rem]"
@@ -3336,6 +3446,38 @@ export function SidebarConversationList({
                   </div>
                 </div>
               )}
+              {stickySectionRows.length > 0 &&
+                !dragging &&
+                stickySectionRows.map((sectionRow) => (
+                  <div
+                    key={sectionRow.section}
+                    data-sticky-section={sectionRow.section}
+                    ref={(node) => {
+                      if (node) {
+                        sectionOverlayRefs.current.set(sectionRow.section, node)
+                      } else {
+                        sectionOverlayRefs.current.delete(sectionRow.section)
+                      }
+                    }}
+                    className={cn(
+                      "pointer-events-none absolute left-0 right-0 top-0 z-20",
+                      "px-1.5 [--conv-rail-axis:0.875rem]"
+                    )}
+                    style={{
+                      willChange: "transform",
+                      zIndex:
+                        20 +
+                        stickySectionRows.length -
+                        stickySectionRows.indexOf(sectionRow),
+                    }}
+                  >
+                    <div className="pointer-events-auto bg-sidebar">
+                      {sectionHeaderElement(sectionRow, {
+                        topGap: false,
+                      })}
+                    </div>
+                  </div>
+                ))}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
