@@ -16,12 +16,12 @@ use crate::app_error::AppCommandError;
 /// Update manifest URL — mirrors the `endpoints` entry in `tauri.conf.json`
 /// so desktop and server modes consult the same source of truth.
 pub const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/spacering-net/codeg/releases/latest/download/latest.json";
+    "https://github.com/EvanZheng11/codeg/releases/latest/download/latest.json";
 
 /// Deterministic base for "latest" release assets (server tarballs + their
 /// `.sig` detached signatures). Same channel as the manifest.
 pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/spacering-net/codeg/releases/latest/download";
+    "https://github.com/EvanZheng11/codeg/releases/latest/download";
 
 /// Short-timeout client for the small manifest fetch. Proxy env vars are
 /// sampled at build time, so `init_proxy_from_db` must run before the first
@@ -136,5 +136,23 @@ mod tests {
     fn non_semver_falls_back_to_inequality() {
         assert!(is_newer("nightly-2", "nightly-1"));
         assert!(!is_newer("same", "same"));
+    }
+
+    #[test]
+    fn endpoint_matches_version() {
+        // 桌面 endpoint 与服务器常量必须指向同一份清单：换源时漏一处会让
+        // 两条更新链路分叉，且桌面侧只会在运行期表现为「更新源不可用」。
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json 应可解析");
+        let endpoint = conf["plugins"]["updater"]["endpoints"][0]
+            .as_str()
+            .expect("tauri.conf.json 缺少 plugins.updater.endpoints[0]");
+        assert_eq!(endpoint, UPDATE_MANIFEST_URL);
+    }
+
+    #[test]
+    fn constants_target_the_fork_repo() {
+        assert!(UPDATE_MANIFEST_URL.starts_with("https://github.com/EvanZheng11/codeg/"));
+        assert!(RELEASE_DOWNLOAD_BASE.starts_with("https://github.com/EvanZheng11/codeg/"));
     }
 }

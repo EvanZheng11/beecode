@@ -18,7 +18,7 @@ use minisign_verify::{PublicKey, Signature};
 /// Tauri-format minisign public key — copied verbatim from
 /// `tauri.conf.json` `plugins.updater.pubkey`. Base64 of the two-line
 /// `minisign.pub` file (`untrusted comment:` + `RW…` key line).
-const TAURI_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OEM3NkMyMTVENjdBODgKUldTSWV0WVZ3bmFNU0NnSzhpdFg2bXFmMHFidWd1eWpuZ2Y2WmU5QmVXdWVrU0ZpOCt2dnd6WW4K";
+const TAURI_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDNTA0MTZGNzIxOENCM0YKUldRL3l4aHliMEZRakVvYjZTakc2Q0pITTA3VXpvRG5zUlZYQ096ZDZNNXEveXF0a0U2WHBHdGwK";
 
 /// Decode an outer base64 wrapper into the inner minisign text file.
 fn unwrap_base64(b64: &str) -> Result<String, String> {
@@ -102,5 +102,17 @@ mod tests {
     #[test]
     fn non_base64_sig_wrapper_is_rejected() {
         assert!(verify_release_signature(b"data", "%%% not base64 %%%").is_err());
+    }
+
+    #[test]
+    fn embedded_pubkey_matches_tauri_conf() {
+        // 两处公钥副本必须一致：只改一处会让清单签名与端上验签公钥对不上，
+        // 表现为运行期硬失败（拒绝安装）却很难排查。
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json 应可解析");
+        let conf_pubkey = conf["plugins"]["updater"]["pubkey"]
+            .as_str()
+            .expect("tauri.conf.json 缺少 plugins.updater.pubkey");
+        assert_eq!(conf_pubkey, TAURI_PUBKEY_B64);
     }
 }

@@ -91,7 +91,7 @@ jobs:
           git cat-file -e "$SOURCE_REF^{commit}"
           printf 'source_ref=%s\ntag=%s\nprerelease=%s\n' "$SOURCE_REF" "$TAG" "$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "源码：$SOURCE_REF；标签：${TAG:-无，仅构建 Artifacts}；预发布：$PRERELEASE"
-          echo "免费包不支持签名自动更新；macOS 使用自签名代码签名证书，computer-use 双向验签保留，未经 Apple 公证，首次打开可能出现 Gatekeeper 提示。SHA256 仅用于完整性校验，不是身份认证签名。"
+          echo "本版本起桌面与服务器均发布 minisign 签名与 latest.json；旧签名密钥版本需手动安装一次；beta（预发布）不经 releases/latest 分发。macOS 使用自签名代码签名证书，computer-use 双向验签保留，未经 Apple 公证，首次打开可能出现 Gatekeeper 提示。SHA256 仅用于完整性校验，不是身份认证签名。"
 
       - id: release
         name: 创建或复用草稿发布
@@ -117,8 +117,14 @@ jobs:
               commit.commit.message?.trim() || "无提交说明。",
               "## 免费安装包限制",
               "本发布不提供 Apple Developer ID 签名或 Apple 公证。macOS 使用仓库 Secrets 导入的自签名代码签名证书签名；该证书不在 Apple 信任链内，首次打开可能被 Gatekeeper 阻止，请仅在确认来源后手动允许。",
-              "免费桌面和服务器包不支持签名自动更新，请手动下载并安装。macOS 保留 computer-use：主程序、codeg-server 与 computer-helper 用同一张自签名证书做双向验签（按证书 SHA-1 指纹匹配），不回退到无验签模式。",
-              "SHA256SUMS 和 .sha256 仅供完整性校验，不是身份认证签名。",
+              "macOS 保留 computer-use：主程序、codeg-server 与 computer-helper 用同一张自签名证书做双向验签（按证书 SHA-1 指纹匹配），不回退到无验签模式。",
+              "## 自动更新",
+              "本版本起桌面与服务器均支持签名自动更新：桌面向 releases/latest/download/latest.json 查询，服务器下载 codeg-server-<os>-<arch>.tar.gz|.zip 并校验同名 .sig；缺签名或验签失败一律拒绝安装。",
+              "从旧签名密钥版本升级的客户端无法验证新签名，需要手动下载并安装本版本一次，之后即可恢复自动更新。",
+              prerelease
+                ? "本版本是 beta（预发布）：GitHub 的 releases/latest 只指向最新 stable，因此 beta 期间自动更新检查会失败（404）。beta 的 .sig 与 latest.json 仍完整发布，可手动下载安装或用直链验证。"
+                : "本版本是 stable：releases/latest 通道立即生效。",
+              "SHA256SUMS 和 .sha256 仅供完整性校验，不是身份认证签名；身份认证以同名 .sig（minisign）为准。",
               "将对应目标的安装包与 SHA256SUMS-<target>.txt 下载到同一目录，执行 sha256sum -c SHA256SUMS-<target>.txt（macOS 可用 shasum -a 256 -c）。Actions Artifact 解压后也可在根目录校验。",
             ].join("\n\n");
             let release;
@@ -314,6 +320,26 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      # 更新签名私钥缺失时必须在这里硬失败：没有它，createUpdaterArtifacts
+      # 会产出未签名包（或直接构建失败），二者都不能进入发布。
+      # Linux arm64 只打 deb/rpm，按设计不产出 updater 资产，不需要该密钥。
+      - name: 校验更新签名密钥已配置
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝构建未签名 updater 产物。"
+            exit 1
+          fi
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "::warning::未配置 TAURI_SIGNING_PRIVATE_KEY_PASSWORD；仅当私钥未设密码时可以这样。"
+          fi
+          echo "更新签名私钥已配置（长度 ${#TAURI_SIGNING_PRIVATE_KEY}，不回显内容）。"
 
       # macOS：导入自签名代码签名证书（Secrets 里的 base64 P12），后续步骤用
       # 同一张证书签名主程序与 computer-use helper。缺少 Secrets 会在这一步
@@ -630,6 +656,10 @@ jobs:
           # do not fall back to the runner host triple.
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # updater 签名密钥：tauri CLI 用它给 createUpdaterArtifacts 产出的
+          # *-setup.nsis.zip 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-draft-release.outputs.release_id }}
           tagName: ${{ needs.create-draft-release.outputs.tag }}
@@ -638,7 +668,9 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           # externalBin 会触发 MSI 的 light.exe 问题，仅生成 NSIS 安装包。
-          args: --target ${{ matrix.target }} --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          # createUpdaterArtifacts 由 tauri.conf.json 打开；latest.json 由
+          # generate-updater-manifest 统一生成，includeUpdaterJson 保持 false。
+          args: --target ${{ matrix.target }} --bundles nsis
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -651,6 +683,10 @@ jobs:
           # do not fall back to the runner host triple.
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # updater 签名密钥：tauri CLI 用它给 createUpdaterArtifacts 产出的
+          # updater 包生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-draft-release.outputs.release_id }}
           tagName: ${{ needs.create-draft-release.outputs.tag }}
@@ -658,7 +694,7 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          args: --target ${{ matrix.target }}
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -676,6 +712,10 @@ jobs:
           # do not fall back to the runner host triple.
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # updater 签名密钥：tauri CLI 用它给 createUpdaterArtifacts 产出的
+          # codeg.app.tar.gz 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-draft-release.outputs.release_id }}
           tagName: ${{ needs.create-draft-release.outputs.tag }}
@@ -683,9 +723,35 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"hardenedRuntime":true}}}'
+          args: --target ${{ matrix.target }} --config '{"bundle":{"macOS":{"hardenedRuntime":true}}}'
           includeUpdaterJson: false
           retryAttempts: 2
+
+      # Linux arm64 只打 deb/rpm，按设计不产出 updater 资产；其余桌面目标
+      # 必须在这里就看到非空的 updater .sig，避免未签名包走到发布。
+      # 产物名对照 tauri-cli 2.11.4 / tauri-action v0.6.1：macOS 在 bundle/macos，
+      # AppImage 打包成 bundle/appimage/*.AppImage.tar.gz，Windows updater zip
+      # 归一到 bundle/nsis/*.nsis.zip。
+      - name: 校验 updater 产物已签名
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          case "${{ matrix.target }}" in
+            *apple-darwin) candidates=("$bundle/macos/codeg.app.tar.gz.sig") ;;
+            x86_64-unknown-linux-gnu) candidates=("$bundle"/appimage/*.AppImage.tar.gz.sig) ;;
+            *windows*) candidates=("$bundle"/nsis/*.nsis.zip.sig) ;;
+            *) echo "::error::未知桌面目标：${{ matrix.target }}"; exit 1 ;;
+          esac
+          for sig in "${candidates[@]}"; do
+            if [ ! -s "$sig" ]; then
+              echo "::error::缺少 updater 签名产物：$sig"
+              ls -la "$(dirname "$sig")" || true
+              exit 1
+            fi
+            echo "已生成 updater 签名：$sig"
+          done
 
       # 保留包结构、严格签名、无权限扩展、hardened runtime 及符号黑名单门禁；证书模式按 SHA-1 指纹双向验签通过。
       - name: 检查自签名包签名、结构与符号（macOS）
@@ -1107,7 +1173,7 @@ jobs:
           path: dist/${{ matrix.artifact }}
           retention-days: 1
 
-      # 免费包只提供完整性校验文件，不生成身份认证签名，也不支持签名自动更新。
+      # 完整性校验文件与 minisign 签名（.sig）一起发布；SHA256 只做完整性校验。
       - name: 生成服务器包完整性校验（Unix）
         if: runner.os != 'Windows'
         shell: bash
@@ -1115,7 +1181,7 @@ jobs:
           set -euo pipefail
           test -s "dist/${{ matrix.artifact }}.tar.gz"
           ( cd dist && shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256" )
-          echo 'SHA256 仅为完整性校验，免费服务器包不支持签名自动更新。'
+          echo 'SHA256 仅为完整性校验；身份认证以同名 .sig（minisign）为准。'
 
       - name: 生成服务器包完整性校验（Windows）
         if: runner.os == 'Windows'
@@ -1125,7 +1191,44 @@ jobs:
           if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw '缺少服务器压缩包' }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLower()
           "$hash  ${{ matrix.artifact }}.zip" | Set-Content -Encoding ascii -LiteralPath "$file.sha256"
-          Write-Host 'SHA256 仅为完整性校验，免费服务器包不支持签名自动更新。'
+          Write-Host 'SHA256 仅为完整性校验；身份认证以同名 .sig（minisign）为准。'
+
+      # 与桌面 updater 同一把 minisign 密钥：服务器自更新安装前会校验
+      # `<包名>.sig`（见 src-tauri/src/update/verify.rs），缺签名不得发布。
+      - name: 用更新签名密钥签服务器包（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
+            exit 1
+          fi
+          file="dist/${{ matrix.artifact }}.tar.gz"
+          test -s "$file"
+          pnpm tauri signer sign "$file"
+          test -s "$file.sig"
+          echo "已生成签名：$file.sig"
+
+      - name: 用更新签名密钥签服务器包（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Error "缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
+            exit 1
+          }
+          $file = "dist/${{ matrix.artifact }}.zip"
+          if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少服务器压缩包" }
+          pnpm tauri signer sign $file
+          if (-not (Test-Path -LiteralPath "$file.sig" -PathType Leaf)) { throw "缺少签名文件 $file.sig" }
+          Write-Host "已生成签名：$file.sig"
 
       - name: 上传服务器压缩包与完整性校验文件
         uses: actions/upload-artifact@v4
@@ -1134,8 +1237,10 @@ jobs:
           path: |
             dist/${{ matrix.artifact }}.tar.gz
             dist/${{ matrix.artifact }}.tar.gz.sha256
+            dist/${{ matrix.artifact }}.tar.gz.sig
             dist/${{ matrix.artifact }}.zip
             dist/${{ matrix.artifact }}.zip.sha256
+            dist/${{ matrix.artifact }}.zip.sig
           if-no-files-found: error
 
       - name: Upload to release (Unix)
@@ -1147,6 +1252,7 @@ jobs:
           gh release upload "$TAG" \
             "dist/${{ matrix.artifact }}.tar.gz" \
             "dist/${{ matrix.artifact }}.tar.gz.sha256" \
+            "dist/${{ matrix.artifact }}.tar.gz.sig" \
             --clobber
 
       - name: Upload to release (Windows)
@@ -1155,7 +1261,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.create-draft-release.outputs.tag }}
-        run: gh release upload "$env:TAG" "dist/${{ matrix.artifact }}.zip" "dist/${{ matrix.artifact }}.zip.sha256" --clobber
+        run: gh release upload "$env:TAG" "dist/${{ matrix.artifact }}.zip" "dist/${{ matrix.artifact }}.zip.sha256" "dist/${{ matrix.artifact }}.zip.sig" --clobber
 
       # cleanup 在 always() 阶段还原 keychain 搜索列表并删除本 job 的临时
       # keychain；失败路径也要执行。
@@ -1163,6 +1269,58 @@ jobs:
         if: always() && contains(matrix.target, 'apple-darwin')
         shell: bash
         run: bash scripts/import-macos-self-signed-certificate.sh cleanup
+
+  generate-updater-manifest:
+    needs:
+      - create-draft-release
+      - build-tauri
+      - build-server
+    name: Generate updater manifest
+    if: ${{ !cancelled() && needs.create-draft-release.outputs.release_id != '' && needs.build-tauri.result == 'success' && needs.build-server.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-draft-release.outputs.source_ref }}
+
+      - name: 汇总 updater 清单并执行签名门禁
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-draft-release.outputs.tag }}
+          RELEASE_ID: ${{ needs.create-draft-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          # 草稿发布不创建 git tag，releases/tags/{tag} 接口不解析草稿，因此按
+          # release_id 查询。tag 与 tauri.conf.json 版本的一致性已在
+          # create-draft-release 校验，去掉 v 前缀即为 latest.json 的 version。
+          version="${TAG#v}"
+          work="$RUNNER_TEMP/codeg-updater"
+          rm -rf "$work"
+          mkdir -p "$work/sigs"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$work/release.json"
+          # 草稿资产不走浏览器直链：用 assets API（Accept: application/octet-stream）
+          # 把全部 .sig 下载到 sigs 目录，供生成器读取签名文本。
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [ -n "$asset_id" ] || continue
+            curl -sSfL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              -o "$work/sigs/$asset_name"
+            echo "已下载签名：$asset_name"
+          done < <(
+            jq -r '.assets[] | select(.name | endswith(".sig")) | "\(.id)\t\(.name)"' "$work/release.json"
+          )
+          node scripts/generate-updater-manifest.mjs \
+            --release-json "$work/release.json" \
+            --sig-dir "$work/sigs" \
+            --version "$version" \
+            --out "$work/latest.json"
+          gh release upload "$TAG" "$work/latest.json" --clobber
+          echo "latest.json 已上传到 $TAG"
 
   build-docker:
     needs:
@@ -1268,7 +1426,8 @@ jobs:
       - build-tauri
       - build-server
       - build-docker
-    if: ${{ !cancelled() && needs.create-draft-release.outputs.release_id != '' && needs.build-tauri.result == 'success' && needs.build-server.result == 'success' && needs.build-docker.result == 'success' }}
+      - generate-updater-manifest
+    if: ${{ !cancelled() && needs.create-draft-release.outputs.release_id != '' && needs.build-tauri.result == 'success' && needs.build-server.result == 'success' && needs.build-docker.result == 'success' && needs.generate-updater-manifest.result == 'success' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -1292,4 +1451,4 @@ jobs:
               prerelease,
             });
 
-            core.info(`已发布免费安装包 #${releaseId}；不支持签名自动更新，macOS 用自签名证书签名并保留 computer-use 双向验签。`);
+            core.info(`已发布 #${releaseId}：latest.json 与 .sig 已就位；beta（预发布）不经 releases/latest 分发。`);
