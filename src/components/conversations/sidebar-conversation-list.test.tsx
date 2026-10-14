@@ -6,7 +6,8 @@ import {
   useImperativeHandle,
   useState,
 } from "react"
-import { act, fireEvent, render } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -63,6 +64,7 @@ const stableTabFns = vi.hoisted(() => ({
   closeConversationTab: () => {},
   closeTabsByFolder: () => {},
   openNewConversationTab: () => {},
+  openChatModeTab: () => {},
 }))
 
 const stableAgents = vi.hoisted(() => ({ sortedTypes: ["claude_code"] }))
@@ -112,6 +114,16 @@ const virtuaCtl = vi.hoisted(() => ({
 }))
 
 const appearanceCtl = vi.hoisted(() => ({ zoomLevel: 100 }))
+
+// 浮层交互测试的最小测试替身：导入操作只 spy 不真正开窗；克隆与打开文件夹
+// 对话框只记录父组件传入的 open 状态，不挂真实对话框实现。
+const apiCtl = vi.hoisted(() => ({
+  openImportSessionsWindow: vi.fn(async () => {}),
+}))
+const dialogCtl = vi.hoisted(() => ({
+  cloneOpen: false,
+  browserOpen: false,
+}))
 
 // Render EVERY row (data.map) rather than only a window, so the render-count
 // probes stay meaningful in jsdom (which has no real layout/scroll). This is
@@ -291,7 +303,26 @@ vi.mock("@/contexts/workbench-route-context", () => {
 vi.mock("./conversation-manage-dialog", () => ({
   ConversationManageDialog: () => null,
 }))
-vi.mock("@/components/layout/clone-dialog", () => ({ CloneDialog: () => null }))
+vi.mock("@/components/layout/clone-dialog", () => ({
+  CloneDialog: ({ open }: { open: boolean }) => {
+    dialogCtl.cloneOpen = open
+    return null
+  },
+}))
+vi.mock("@/components/layout/workspace-folder-dialog", () => ({
+  WorkspaceFolderDialog: ({ open }: { open: boolean }) => {
+    dialogCtl.browserOpen = open
+    return null
+  },
+}))
+// 「导入本地会话」按钮直接调用 api 模块，用 spy 替换该导出，其余实现保持真实。
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>()
+  return {
+    ...actual,
+    openImportSessionsWindow: apiCtl.openImportSessionsWindow,
+  }
+})
 // The sub-session realtime sync hook reaches @/lib/platform (transport), which
 // these tests don't load; stub it to a no-op — it has its own unit tests.
 vi.mock("@/hooks/use-subsession-sync", () => ({ useSubsessionSync: () => {} }))
@@ -384,6 +415,9 @@ beforeEach(() => {
   virtuaCtl.onScroll = null
   virtuaCtl.handle = null
   virtuaCtl.scrollToIndex.mockClear()
+  apiCtl.openImportSessionsWindow.mockClear()
+  dialogCtl.cloneOpen = false
+  dialogCtl.browserOpen = false
   appearanceCtl.zoomLevel = 100
 })
 
@@ -705,6 +739,67 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
 
   function headerCount(folderId: number): number {
     return document.querySelectorAll(`[data-folder-id="${folderId}"]`).length
+  }
+
+  // 吸顶交互测试统一使用显式开启最近段落的渲染入口，复用同一批夹具。
+  function renderSticky(showRecent = true) {
+    return render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          sortMode="created"
+          showRecent={showRecent}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  // 浮层副本是当前段落唯一的可访问入口：真实行被 aria-hidden 抑制。
+  const accessibleTitle = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === label &&
+        button.closest('[aria-hidden="true"]') === null
+    )
+  const sectionOverlayOf = (label: string) =>
+    (accessibleTitle(label)?.closest("div.absolute") as
+      | HTMLElement
+      | undefined) ?? null
+
+  // 让 rAF 合并的吸顶重算可以连续触发多次：回调改到微任务执行，避免同步
+  // stub 的「先回调、后赋值」把 stickyRafRef 占住而吞掉后续滚动。
+  async function scrollToOffset(offset: number) {
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      queueMicrotask(() => cb(0))
+      return 0
+    })
+    try {
+      act(() => {
+        virtuaCtl.scrollOffset = offset
+        virtuaCtl.onScroll?.(offset)
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+
+  // Radix 菜单在 setTimeout(0) 后才挂载外部点击监听，jsdom 没有 PointerEvent，
+  // 因此沿用仓库既有做法：用 MouseEvent 走 pointerdown/pointerup/click。
+  async function settleMenu() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+  function pressMenu(target: Element) {
+    for (const type of ["pointerdown", "pointerup", "click"]) {
+      fireEvent(
+        target,
+        new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 })
+      )
+    }
   }
 
   it("列表顶部只显示真实段落标题", () => {
@@ -1100,6 +1195,254 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
     expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
   })
 
+  it("段落浮层标题点击只切换当前段落", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 20 // 滚过段落标题条，段落浮层已出现
+    renderSticky()
+
+    expect(headerCount(1)).toBe(1)
+    const before = accessibleTitle("Folders")
+    expect(before?.closest("div.absolute")).not.toBeNull()
+    expect(before).toHaveAttribute("aria-expanded", "true")
+
+    act(() => fireEvent.click(before!))
+    // 段落折叠：该段正文行消失，但段落浮层仍在，展开状态切换到 false。
+    expect(headerCount(1)).toBe(0)
+    const collapsed = accessibleTitle("Folders")
+    expect(collapsed?.closest("div.absolute")).not.toBeNull()
+    expect(collapsed).toHaveAttribute("aria-expanded", "false")
+    // 段落折叠不触发文件夹浮层那种「回滚到标题」的 scrollToIndex。
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+
+    act(() => fireEvent.click(collapsed!))
+    // 再次点击恢复展开，正文行回来，仍无新增滚动。
+    expect(headerCount(1)).toBe(1)
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "true")
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it("文件夹浮层保留折叠后定位，段落浮层点击不触发滚动", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 130 // 文件夹 2 浮层可见
+    renderSticky()
+
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    try {
+      const folderHeaders = document.querySelectorAll('[data-folder-id="2"]')
+      expect(folderHeaders).toHaveLength(2)
+      // 文件夹浮层点击仍走既有路径：折叠后定位到文件夹标题（扁平索引 4）。
+      act(() => fireEvent.click(folderHeaders[1] as HTMLElement))
+      expect(virtuaCtl.scrollToIndex).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({ align: "start" })
+      )
+
+      // 段落浮层不接同一条回调链：只切换展开状态，不调用 scrollToIndex。
+      virtuaCtl.scrollToIndex.mockClear()
+      act(() => {
+        virtuaCtl.scrollOffset = 20
+        virtuaCtl.onScroll?.(20)
+      })
+      const sectionTitle = accessibleTitle("Folders")
+      expect(sectionTitle?.closest("div.absolute")).not.toBeNull()
+      act(() => fireEvent.click(sectionTitle!))
+      expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("文件夹段落浮层保留四个操作按钮", () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 40
+    renderSticky()
+
+    const overlay = sectionOverlayOf("Folders")
+    expect(overlay).not.toBeNull()
+    const labels = [
+      "New group",
+      "Import local sessions",
+      "Clone Repository",
+      "Open Folder",
+    ]
+    for (const label of labels) {
+      // 浮层与真实行各有一个按钮，但只有浮层副本不在 aria-hidden 子树里。
+      const all = screen.getAllByLabelText(label)
+      expect(all).toHaveLength(2)
+      expect(
+        all.filter((el) => el.closest('[aria-hidden="true"]') !== null)
+      ).toHaveLength(1)
+      expect(within(overlay!).getByLabelText(label)).toBeInTheDocument()
+      expect(screen.getAllByRole("button", { name: label })).toHaveLength(1)
+    }
+
+    // 依次点击四个按钮，断言各自走现有处理链路。新建分组放在最后，避免模态
+    // 对话框把列表从可访问树里隐藏后影响前面的按钮查询。
+    act(() =>
+      fireEvent.click(within(overlay!).getByLabelText("Import local sessions"))
+    )
+    expect(apiCtl.openImportSessionsWindow).toHaveBeenCalledTimes(1)
+    act(() =>
+      fireEvent.click(within(overlay!).getByLabelText("Clone Repository"))
+    )
+    expect(dialogCtl.cloneOpen).toBe(true)
+    act(() => fireEvent.click(within(overlay!).getByLabelText("Open Folder")))
+    expect(dialogCtl.browserOpen).toBe(true)
+    act(() => fireEvent.click(within(overlay!).getByLabelText("New group")))
+    expect(
+      screen.getByText(enMessages.Folder.sidebar.folderGroup.newGroupTitle)
+    ).toBeInTheDocument()
+
+    // 四个按钮都是切换按钮的兄弟节点：段落展开状态与持久化都没有变化。
+    expect(
+      localStorage.getItem("workspace:sidebar-section-collapsed")
+    ).toBeNull()
+    // 模态对话框会把列表从可访问树上隐藏，因此这里直接按浮层节点取标题。
+    const overlayTitle = Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === "Folders" &&
+        button.closest("div.absolute") !== null
+    )
+    expect(overlayTitle).toHaveAttribute("aria-expanded", "true")
+  })
+
+  it("聊天和最近浮层保留新建与过滤操作", async () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    renderSticky()
+
+    // 聊天段落浮层：保留新建聊天入口。
+    const chatsIndex = virtuaCtl.rowSections.findIndex((s) => s === "chats")
+    await scrollToOffset(virtuaCtl.offsetFor(chatsIndex) + 20)
+    const chatsOverlay = sectionOverlayOf("Chat")
+    expect(chatsOverlay).not.toBeNull()
+    expect(within(chatsOverlay!).getByLabelText("New chat")).toBeInTheDocument()
+
+    // 最近段落浮层：保留新建会话入口与过滤菜单。
+    const recentIndex = virtuaCtl.rowSections.findIndex((s) => s === "recent")
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 20)
+    const recentOverlay = sectionOverlayOf("Recent")
+    expect(recentOverlay).not.toBeNull()
+    expect(
+      within(recentOverlay!).getByLabelText("New Conversation")
+    ).toBeInTheDocument()
+    const trigger = within(recentOverlay!).getByLabelText("Show in Recent: All")
+
+    // 从浮层菜单选择 Chat：走既有过滤回调与持久化，浮层保持在原位。
+    await settleMenu()
+    pressMenu(trigger)
+    await settleMenu()
+    const option = Array.from(
+      document.querySelectorAll('[role="menuitemradio"]')
+    ).find((el) => el.textContent === "Chat")
+    expect(option).toBeDefined()
+    pressMenu(option!)
+    await settleMenu()
+    expect(localStorage.getItem("workspace:sidebar-recent-filter")).toBe(
+      "chats"
+    )
+    const nextOverlay = sectionOverlayOf("Recent")
+    expect(nextOverlay).not.toBeNull()
+    expect(
+      within(nextOverlay!).getByLabelText("Show in Recent: Chat")
+    ).toBeInTheDocument()
+  })
+
+  it("浮层标题可通过键盘激活并保留无障碍状态", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    virtuaCtl.scrollOffset = 20
+    renderSticky()
+
+    // 浮层出现时，真实行 inert + aria-hidden，浮层是唯一可访问入口。
+    const realTitle = Array.from(document.querySelectorAll("button")).find(
+      (button) =>
+        button.textContent === "Folders" &&
+        button.closest('[aria-hidden="true"]') !== null
+    )
+    expect(realTitle).toBeDefined()
+    expect(realTitle?.closest("[inert]")).not.toBeNull()
+    expect(screen.getAllByRole("button", { name: "Folders" })).toHaveLength(1)
+
+    const overlayTitle = accessibleTitle("Folders")!
+    overlayTitle.focus()
+    expect(overlayTitle).toHaveFocus()
+    await user.keyboard("{Enter}")
+    // 键盘激活与鼠标点击得到相同的折叠状态。
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "false")
+    expect(headerCount(1)).toBe(0)
+    expect(screen.getAllByRole("button", { name: "Folders" })).toHaveLength(1)
+
+    accessibleTitle("Folders")!.focus()
+    await user.keyboard("{Enter}")
+    expect(accessibleTitle("Folders")).toHaveAttribute("aria-expanded", "true")
+    expect(headerCount(1)).toBe(1)
+  })
+
+  it("最近隐藏时不参与段落候选", async () => {
+    virtuaCtl.itemSizes = Array(30).fill(32)
+    const view = renderSticky(false)
+    expect(virtuaCtl.rowSections).not.toContain("recent")
+    expect(screen.queryByText("Recent")).toBeNull()
+
+    // 滚到底部也不会凭空出现最近浮层。
+    await scrollToOffset(virtuaCtl.offsetFor(virtuaCtl.rowKinds.length - 1))
+    expect(screen.queryByText("Recent")).toBeNull()
+
+    // 重新开启后按真实行恢复：段落候选集合与浮层都回来。
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted sortMode="created" showRecent />
+      </NextIntlClientProvider>
+    )
+    expect(virtuaCtl.rowSections).toContain("recent")
+    const recentIndex = virtuaCtl.rowSections.findIndex((s) => s === "recent")
+    await scrollToOffset(virtuaCtl.offsetFor(recentIndex) + 20)
+    // 真实行（已抑制）与浮层副本各一份，可访问入口只有一个。
+    expect(screen.getAllByText("Recent")).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: "Recent" })).toHaveLength(1)
+  })
+
+  it("浮层是滚动区域兄弟节点且不改变底部边界", () => {
+    virtuaCtl.itemSizes = [44, 32, 32]
+    virtuaCtl.scrollOffset = 60 // 段落浮层与文件夹 1 浮层同时可见
+    renderSticky()
+
+    const scrollArea = document.querySelector(
+      "[data-sidebar-scroll-area]"
+    ) as HTMLElement
+    const content = document.querySelector(
+      "[data-virtua-content]"
+    ) as HTMLElement
+    const sectionOverlay = sectionOverlayOf("Folders")
+    const folderOverlay = Array.from(
+      document.querySelectorAll('[data-folder-id="1"]')
+    )[1]?.closest("div.absolute") as HTMLElement | null
+    expect(sectionOverlay).not.toBeNull()
+    expect(folderOverlay).not.toBeNull()
+
+    // 浮层不在虚拟列表内容流里，只作为 ScrollArea 的兄弟覆盖节点存在。
+    expect(content.contains(sectionOverlay)).toBe(false)
+    expect(content.contains(folderOverlay)).toBe(false)
+    expect(scrollArea.contains(sectionOverlay)).toBe(false)
+    expect(sectionOverlay!.parentElement).toBe(scrollArea.parentElement)
+    expect(folderOverlay!.parentElement).toBe(scrollArea.parentElement)
+
+    // 滚动区域的内边距没有为吸顶新增顶部占位。
+    expect(scrollArea.className).toContain("pb-1.5")
+    expect(scrollArea.className).not.toMatch(/(^|\s)pt-/)
+    expect(scrollArea.className).not.toMatch(/(^|\s)py-/)
+
+    // 底部边界：虚拟列表总滚动高度等于受控行高总和，浮层出现也不改变。
+    const expectedScrollSize = virtuaCtl.rowKinds.reduce(
+      (total, _, index) => total + virtuaCtl.sizeFor(index),
+      0
+    )
+    expect(virtuaCtl.handle?.scrollSize).toBe(expectedScrollSize)
+  })
+
   it("hides the overlay at the top of the list", () => {
     virtuaCtl.scrollOffset = 0
     render(tree())
@@ -1199,6 +1542,46 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
       ).toHaveLength(0)
       expect(headerCount(1)).toBe(1)
       act(() => firePointer(window, "pointercancel", { clientY: 120 }))
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it("拖拽开始时同时隐藏两个浮层，取消后按当前位置恢复", () => {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        top: 0,
+        bottom: 600,
+        left: 0,
+        right: 200,
+        width: 200,
+        height: 600,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect)
+    try {
+      virtuaCtl.itemSizes = Array(30).fill(32)
+      virtuaCtl.scrollOffset = 40 // 段落浮层与文件夹 1 浮层同时可见
+      renderSticky()
+      expect(sectionOverlayOf("Folders")).not.toBeNull()
+      expect(headerCount(1)).toBe(2)
+
+      // 拖拽非当前吸顶的文件夹 2（文件夹 1 的真实行已被浮层抑制）。
+      const grip = (
+        document.querySelector('[data-folder-id="2"]') as HTMLElement
+      ).parentElement as HTMLElement
+      act(() => firePointer(grip, "pointerdown", { clientY: 100 }))
+      act(() => firePointer(window, "pointermove", { clientY: 120 }))
+      // 拖拽面替代虚拟列表期间，两个浮层都不渲染。
+      expect(sectionOverlayOf("Folders")).toBeNull()
+      expect(headerCount(1)).toBe(1)
+
+      act(() => firePointer(window, "pointercancel", { clientY: 120 }))
+      // 取消拖拽后按当前滚动位置恢复两个浮层。
+      expect(sectionOverlayOf("Folders")).not.toBeNull()
+      expect(headerCount(1)).toBe(2)
     } finally {
       rectSpy.mockRestore()
     }
