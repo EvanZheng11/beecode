@@ -29,30 +29,31 @@
 
 ## 2. 吸顶栈行为定义
 
-候选行：**所有 `kind === "section"` 的行**（`sectionOrder` 决定「文件夹 / 聊天 / 最近」的先后；「置顶」存在时恒在最上，它与其余段落是同一类行，同样吸顶，不硬编码三个）。同一时刻最多一个段落标题吸顶。
+候选行：**所有 `kind === "section"` 的行**（`sectionOrder` 决定「文件夹 / 聊天 / 最近」的先后；「置顶」存在时恒在最上，它与其余段落是同一类行，同样吸顶，不硬编码三个）。组件按 `rows` 的真实顺序维护已进入槽位的 section 栈，前面已经触顶的标题持续保留，后来的标题追加到栈尾。
 
-设某段落标题行的真实边框盒顶部为 `rowTop`，其内部标题条（`h-[2rem]`）顶部为 `barTop`，条高为 `barHeight`：
+设某段落标题行的真实边框盒顶部为 `rowTop`，其内部标题条（`h-[2rem]`）顶部为 `barTop`，条高为 `barHeight`。第 `n` 个栈槽的顶部是此前所有已吸顶标题高度之和；末尾尚未入栈的标题接近其槽位时，只推顶当前栈末项，前项槽位和浮层都保持不变：
 
 | 场景 | 行为 |
 | --- | --- |
-| 标题条尚未滚出视口顶部（`scrollOffset <= barTop`） | 不显示浮层，真实标题行就是交互目标 |
-| 标题条已滚出（`scrollOffset > barTop`），且下一个段落标题条距顶部超过一条高 | 浮层固定在视口顶部（`translateY = 0`）；真实行若仍在缓冲区（未卸载）则保持挂载但 `inert`，避免“双影 + 双 tab” |
-| 下一个段落标题条进入「距顶部不足一条高」的范围 | 浮层被推顶：`translateY = 下一个标题条相对顶部位置 - 条高`（负值，上限 0，取整到像素）；下一个标题完全到位后浮层让位，归属切到新段落 |
+| 标题条尚未到达自己的槽位 | 不追加浮层，真实标题行就是交互目标 |
+| 标题条越过自己的槽位 | 将该 section 追加到有序栈，在自己的槽位渲染一个可访问浮层；对应真实行若仍在缓冲区则 `inert`，避免“双影 + 双 tab” |
+| 栈后的下一个标题接近栈末槽位 | 只对当前栈末浮层应用负的 `translateY` 推顶，已经入栈的前项不删除、不替换 |
 | 段落已折叠（`expanded === false`） | 标题仍吸顶（折叠后该段只剩标题行）；点击浮层标题可重新展开 |
-| 段落为空 / 当前段落无内容 | 与有内容一致：标题吸顶，直到下一个标题推顶 |
-| 最后一个段落 | `next` 为空，浮层一直吸顶；不追加任何底部位移 |
-| 拖拽排序进行中 | 两个吸顶层都隐藏（拖拽面没有段落行，吸顶会误导；沿用现有文件夹浮层的处理） |
+| 段落为空 / 当前段落无内容 | 与有内容一致：标题吸顶，直到下一个标题进入自己的槽位 |
+| 最后一个段落 | 没有下一个标题时，当前栈保持已有槽位；不追加任何底部位移 |
+| 拖拽排序进行中 | 整个 section 栈与文件夹浮层都清空（拖拽面没有虚拟列表行，旧几何不可用） |
 
 文件夹吸顶层的叠加规则：
 
 - 折叠后的段落顺序与「最近」的显示开关（`showRecent`）只影响候选行集合，计算逻辑不感知具体段落名；
-- 当段落浮层可见时，文件夹吸顶层的基准位置 = 段落条高（`barHeight`），即紧贴段落标题下沿；
-- 当段落浮层被下一个段落标题推顶（`translateY` 变负）时，文件夹浮层跟随同一位移一起上移，保持「紧贴段落标题下沿」；同一时刻不会有文件夹交接与段落交接冲突（段落交界处其后没有同段文件夹标题）；
-- 文件夹浮层自身的交接仍由下一个文件夹标题触发，但推顶下限是它自己的槽位（第 4 节的 `inset`）；在槽位中上滑到完全被段落条遮住后，真实文件夹标题接管。
+- 文件夹吸顶层的基准位置是当前 section 栈所有浮层真实条高的总和，即 `sectionStackHeight`，始终位于全部 section 浮层下方；
+- 栈末 section 被下一个标题推顶时，文件夹层仍使用同一个总 inset，section 前项继续保持各自槽位，文件夹浮层只在自己的文件夹交接规则下推顶；
+- 文件夹浮层自身的交接仍由下一个文件夹标题触发，推顶下限是 `sectionStackHeight`，真实文件夹标题接管时不覆盖 section 浮层。
 
 ## 3. virtua 虚拟化约束
 
-- 两个浮层都绝对定位在与 `ScrollArea` 同一个 `relative` 包裹层内（现有文件夹浮层的位置），**不在** `Virtualizer` 的内容流里：不改变 `scrollSize`、行偏移与 `findItemIndex`，因此不必调整 `itemSize={32}` / `bufferSize={400}` / `scrollRef` / `onScroll`。
+- section 浮层按 `sectionOrder` 的实际 rows 顺序组成有序栈，每个 section 独立保存自己的槽位和 DOM ref；文件夹浮层使用所有 section 条高之和作为总 inset。
+- section 与文件夹浮层都绝对定位在与 `ScrollArea` 同一个 `relative` 包裹层内，**不在** `Virtualizer` 的内容流里：不改变 `scrollSize`、行偏移与 `findItemIndex`，因此不必调整 `itemSize={32}` / `bufferSize={400}` / `scrollRef` / `onScroll`。
 - 行高不等：段落标题行 `pt-[0.75rem] + h-[2rem]`（100% 缩放时为 44px），其余行为 32px 或由卡片自身决定。virtua 已用 ResizeObserver 实测每一行的尺寸，几何计算必须从句柄读取：
   - `handle.getItemOffset(i)`：行顶部（用于计算 `rowTop`）；
   - `handle.getItemSize(i)`：实测行高（文件夹行的实测值就是条高，现有文件夹逻辑沿用；段落条高用第 4 节的常量，避免把 12px 顶隙算进条高）；
@@ -101,24 +102,19 @@ const rowTop = (i: number) => handle.getItemOffset(i)
 const barTop = (i: number) => rowTop(i) + (rows[i].kind === "section" ? SECTION_TOP_GAP : 0)
 ```
 
-`recomputeSticky` 里的顺序：
+`recomputeSticky` 的顺序：
 
-1. `sectionIdx = sectionIndex[Math.max(0, Math.min(rows.length - 1, handle.findItemIndex(handle.scrollOffset)))]`；若 `< 0`（理论上不会——首行是段落行），段落浮层置空。
-2. `nextSectionIdx = nextHeaderAfter(sectionFlatIndices, sectionIdx)`（复用现有「严格大于」的查找）。
-3. `sectionState = computeStickyState({ scrollOffset, activeHeaderOffset: barTop(sectionIdx), nextHeaderOffset: nextSectionIdx == null ? null : barTop(nextSectionIdx), headerHeight: SECTION_BAR_HEIGHT })`。
-4. 文件夹侧：沿用现有归属 / 下一个文件夹标题的解析；`folderInset = sectionState.visible ? SECTION_BAR_HEIGHT : 0`；文件夹条自身 `translateY_f = computeStickyState({ ..., headerHeight: rowHeight, inset: folderInset })`；最终写入文件夹浮层的 `transform`：
-
-```text
-folderTotalY = sectionState.translateY + folderInset + folderState.translateY
-```
-
-5. 注意现有 `recomputeSticky` 在「没有任何文件夹行」时提前 return，会连带跳过段落计算——实施时必须把段落计算提到最前，文件夹部分的早退只清文件夹状态。
+1. `handle` 缺失、空 rows 或拖拽时，同时清空 section 栈和文件夹状态，并重置所有 section ref 与文件夹浮层的 transform。
+2. 按 `sectionFlatIndices` 升序扫描实际 rows。对第 `n` 个候选标题，用前面已入栈标题的真实条高总和作为槽位 inset；标题越过槽位后追加到 `stickySections`。扫描停止在第一个尚未入栈标题，因此栈中前项不会被后项替换。
+3. 将栈中每个 section 的浮层写入 `slotTop + 末项推顶`。只有栈末项根据下一个标题计算推顶位移；其余浮层保持自己的槽位。每个真实 section 行按 `stickySections.includes(row.section)` 独立设置抑制状态。
+4. 文件夹侧沿用现有归属与下一个文件夹标题解析；`sectionStackHeight` 是所有 section 条高之和，作为文件夹 `computeStickyState` 的总 `inset`，最终 transform 为 `sectionStackHeight + folderState.translateY`。
+5. 没有文件夹行时只清空文件夹状态，不影响已经计算出的 section 栈。
 
 浮层 DOM（`transform` 只写 style，不参与 React 重渲染路径）：
 
-- 段落浮层：`absolute left-0 right-0 top-0`，`translateY(sectionState.translateY)`；只渲染标题「条」，**不带顶隙**（`topGap={false}`），否则置顶时顶部会露出 12px 透明缝，透出下方滚动的行；底色 `bg-sidebar` 与下方行一致，负责遮挡。
-- 文件夹浮层：保持现有节点与 `overlayRef`，仅 `transform` 改为 `folderTotalY`。
-- z 序与 DOM 顺序：文件夹浮层先渲染，段落浮层后渲染（或段落 `z-index` 更高），保证交接时文件夹条滑到段落条下方被遮住；视觉从上到下 = 段落条 → 文件夹条。
+- section 浮层按栈顺序各自使用 `absolute left-0 right-0 top-0`，不带顶隙（`topGap={false}`），底色 `bg-sidebar`；
+- 文件夹浮层保持现有节点与 `overlayRef`，位于所有 section 槽位下方；
+- 文件夹浮层先渲染，section 浮层后渲染并使用更高 z-index，保证 section 条覆盖交接中的文件夹条；所有浮层都不进入 Virtualizer 内容流。
 
 ## 5. 吸顶层与原始节点的交互 / 无障碍
 
@@ -148,6 +144,7 @@ folderTotalY = sectionState.translateY + folderInset + folderState.translateY
 
 - `sectionHeaderFlatIndices`：含 `pinned` 与自定义 `sectionOrder` 的行数组，返回升序索引；空数组返回 `[]`。
 - `buildSectionHeaderIndex`：段落行之间（含 `folders-empty` / `chats-empty` / `recent-*`）的每个索引归属正确；遇到新段落切换。
+- 组件累计验收：按 `chats → folders → recent` 排列，聊天 10 条、文件夹 15 行、最近 10 条，视口 20 行滚到底部时，section 栈同时保留聊天标题和文件夹标题；实际列表内容为文件夹剩 7 行、最近标题和最近 10 条，合计 `2 + 7 + 1 + 10 = 20` 行。
 - `computeStickyState` 扩展：
   - `inset = 0` 时逐条复跑现有用例（`visible` 阈值、推顶区间、`nextHeaderOffset = null`、`d < 0` 保护），确保文件夹行为零回归；
   - `inset = 32`：推顶开始得更早（`d < inset + headerHeight`）、`translateY = d - inset - headerHeight`、取整；
@@ -162,14 +159,14 @@ folderTotalY = sectionState.translateY + folderInset + folderState.translateY
 必测行为：
 
 1. 列表顶部：不渲染段落浮层，真实标题唯一且可聚焦；
-2. 滚进「文件夹」正文：出现「文件夹」浮层；真实行 `inert` + `aria-hidden`，浮层副本 `aria-expanded` 正确；
-3. 继续滚进「聊天」：文件夹浮层消失（现有行为保持），「聊天」浮层出现；「最近」同理；
+2. 滚进「文件夹」正文：出现「文件夹」浮层；真实行 `inert` + `aria-hidden`，浮层副本 `aria-expanded` 正确；继续滚动时此前 section 浮层仍保留在各自槽位；
+3. 继续滚进「聊天」：在聊天浮层追加到已有 section 栈，文件夹浮层仍位于全部 section 槽位下方；滚进「最近」后同样累计保留此前标题；
 4. 自定义段落顺序（如聊天在前）：吸顶跟随实际顺序，不硬编码；
 5. 交接：下一个段落标题进入一条高以内时，断言浮层 `style.transform` 等于 `translateY(d - barHeight)`；完全到位后归属切换；
 6. 与文件夹浮层叠加：`Folder 1` 的浮层出现在段落条下方（总位移 = 段落位移 + 32），下一个文件夹标题推顶时两者不重叠；滚到段落交界时段落与文件夹一起上移；
 7. 展开 / 收起：点击浮层标题折叠该段（正文行消失、浮层仍在、`aria-expanded=false`），再点展开；不触发额外 `scrollToIndex`；
 8. 4 个文件夹按钮：浮层中 `新建分组 / 导入 / 克隆 / 打开文件夹` 各存在一次且点击调用对应 spy；「最近」浮层存在过滤菜单与新会话按钮；
-9. 拖拽开始：两个浮层（若显示）立即消失；
+9. 拖拽开始：section 栈和文件夹浮层全部立即消失；
 10. 底部边界：浮层是 `ScrollArea` 的兄弟节点而非内容节点（断言浮层节点不是虚拟列表内容容器后代），且列表内容无新增上下 padding。
 
 真机手动 QA（jsdom 无布局，virtua 真实窗口化必须手测）：大列表快速滚动时浮层的跟手度、缩放 125% 下的条高与推顶、触屏 hover 常显、macOS 弹性滚动到顶 / 到底。
@@ -185,7 +182,7 @@ pnpm build
 ## 9. 不做的范围
 
 - 不调整 virtua 参数、不换成手写虚拟化、不做动态 `itemSize` 估算；
-- 不改文件夹吸顶的归属 / 交接语义（只在总位移上叠加段落层）；
+- 不改文件夹吸顶的归属 / 交接语义（文件夹层使用 section 栈总高度作为 inset）；
 - 不加吸顶过渡动画 / 弹簧动效，保持现有「整数像素、无 transition」的浮层写法；
 - 不改段落顺序、折叠状态的持久化格式与 i18n 文案；
 - 不改 `scrollToActive`、拖拽排序、`recent-more` 分页；

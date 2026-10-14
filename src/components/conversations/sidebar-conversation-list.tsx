@@ -111,7 +111,6 @@ import {
   buildDragSlots,
   buildOwnerHeaderIndex,
   buildRows,
-  buildSectionHeaderIndex,
   buildSidebarLayout,
   EMPTY_SIDEBAR_LAYOUT,
   layoutFolderIds,
@@ -1139,14 +1138,13 @@ export function SidebarConversationList({
   const [dragLayout, setDragLayout] = useState<SidebarLayout | null>(null)
   const pendingLayoutRef = useRef<SidebarLayout | null>(null)
 
-  // 浮动文件夹标题。`stickyFolderId` 只在滚动跨过文件夹时改变；每帧的推顶位移
-  // 直接写入节点，避免状态更新进入卡片和标题的 memo 路径。
+  // 浮动标题按自然段落顺序累计堆叠；每个 section 都有自己的可访问浮层。
+  const [stickySections, setStickySections] = useState<SidebarSectionKey[]>([])
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
-  const [stickySection, setStickySection] = useState<SidebarSectionKey | null>(
-    null
-  )
   const overlayRef = useRef<HTMLDivElement>(null)
-  const sectionOverlayRef = useRef<HTMLDivElement>(null)
+  const sectionOverlayRefs = useRef(
+    new Map<SidebarSectionKey, HTMLDivElement>()
+  )
   const stickyRafRef = useRef<number | null>(null)
   const zoomLevelRef = useRef(zoomLevel)
   zoomLevelRef.current = zoomLevel
@@ -1638,10 +1636,6 @@ export function SidebarConversationList({
   // they have zero effect on the card/header memo path.
   const ownerHeaderIndex = useMemo(() => buildOwnerHeaderIndex(rows), [rows])
   const headerFlatIndices = useMemo(() => folderHeaderFlatIndices(rows), [rows])
-  const sectionHeaderIndex = useMemo(
-    () => buildSectionHeaderIndex(rows),
-    [rows]
-  )
   const sectionFlatIndices = useMemo(
     () => sectionHeaderFlatIndices(rows),
     [rows]
@@ -1650,8 +1644,6 @@ export function SidebarConversationList({
   ownerHeaderIndexRef.current = ownerHeaderIndex
   const headerFlatIndicesRef = useRef(headerFlatIndices)
   headerFlatIndicesRef.current = headerFlatIndices
-  const sectionHeaderIndexRef = useRef(sectionHeaderIndex)
-  sectionHeaderIndexRef.current = sectionHeaderIndex
   const sectionFlatIndicesRef = useRef(sectionFlatIndices)
   sectionFlatIndicesRef.current = sectionFlatIndices
 
@@ -1962,10 +1954,10 @@ export function SidebarConversationList({
     const handle = virtualizerRef.current
     const currentRows = rowsRef.current
     const reset = () => {
-      setStickySection((prev) => (prev === null ? prev : null))
+      setStickySections((prev) => (prev.length === 0 ? prev : []))
       setStickyFolderId((prev) => (prev === null ? prev : null))
-      if (sectionOverlayRef.current) {
-        sectionOverlayRef.current.style.transform = "translateY(0px)"
+      for (const overlay of sectionOverlayRefs.current.values()) {
+        overlay.style.transform = "translateY(0px)"
       }
       if (overlayRef.current) {
         overlayRef.current.style.transform = "translateY(0px)"
@@ -1981,35 +1973,69 @@ export function SidebarConversationList({
       0,
       Math.min(currentRows.length - 1, handle.findItemIndex(scrollOffset))
     )
-    const sectionIdx = sectionHeaderIndexRef.current[topIndex]
-    if (sectionIdx < 0) {
-      reset()
-      return
-    }
-
     const remPx = (16 * zoomLevelRef.current) / 100
     const sectionTopGap = 0.75 * remPx
-    const sectionBarHeight = 2 * remPx
     const barTop = (index: number) =>
       handle.getItemOffset(index) +
       (currentRows[index]?.kind === "section" ? sectionTopGap : 0)
-    const sectionIndices = sectionFlatIndicesRef.current
-    const nextSectionIdx = nextHeaderAfter(sectionIndices, sectionIdx)
-    const sectionState = computeStickyState({
-      scrollOffset,
-      activeHeaderOffset: barTop(sectionIdx),
-      nextHeaderOffset: nextSectionIdx == null ? null : barTop(nextSectionIdx),
-      headerHeight: sectionBarHeight,
-    })
-    if (sectionOverlayRef.current) {
-      sectionOverlayRef.current.style.transform = `translateY(${sectionState.translateY}px)`
+    const defaultSectionBarHeight = 2 * remPx
+    const sectionBarHeightAt = (index: number) => {
+      const measuredBarHeight = handle.getItemSize(index) - sectionTopGap
+      return measuredBarHeight >= defaultSectionBarHeight
+        ? measuredBarHeight
+        : defaultSectionBarHeight
     }
-    const sectionRow = currentRows[sectionIdx]
-    const nextSection =
-      sectionState.visible && sectionRow.kind === "section"
-        ? sectionRow.section
-        : null
-    setStickySection((prev) => (prev === nextSection ? prev : nextSection))
+    const sectionIndices = sectionFlatIndicesRef.current
+
+    // 标题越过自己的累计槽位才入栈；反向滚动和行数据变化都从实际位置重算。
+    const stickySectionEntries: Array<{ index: number; height: number }> = []
+    let sectionStackHeight = 0
+    for (const index of sectionIndices) {
+      if (scrollOffset + sectionStackHeight <= barTop(index)) break
+      const height = sectionBarHeightAt(index)
+      stickySectionEntries.push({ index, height })
+      sectionStackHeight += height
+    }
+    const nextSectionIndex = sectionIndices[stickySectionEntries.length]
+
+    for (const overlay of sectionOverlayRefs.current.values()) {
+      overlay.style.transform = "translateY(0px)"
+    }
+    if (stickySectionEntries.length > 0) {
+      const lastEntry = stickySectionEntries[stickySectionEntries.length - 1]
+      const previousStackHeight = sectionStackHeight - lastEntry.height
+      const lastSectionState = computeStickyState({
+        scrollOffset,
+        activeHeaderOffset: barTop(lastEntry.index),
+        nextHeaderOffset:
+          nextSectionIndex == null ? null : barTop(nextSectionIndex),
+        headerHeight: lastEntry.height,
+        inset: previousStackHeight,
+      })
+      let slotTop = 0
+      for (const entry of stickySectionEntries) {
+        const row = currentRows[entry.index]
+        if (row.kind !== "section") continue
+        const overlay = sectionOverlayRefs.current.get(row.section)
+        if (overlay) {
+          const translateY =
+            slotTop +
+            (entry.index === lastEntry.index ? lastSectionState.translateY : 0)
+          overlay.style.transform = `translateY(${translateY}px)`
+        }
+        slotTop += entry.height
+      }
+    }
+    const nextSections = stickySectionEntries.flatMap(({ index }) => {
+      const row = currentRows[index]
+      return row.kind === "section" ? [row.section] : []
+    })
+    setStickySections((prev) =>
+      prev.length === nextSections.length &&
+      prev.every((section, index) => section === nextSections[index])
+        ? prev
+        : nextSections
+    )
 
     const activeHeaderIndex = ownerHeaderIndexRef.current[topIndex]
     if (activeHeaderIndex < 0) {
@@ -2021,19 +2047,16 @@ export function SidebarConversationList({
     }
     const headers = headerFlatIndicesRef.current
     const nextHeaderIndex = nextHeaderAfter(headers, activeHeaderIndex)
-    const folderInset = sectionState.visible ? sectionBarHeight : 0
     const folderState = computeStickyState({
       scrollOffset,
       activeHeaderOffset: handle.getItemOffset(activeHeaderIndex),
       nextHeaderOffset:
         nextHeaderIndex == null ? null : handle.getItemOffset(nextHeaderIndex),
       headerHeight: handle.getItemSize(activeHeaderIndex) || 32,
-      inset: folderInset,
+      inset: sectionStackHeight,
     })
     if (overlayRef.current) {
-      const folderTotalY =
-        sectionState.translateY + folderInset + folderState.translateY
-      overlayRef.current.style.transform = `translateY(${folderTotalY}px)`
+      overlayRef.current.style.transform = `translateY(${sectionStackHeight + folderState.translateY}px)`
     }
     const activeRow = currentRows[activeHeaderIndex]
     const nextFolderId =
@@ -2085,7 +2108,7 @@ export function SidebarConversationList({
     folderExpanded,
     viewportEl,
     dragging,
-    stickySection,
+    stickySections,
     stickyFolderId,
     zoomLevel,
     recomputeSticky,
@@ -2851,8 +2874,7 @@ export function SidebarConversationList({
   // 段落标题的唯一构建器：真实行与段落浮层共用同一批 props 和回调，
   // 保证浮层副本与真实行行为一致（折叠、新建、四个文件夹操作、最近过滤）。
   // 默认真实行：带顶部空隙（与上方段落拉开距离）；浮层传 `topGap: false`，
-  // 否则置顶时顶部会露出 12px 透明缝。`suppressed` 目前仅在段落浮层可见时
-  // 由任务 3 的吸顶状态传入。
+  // 否则置顶时顶部会露出 12px 透明缝；真实行按当前累计栈逐个抑制。
   const sectionHeaderElement = (
     row: SectionHeaderRow,
     {
@@ -2917,7 +2939,7 @@ export function SidebarConversationList({
       // (Pinned, or Folders when nothing is pinned) the same breathing room
       // below that region instead of butting right up against it.
       return sectionHeaderElement(row, {
-        suppressed: stickySection === row.section,
+        suppressed: stickySections.includes(row.section),
       })
     }
     if (row.kind === "folder-group") {
@@ -3201,13 +3223,13 @@ export function SidebarConversationList({
     return `${prefix}conv-${row.conversation.agent_type}-${row.conversation.id}`
   }
 
-  const stickySectionRow =
-    stickySection === null
-      ? null
-      : (rows.find(
-          (row): row is SectionHeaderRow =>
-            row.kind === "section" && row.section === stickySection
-        ) ?? null)
+  const stickySectionRows = stickySections.flatMap((section) => {
+    const row = rows.find(
+      (candidate): candidate is SectionHeaderRow =>
+        candidate.kind === "section" && candidate.section === section
+    )
+    return row ? [row] : []
+  })
 
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
@@ -3408,6 +3430,7 @@ export function SidebarConversationList({
               {stickyFolderId !== null && !dragging && (
                 <div
                   ref={overlayRef}
+                  data-sticky-folder={stickyFolderId}
                   className={cn(
                     "pointer-events-none absolute left-0 right-0 top-0 z-10",
                     "px-1.5 [--conv-rail-axis:0.875rem]"
@@ -3423,22 +3446,38 @@ export function SidebarConversationList({
                   </div>
                 </div>
               )}
-              {stickySectionRow !== null && !dragging && (
-                <div
-                  ref={sectionOverlayRef}
-                  className={cn(
-                    "pointer-events-none absolute left-0 right-0 top-0 z-20",
-                    "px-1.5 [--conv-rail-axis:0.875rem]"
-                  )}
-                  style={{ willChange: "transform" }}
-                >
-                  <div className="pointer-events-auto bg-sidebar">
-                    {sectionHeaderElement(stickySectionRow, {
-                      topGap: false,
-                    })}
+              {stickySectionRows.length > 0 &&
+                !dragging &&
+                stickySectionRows.map((sectionRow) => (
+                  <div
+                    key={sectionRow.section}
+                    data-sticky-section={sectionRow.section}
+                    ref={(node) => {
+                      if (node) {
+                        sectionOverlayRefs.current.set(sectionRow.section, node)
+                      } else {
+                        sectionOverlayRefs.current.delete(sectionRow.section)
+                      }
+                    }}
+                    className={cn(
+                      "pointer-events-none absolute left-0 right-0 top-0 z-20",
+                      "px-1.5 [--conv-rail-axis:0.875rem]"
+                    )}
+                    style={{
+                      willChange: "transform",
+                      zIndex:
+                        20 +
+                        stickySectionRows.length -
+                        stickySectionRows.indexOf(sectionRow),
+                    }}
+                  >
+                    <div className="pointer-events-auto bg-sidebar">
+                      {sectionHeaderElement(sectionRow, {
+                        topGap: false,
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
