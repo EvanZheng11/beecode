@@ -824,6 +824,26 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
         Object.fromEntries(folders.map((item) => [item.id, false]))
       )
     )
+
+    // 行序与行高独立构造：3 个标题行 + 10 聊天 + 15 文件夹 + 10 最近 = 38 行；
+    // 段落行按生产实测 44px（pt-[0.75rem] + 32px 条高），其余 32px。期望滚动
+    // 总高直接由这个数组求和，不读取 mock 记录的行。
+    const expectedKinds = [
+      "section",
+      ...Array(10).fill("conversation"),
+      "section",
+      ...Array(15).fill("folder"),
+      "section",
+      ...Array(10).fill("conversation"),
+    ]
+    const expectedSizes = expectedKinds.map((kind) =>
+      kind === "section" ? 44 : 32
+    )
+    const expectedScrollSize = expectedSizes.reduce(
+      (total, size) => total + size,
+      0
+    )
+    virtuaCtl.itemSizes = expectedSizes
     virtuaCtl.viewportSize = 20 * 32
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -835,41 +855,172 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
         />
       </NextIntlClientProvider>
     )
-    expect(virtuaCtl.rowKinds).toHaveLength(38)
-    expect(virtuaCtl.rowSections.filter(Boolean)).toEqual([
-      "chats",
-      "folders",
-      "recent",
-    ])
-    expect(virtuaCtl.rowKinds.slice(1, 11)).toEqual(
-      Array(10).fill("conversation")
-    )
-    expect(virtuaCtl.rowKinds.slice(12, 27)).toEqual(Array(15).fill("folder"))
-    expect(virtuaCtl.rowKinds.slice(28)).toEqual(Array(10).fill("conversation"))
-    const scrollSize = virtuaCtl.handle!.scrollSize
-    await scrollToOffset(scrollSize - virtuaCtl.viewportSize)
+    // 先对账行模型，后续可见窗口只依赖上面的独立期望。
+    expect(virtuaCtl.rowKinds).toEqual(expectedKinds)
+    expect(virtuaCtl.handle!.scrollSize).toBe(expectedScrollSize)
 
-    // 顶部两个浮层占两行；实际内容从第 3 个底部可见行开始为文件夹剩 7 条，
-    // 随后是最近标题和最近 10 条，合计 2 + 7 + 1 + 10 = 20 行。
+    const scrollOffset = expectedScrollSize - virtuaCtl.viewportSize
+    await scrollToOffset(scrollOffset)
+    // 浮层不进内容流：滚到底部后总高与底部边界不变。
+    expect(virtuaCtl.handle!.scrollSize).toBe(expectedScrollSize)
+
+    // 三个吸顶浮层：聊天标题、文件夹标题，以及位于 section 栈总高（inset）
+    // 之下的当前文件夹标题。
     expect(
       Array.from(document.querySelectorAll("[data-sticky-section]")).map(
         (node) => node.getAttribute("data-sticky-section")
       )
     ).toEqual(["chats", "folders"])
-    expect(virtuaCtl.rowKinds.slice(20)).toEqual([
+    const folderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(folderOverlay?.getAttribute("data-sticky-folder")).toBe("7")
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    // 文件夹浮层是累计栈末项：槽位 64px（section 栈总高 = 总 inset）加上
+    // 下一个文件夹标题的推顶 round(20 - 64 - 32) = -76px，得到 -12px。
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(-12px)" })
+
+    // 底部可见窗口独立推导：两个吸顶条各 32px 盖住顶部，其下内容从
+    // scrollOffset + 64 开始；按上面的行高数组求出可见的内容行索引。
+    const sectionStackHeight = 2 * 32
+    const contentVisibleFrom = scrollOffset + sectionStackHeight
+    const visibleIndices: number[] = []
+    let rowTop = 0
+    expectedSizes.forEach((size, index) => {
+      if (rowTop + size > contentVisibleFrom) visibleIndices.push(index)
+      rowTop += size
+    })
+    // 2 个吸顶标题 + 18 行内容 = 用户给出的 20 行。
+    expect(visibleIndices).toHaveLength(18)
+    expect(visibleIndices.length + 2).toBe(20)
+
+    const contentRows = Array.from(
+      document.querySelectorAll("[data-virtua-content] > *")
+    )
+    const kindOf = (row: Element) =>
+      row.querySelector("[data-folder-id]")
+        ? "folder"
+        : row.querySelector("[data-conversation-id]")
+          ? "conversation"
+          : "section"
+    // 可见内容依次为：文件夹剩 7 条 → 最近标题 → 最近 10 条。
+    expect(visibleIndices.map((index) => kindOf(contentRows[index]))).toEqual([
       ...Array(7).fill("folder"),
       "section",
       ...Array(10).fill("conversation"),
     ])
-    expect(document.querySelector("[data-sticky-folder]")).toBeNull()
-    expect(virtuaCtl.offsetFor(38) - virtuaCtl.scrollOffset).toBe(
-      virtuaCtl.viewportSize
+
+    // 可见的 7 行文件夹是完整文件夹序列的最后 7 个；可见的 10 行会话是
+    // conv-100..109 的最近副本（最近按时间倒序，这里只校验集合）。
+    const folderIdOf = (row: Element) =>
+      Number(
+        row.querySelector("[data-folder-id]")?.getAttribute("data-folder-id")
+      )
+    const visibleRows = visibleIndices.map((index) => contentRows[index])
+    expect(
+      visibleRows
+        .filter((row) => row.querySelector("[data-folder-id]"))
+        .map(folderIdOf)
+    ).toEqual(
+      contentRows
+        .filter((row) => row.querySelector("[data-folder-id]"))
+        .map(folderIdOf)
+        .slice(-7)
     )
-    expect(virtuaCtl.handle!.scrollSize).toBe(scrollSize)
-    for (const label of ["Chat", "Folders"]) {
+    expect(
+      visibleRows
+        .filter((row) => row.querySelector("[data-conversation-id]"))
+        .map((row) =>
+          Number(
+            row
+              .querySelector("[data-conversation-id]")
+              ?.getAttribute("data-conversation-id")
+          )
+        )
+        .sort((a, b) => a - b)
+    ).toEqual(Array.from({ length: 10 }, (_, index) => 100 + index))
+
+    // 浮层是唯一可访问的段落标题入口；最近标题仍是真实行。
+    for (const label of ["Chat", "Folders", "Recent"]) {
       expect(screen.getAllByRole("button", { name: label })).toHaveLength(1)
     }
-    expect(screen.getAllByRole("button", { name: "Recent" })).toHaveLength(1)
+  })
+
+  it("末项浮层被下一个标题推顶时负位移且累计栈前项保留", async () => {
+    // 行序：chats 标题 / 聊天 / folders 标题 / 文件夹1 / 会话 / 文件夹2 / 会话 /
+    // recent 标题 / 3 条最近副本；文件夹 1 是累计栈的末项浮层。
+    useAppWorkspaceStore.setState({
+      conversations: [conv(31, 99, { kind: "chat" }), conv(11, 1), conv(21, 2)],
+    })
+    virtuaCtl.itemSizes = [44, 32, 44, 32, 32, 32, 32, 44, 32, 32, 32]
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          sectionOrder={["chats", "folders", "recent"]}
+        />
+      </NextIntlClientProvider>
+    )
+
+    // 段落交接边界：最近标题进入第 3 个槽位，前两项保持 0px / 32px；
+    // 只有栈末项（最近标题）移动到 64px。
+    await scrollToOffset(196)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toBeNull()
+    await scrollToOffset(197)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    expect(sectionOverlayOf("Recent")).toHaveStyle({
+      transform: "translateY(64px)",
+    })
+
+    // 文件夹 1 让位给文件夹 2：槽位 64px（section 栈总高）+ 推顶位移
+    // round(1 - 96) = -95px，得到负 transform；两个 section 浮层保持不动。
+    await scrollToOffset(183)
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    const folderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(folderOverlay?.getAttribute("data-sticky-folder")).toBe("1")
+    expect(folderOverlay).toHaveStyle({ transform: "translateY(-31px)" })
+
+    // 下一个标题完全接管：末项浮层移除，前两项仍留在累计栈中。
+    await scrollToOffset(184)
+    expect(document.querySelector("[data-sticky-folder]")).toBeNull()
+    expect(sectionOverlayOf("Chat")).toHaveStyle({
+      transform: "translateY(0px)",
+    })
+    expect(sectionOverlayOf("Folders")).toHaveStyle({
+      transform: "translateY(32px)",
+    })
+    // 文件夹 2 接管后回到 section 栈总高对应的 64px 槽位。
+    await scrollToOffset(185)
+    const nextFolderOverlay = document.querySelector(
+      "[data-sticky-folder]"
+    ) as HTMLElement | null
+    expect(nextFolderOverlay?.getAttribute("data-sticky-folder")).toBe("2")
+    expect(nextFolderOverlay).toHaveStyle({ transform: "translateY(64px)" })
   })
 
   it("第三段接近时只推顶末标题且反向滚动按槽位逐个退出", async () => {
