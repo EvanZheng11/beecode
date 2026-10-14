@@ -450,6 +450,22 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(removeAt).toBeGreaterThan(-1)
     expect(setAt).toBeGreaterThan(removeAt)
     expect(setAt).toBeLessThan(awaitAt)
+    // 复用统一 payload 编码：附件随 blocks 传递，真正空文本不触发 steer。
+    expect(appendHandler).toContain(
+      "const payload = buildSteerPayload(item.draft)"
+    )
+    expect(appendHandler).toContain("if (!payload) return")
+    expect(appendHandler).toContain(
+      "await feedbackSteer(payload.text, payload.blocks)"
+    )
+    expect(appendHandler).not.toContain(
+      "feedbackSteer(item.draft.displayText, item.draft.blocks)"
+    )
+    // steer 已返回 FeedbackItem 时包含内部降级成功，只有抛错才回队并提示。
+    expect(appendHandler).toContain("} catch (err: unknown) {")
+    expect(appendHandler).toContain("notify({")
+    expect(appendHandler).toContain("description: toErrorMessage(err)")
+    expect(appendHandler).toContain('feedback.channel === "pull"')
     // 失败路径把原始 draft/mode 和 adoptSendTimeMode 发送时机语义交给
     // requeueFront，消息回到当前队首（不做位置记忆，不能 reorder）。
     expect(appendHandler).toContain("mqRequeueFront(item.draft, item.modeId, {")

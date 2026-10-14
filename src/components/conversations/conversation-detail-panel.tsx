@@ -102,6 +102,7 @@ import {
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
+import { toErrorMessage } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
 import {
   claimRuntimeSession,
@@ -115,6 +116,7 @@ import {
 import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
+  buildSteerPayload,
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
   promptDraftTitleSeed,
@@ -255,6 +257,8 @@ const ConversationTabView = memo(function ConversationTabView({
   groupId,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
+  // Composer-namespace copy for queue-row feedback failures.
+  const tCmp = useTranslations("Folder.chat.messageInput")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -2148,21 +2152,42 @@ const ConversationTabView = memo(function ConversationTabView({
       if (appendingQueuedIdRef.current !== null) return
       const item = msgQueue.find((m) => m.id === id)
       if (!item) return
+      const payload = buildSteerPayload(item.draft)
+      // 空文本没有可提交的反馈内容，保留原队列项及其附件，不调用 steer。
+      if (!payload) return
       appendingQueuedIdRef.current = id
       mqRemove(id)
       setAppendingQueuedId(id)
       try {
-        await feedbackSteer(item.draft.displayText, item.draft.blocks)
-      } catch {
+        // steer 返回 FeedbackItem 即表示反馈通道已接受内容，包括通道内部
+        // 已降级入队的结果；只有抛错才回队首，避免双重入队。
+        await feedbackSteer(payload.text, payload.blocks)
+      } catch (err: unknown) {
         mqRequeueFront(item.draft, item.modeId, {
           adoptSendTimeMode: item.adoptSendTimeMode,
+        })
+        notify({
+          level: "error",
+          key: `steer-failed:${tabId}`,
+          title: tCmp(
+            feedback.channel === "pull" ? "steerNoteFailed" : "steerFailed"
+          ),
+          description: toErrorMessage(err),
         })
       } finally {
         appendingQueuedIdRef.current = null
         setAppendingQueuedId(null)
       }
     },
-    [msgQueue, mqRemove, feedbackSteer, mqRequeueFront]
+    [
+      msgQueue,
+      mqRemove,
+      feedbackSteer,
+      mqRequeueFront,
+      feedback.channel,
+      tabId,
+      tCmp,
+    ]
   )
 
   const messageListNode = (

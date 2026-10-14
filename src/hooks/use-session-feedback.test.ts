@@ -574,6 +574,20 @@ describe("useSessionFeedback", () => {
     expect(toast.info).not.toHaveBeenCalled()
   })
 
+  it("does not send an empty steering payload", async () => {
+    const { result } = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() => expect(result.current.canSubmit).toBe(true))
+
+    await expect(
+      act(async () => {
+        await result.current.steer("   ", [
+          { type: "image", data: "aGk=", mime_type: "image/png" },
+        ])
+      })
+    ).rejects.toThrow("nothing to steer")
+    expect(mockSubmit).not.toHaveBeenCalled()
+  })
+
   it("converges after the real startedNewTurn round: delivered result + backend flag off", async () => {
     // The downgrade round itself returns DELIVERED (the detached turn
     // consumed the content) — status alone can't reveal the downgrade. The
