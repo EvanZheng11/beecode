@@ -43,6 +43,13 @@ coverage/
 *.p12
 certificate-base64.txt
 
+# Tauri updater signing material. The private key and its .pub stay out of
+# git; only the base64 public key embedded in tauri.conf.json / verify.rs is
+# committed.
+*.key
+*.key.pub
+.tauri/
+
 # Agent
 .claude
 .docs

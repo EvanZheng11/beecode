@@ -103,4 +103,16 @@ mod tests {
     fn non_base64_sig_wrapper_is_rejected() {
         assert!(verify_release_signature(b"data", "%%% not base64 %%%").is_err());
     }
+
+    #[test]
+    fn embedded_pubkey_matches_tauri_conf() {
+        // 两处公钥副本必须一致：只改一处会让清单签名与端上验签公钥对不上，
+        // 表现为运行期硬失败（拒绝安装）却很难排查。
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json 应可解析");
+        let conf_pubkey = conf["plugins"]["updater"]["pubkey"]
+            .as_str()
+            .expect("tauri.conf.json 缺少 plugins.updater.pubkey");
+        assert_eq!(conf_pubkey, TAURI_PUBKEY_B64);
+    }
 }
