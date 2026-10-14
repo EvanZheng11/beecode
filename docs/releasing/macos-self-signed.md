@@ -9,7 +9,7 @@
   SHA-1 指纹锚定（macOS 验签语法限制，见下文）。
 - 不使用 Apple Developer ID、不使用付费公证（notarization），因此自签名
   证书不在 Apple 信任链内；**不声称受 Apple 系统信任**。
-- `bundle.createUpdaterArtifacts` 保持 false：不支持签名自动更新。
+- 自动更新：`bundle.createUpdaterArtifacts` 为 true，桌面 updater 包与服务器包用同一把 minisign 密钥签名；密钥生成、Secret 与轮换见 [updater-signing.md](./updater-signing.md)。
 - Windows / Linux / Docker 构建路径完全不变；缺少 macOS Secrets 只会让
   macOS 两个 job 在导入步骤提前失败，不会降级成无验签或关闭 computer-use。
 
@@ -135,7 +135,7 @@ macOS 的两个 job（桌面 build-tauri、服务器 build-server）在编译前
   应用每次更新后签名身份不变（同一张证书 + 相同标识），一般不必重复授权。
 - 需要辅助功能的权限（TCC，如屏幕录制 / 辅助功能）按正常流程手动授权；
   授权挂在固定签名身份（`app.codeg.computer-helper`）上，签名不变则延续。
-- 自签名包**未经 Apple 公证**，也不支持签名自动更新；
+- 自签名包**未经 Apple 公证**；自动更新用独立的 minisign 签名（见 [updater-signing.md](./updater-signing.md)），与 Apple 公证无关；
   不存在“被 Apple 系统信任、静默无提示启动”的效果。
 
 ## 六、本地构建
