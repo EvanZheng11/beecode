@@ -3453,6 +3453,7 @@
         "forkFromHere": "Bifurcar a partir daqui",
         "forkBusy": "Não é possível bifurcar enquanto há um turno em andamento",
         "forkNotReady": "Ainda não é possível bifurcar a partir desta resposta; tente novamente em instantes",
+        "appendAsFeedback": "Anexar como feedback ao vivo",
         "copied": "Copiado",
         "selectionActions": "Ações de seleção",
         "selectionCopy": "Copiar texto",

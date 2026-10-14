@@ -3453,6 +3453,7 @@
         "forkFromHere": "Ab hier verzweigen",
         "forkBusy": "Verzweigen nicht möglich, während ein Zug läuft",
         "forkNotReady": "Von dieser Antwort kann noch nicht verzweigt werden – bitte gleich erneut versuchen",
+        "appendAsFeedback": "Als Live-Feedback anhängen",
         "copied": "Kopiert",
         "selectionActions": "Auswahlaktionen",
         "selectionCopy": "Text kopieren",
