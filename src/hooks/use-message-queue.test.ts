@@ -54,6 +54,25 @@ describe("useMessageQueue bounce FIFO ordering", () => {
     expect(texts(result.current.queue)).toEqual(["A"])
   })
 
+  it("remove 返回权威项，已被其他路径移除时返回 undefined", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => result.current.enqueue(draft("A"), null))
+    const id = result.current.queue[0].id
+    let removed: ReturnType<typeof result.current.remove>
+    act(() => {
+      result.current.updateItem(id, draft("edited A"))
+      expect(result.current.getItem(id)?.draft.displayText).toBe("edited A")
+      removed = result.current.remove(id)
+      expect(result.current.getItem(id)).toBeUndefined()
+    })
+    expect(removed?.id).toBe(id)
+    expect(removed?.draft.displayText).toBe("edited A")
+    act(() => {
+      removed = result.current.remove(id)
+    })
+    expect(removed).toBeUndefined()
+  })
+
   it("requeueFront keeps a bounced head ahead of items behind it", () => {
     const { result } = renderHook(() => useMessageQueue())
 
@@ -81,6 +100,29 @@ describe("useMessageQueue bounce FIFO ordering", () => {
       dequeued = result.current.dequeue()
     })
     expect(dequeued?.draft.displayText).toBe("A")
+  })
+
+  it("requeueFront preserves adoptSendTimeMode via opts (append-failure recovery)", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => result.current.enqueue(draft("A"), null))
+
+    // 追加为实时反馈失败：原始项的 adoptSendTimeMode 随 requeueFront 回队首，
+    // 发送时机语义不丢失；队首语义保持（它先于后面的项被 flush）。
+    act(() =>
+      result.current.requeueFront(draft("B"), null, {
+        adoptSendTimeMode: true,
+      })
+    )
+    expect(texts(result.current.queue)).toEqual(["B", "A"])
+    expect(result.current.queue[0]).toMatchObject({
+      modeId: null,
+      adoptSendTimeMode: true,
+    })
+
+    // 不传 opts 的既有调用（TurnBusyError 弹回）不新增该字段。
+    act(() => result.current.requeueFront(draft("C"), "plan"))
+    expect(result.current.queue[0]).not.toHaveProperty("adoptSendTimeMode")
+    expect(texts(result.current.queue)).toEqual(["C", "B", "A"])
   })
 
   it("enqueue still appends to the tail (front vs tail are distinct)", () => {

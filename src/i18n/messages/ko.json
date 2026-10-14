@@ -3205,9 +3205,7 @@
         "saveEdit": "저장",
         "cancelEdit": "편집 취소",
         "editItem": "편집",
-        "deleteItem": "삭제",
-        "steerItemNow": "현재 턴에 삽입",
-        "steerItemAsNote": "메모로 보내 다음 점검 때 읽도록 함"
+        "deleteItem": "삭제"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "설정 > 에이전트",
@@ -3453,6 +3451,7 @@
         "forkFromHere": "여기서 분기",
         "forkBusy": "턴이 실행 중일 때는 분기할 수 없습니다",
         "forkNotReady": "아직 이 응답에서 분기할 수 없습니다. 잠시 후 다시 시도하세요",
+        "appendAsFeedback": "라이브 피드백으로 추가",
         "copied": "복사됨",
         "selectionActions": "선택 영역 작업",
         "selectionCopy": "텍스트 복사",

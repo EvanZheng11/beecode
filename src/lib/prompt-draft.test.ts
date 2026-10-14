@@ -48,6 +48,15 @@ describe("buildSteerPayload", () => {
     ).toBeNull()
   })
 
+  it("附件 displayText 只有空白时与 payload 门控一致", () => {
+    expect(
+      buildSteerPayload({
+        blocks: [grokImageResource],
+        displayText: "   ",
+      })
+    ).toBeNull()
+  })
+
   it("rides the full block list and display text once a non-text block is present", () => {
     const blocks = [text("look"), grokImageResource]
     const d: PromptDraft = { blocks, displayText: "look [附件 1]" }

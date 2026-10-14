@@ -3205,9 +3205,7 @@
         "saveEdit": "Enregistrer",
         "cancelEdit": "Annuler la modification",
         "editItem": "Modifier",
-        "deleteItem": "Supprimer",
-        "steerItemNow": "Insérer dans le tour en cours",
-        "steerItemAsNote": "Envoyer comme note pour la prochaine vérification"
+        "deleteItem": "Supprimer"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Paramètres > Agents",
@@ -3453,6 +3451,7 @@
         "forkFromHere": "Bifurquer d'ici",
         "forkBusy": "Impossible de bifurquer pendant qu'un tour est en cours",
         "forkNotReady": "Impossible de bifurquer depuis cette réponse pour le moment, réessayez dans un instant",
+        "appendAsFeedback": "Ajouter comme retour en direct",
         "copied": "Copié",
         "selectionActions": "Actions de sélection",
         "selectionCopy": "Copier le texte",
