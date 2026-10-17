@@ -669,9 +669,9 @@ jobs:
           tauriScript: pnpm tauri
           # externalBin 会触发 MSI 的 light.exe 问题，仅生成 NSIS 安装包。
           # createUpdaterArtifacts 由 tauri.conf.json 打开；latest.json 由
-          # generate-updater-manifest 统一生成，includeUpdaterJson 保持 false。
-          args: --target ${{ matrix.target }} --bundles nsis
-          includeUpdaterJson: false
+          # generate-updater-manifest 统一生成，includeUpdaterJson 同步上传 updater 清单。
+          args: --target ${{ matrix.target }} --bundles nsis,updater
+          includeUpdaterJson: true
           retryAttempts: 2
 
       - name: Build and upload to draft release (Linux x64)
@@ -695,7 +695,7 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: false
+          includeUpdaterJson: true
           retryAttempts: 2
 
       # 签名身份取导入脚本写入 GITHUB_ENV 的 APPLE_SIGNING_IDENTITY（证书
@@ -724,7 +724,7 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --config '{"bundle":{"macOS":{"hardenedRuntime":true}}}'
-          includeUpdaterJson: false
+          includeUpdaterJson: true
           retryAttempts: 2
 
       # Linux arm64 只打 deb/rpm，按设计不产出 updater 资产；其余桌面目标
