@@ -19,7 +19,7 @@ env:
 
 concurrency:
   group: release-${{ inputs.tag && format('tag-{0}', inputs.tag) || (github.event_name == 'push' && github.ref_type == 'tag' && format('tag-{0}', github.ref_name)) || format('artifact-{0}', github.ref) }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   create-draft-release:
