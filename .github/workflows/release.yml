@@ -1210,7 +1210,7 @@ jobs:
           fi
           file="dist/${{ matrix.artifact }}.tar.gz"
           test -s "$file"
-          pnpm tauri signer sign "$file"
+          pnpm tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "$file"
           test -s "$file.sig"
           echo "已生成签名：$file.sig"
 
@@ -1227,7 +1227,8 @@ jobs:
           }
           $file = "dist/${{ matrix.artifact }}.zip"
           if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少服务器压缩包" }
-          pnpm tauri signer sign $file
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          pnpm tauri signer sign --app-version $version $file
           if (-not (Test-Path -LiteralPath "$file.sig" -PathType Leaf)) { throw "缺少签名文件 $file.sig" }
           Write-Host "已生成签名：$file.sig"
 
@@ -1418,6 +1419,8 @@ jobs:
           file: Dockerfile.ci
           platforms: linux/amd64,linux/arm64
           push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
             ${{ env.DOCKERHUB_ENABLED == 'true' && format('{0}/codeg:{1}', secrets.DOCKERHUB_USERNAME, steps.version.outputs.version) || '' }}

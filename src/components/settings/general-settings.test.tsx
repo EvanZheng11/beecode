@@ -199,6 +199,7 @@ describe("GeneralSettings", () => {
       "Colorize command output",
       "Disable hardware acceleration",
       "Question timeouts",
+      "Mention panel",
       "Desktop notifications",
       "Notification sounds",
     ]) {

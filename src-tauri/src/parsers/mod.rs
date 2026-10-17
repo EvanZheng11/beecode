@@ -1,4 +1,5 @@
 pub mod acp_native;
+mod agent_env;
 pub mod antigravity;
 pub mod claude;
 pub mod cline;
@@ -12,6 +13,7 @@ pub mod gemini;
 pub mod grok;
 pub mod hermes;
 pub mod kimi_code;
+pub mod kiro;
 pub mod openclaw;
 pub mod opencode;
 mod opencode_context_window;
@@ -22,6 +24,8 @@ mod summary_cache;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+pub use agent_env::{AgentEnv, AgentEnvs};
 
 /// A root of external agent-CLI transcript data, archived under
 /// `external/<agent>/` by the optional "include conversation content" toggle.
@@ -50,6 +54,34 @@ pub struct ExternalSource {
     /// files in shared base dirs (e.g. `~/.gemini/oauth_creds.json`). `None`
     /// means the whole root is already transcript-scoped.
     pub include_top: Option<&'static [&'static str]>,
+    /// The append-only JSONL indexes among this source's files. Restore
+    /// merges one into the live copy instead of skipping or replacing it —
+    /// see [`AppendOnlyIndex`].
+    pub indexes: &'static [AppendOnlyIndex],
+}
+
+/// A file the agent CLI only ever appends to, one JSON object per line, the
+/// newest usable line for a key winning (codex's `session_index.jsonl`,
+/// kimi's).
+///
+/// The live copy usually exists when a backup is restored — every session the
+/// CLI created since is in it — so neither conflict policy fits a whole-file
+/// restore: skipping drops the restored sessions' lines, replacing drops every
+/// line written since the backup. Restore appends the backup's lines for the
+/// keys the live copy lacks instead (`commands::backup::external`).
+#[derive(Clone, Copy, Debug)]
+pub struct AppendOnlyIndex {
+    /// Path relative to the source's [`ExternalSource::restore_base`],
+    /// `/`-separated.
+    pub path: &'static str,
+    /// The string field naming the record a line describes.
+    pub key: &'static str,
+    /// The string field a line exists to set.
+    pub value: &'static str,
+    /// Whether a value is one the index's reader acts on — the reader's own
+    /// test, so the merge and the reader agree on every line. A line the
+    /// reader skips (an empty name, say) never counts as a key's newest line.
+    pub usable: fn(&str) -> bool,
 }
 
 impl ExternalSource {
@@ -78,6 +110,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             agent: "codex",
@@ -85,6 +118,30 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Every thread name — a `/rename`, or the title codex-acp
+            // generates — lives only in `~/.codex/session_index.jsonl`, never
+            // in a rollout (`parsers::codex::load_thread_name_index`), so
+            // without it a restored session reads as its first prompt.
+            //
+            // A SEPARATE source rather than re-rooting the one above at
+            // `~/.codex`: `agent` is the restore key, and every archive made
+            // so far holds its rollouts relative to `sessions/`. Under an
+            // allowlist at the new root those would map to nothing and be
+            // dropped on restore without a word.
+            agent: "codex-session-index",
+            root: codex::resolve_codex_home_dir().join("session_index.jsonl"),
+            is_file: true,
+            sqlite: false,
+            include_top: None,
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "id",
+                value: "thread_name",
+                usable: codex::is_usable_thread_name,
+            }],
         },
         ExternalSource {
             // Gemini's base dir mixes transcripts with credentials/config; only
@@ -94,6 +151,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: Some(&["tmp", "history", "projects.json"]),
+            indexes: &[],
         },
         ExternalSource {
             // cline 3.x keeps transcripts in `sessions/` and indexes them in
@@ -111,6 +169,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: true,
             include_top: Some(&["sessions", "db", "state", "tasks"]),
+            indexes: &[],
         },
         ExternalSource {
             agent: "opencode",
@@ -118,6 +177,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: true,
             sqlite: true,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Hermes self-manages its session store at `~/.hermes/state.db`.
@@ -130,6 +190,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: true,
             sqlite: true,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // CodeBuddy stores its JSONL transcripts under
@@ -140,6 +201,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Kimi Code keeps a directory-per-session transcript store under
@@ -152,6 +214,12 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: Some(&["sessions", "session_index.jsonl"]),
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "sessionId",
+                value: "workDir",
+                usable: kimi_code::is_usable_work_dir,
+            }],
         },
         ExternalSource {
             // Grok keeps a directory-per-session transcript store under
@@ -164,6 +232,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Cursor keeps a SQLite blob store per chat under
@@ -177,6 +246,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: true,
             include_top: Some(&["chats", "acp-sessions"]),
+            indexes: &[],
         },
         ExternalSource {
             // pi writes one JSONL per session under `~/.pi/agent/sessions/`
@@ -189,6 +259,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // DeepSeek Harness (deepseek-acp) keeps a directory-per-session
@@ -201,6 +272,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Since deepseek-acp 0.6.0 a prompt can carry images, and the log
@@ -228,6 +300,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: Some(&["objects"]),
+            indexes: &[],
         },
         ExternalSource {
             // Qoder keeps one JSONL per session under
@@ -240,6 +313,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Antigravity keeps one SQLite trajectory + `.meta` sidecar per
@@ -253,6 +327,20 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: true,
             include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Kiro keeps each session as `<id>.jsonl` (event log) + `<id>.json`
+            // (metadata) under `<KIRO_HOME>/sessions/cli/` (default
+            // `~/.kiro/...`). The root is the `sessions/` subtree, never
+            // `<KIRO_HOME>` itself, whose `settings/`, `agents/` and MCP config
+            // are the user's configuration, not conversation content.
+            agent: "kiro",
+            root: kiro::resolve_kiro_sessions_root(),
+            is_file: false,
+            sqlite: false,
+            include_top: None,
+            indexes: &[],
         },
     ];
     if let Some(home) = dirs::home_dir() {
@@ -262,6 +350,7 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             is_file: false,
             sqlite: false,
             include_top: None,
+            indexes: &[],
         });
     }
     sources
@@ -301,35 +390,59 @@ pub trait AgentParser {
 /// happens to know about it. `codeg-mcp` is injected into every MCP-capable
 /// agent, so the frame lands in each of their native transcripts; a per-parser
 /// fix would silently miss whichever parser was written next.
-pub fn build_agent_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
+///
+/// `env` is the environment this agent is launched with — load it with
+/// `agent_setting_service::load_agent_env`. Each agent keeps its history where
+/// THAT environment points (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …), and a
+/// relocation set in the agent's settings never reaches codeg's own process,
+/// so a parser handed [`AgentEnv::inherited`] instead reads the default
+/// directory while the agent writes elsewhere (#948).
+pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
     let inner: Box<dyn AgentParser> = match agent_type {
-        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::new()),
-        AgentType::Codex => Box::new(codex::CodexParser::new()),
-        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::new()),
-        AgentType::Gemini => Box::new(gemini::GeminiParser::new()),
+        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::for_env(env)),
+        AgentType::Codex => Box::new(codex::CodexParser::for_env(env)),
+        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::for_env(env)),
+        AgentType::Gemini => Box::new(gemini::GeminiParser::for_env(env)),
+        // This parser reads a fixed `~/.openclaw/agents` and follows no
+        // relocation variable at all — not even codeg's own — so `env` has
+        // nothing to move for it.
         AgentType::OpenClaw => Box::new(openclaw::OpenClawParser::new()),
-        AgentType::Cline => Box::new(cline::ClineParser::new()),
-        AgentType::Hermes => Box::new(hermes::HermesParser::new()),
-        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::new()),
-        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::new()),
-        AgentType::Pi => Box::new(pi::PiParser::new()),
-        AgentType::Grok => Box::new(grok::GrokParser::new()),
-        AgentType::Cursor => Box::new(cursor::CursorParser::new()),
-        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::new()),
-        AgentType::Qoder => Box::new(qoder::QoderParser::new()),
-        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::new()),
+        AgentType::Cline => Box::new(cline::ClineParser::for_env(env)),
+        AgentType::Hermes => Box::new(hermes::HermesParser::for_env(env)),
+        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::for_env(env)),
+        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::for_env(env)),
+        AgentType::Pi => Box::new(pi::PiParser::for_env(env)),
+        AgentType::Grok => Box::new(grok::GrokParser::for_env(env)),
+        AgentType::Cursor => Box::new(cursor::CursorParser::for_env(env)),
+        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::for_env(env)),
+        AgentType::Qoder => Box::new(qoder::QoderParser::for_env(env)),
+        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
+        AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
         // Custom ACP agents have no native store to reverse-engineer; their
-        // history is codeg's own ACP transcript.
-        AgentType::Custom(_) => Box::new(acp_native::AcpNativeParser::new(agent_type)),
+        // history is codeg's own ACP transcript. TRAE CLI's rollouts use an
+        // undocumented paginated format of its own (see `acp::trae`), and so
+        // do Command Code's session trees (see `acp::command_code`), so both
+        // take the same route.
+        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => {
+            Box::new(acp_native::AcpNativeParser::new(agent_type))
+        }
     };
     Box::new(RouteSanitized(inner))
 }
 
-/// Removes Codeg's internal `@agent` routing frame from whatever a parser read
-/// back out of an agent's own transcript.
+/// A parser wrapped the way [`build_agent_parser`] wraps every one, for tests
+/// that build their parser over a fixture directory.
+#[cfg(test)]
+pub(crate) fn sanitized(inner: impl AgentParser + 'static) -> Box<dyn AgentParser> {
+    Box::new(RouteSanitized(Box::new(inner)))
+}
+
+/// Removes Codeg's internal prompt frames — the `@agent` and `@assistant`
+/// routing frames and the assistant brief — from whatever a parser read back
+/// out of an agent's own transcript.
 ///
 /// Only complete frames that re-render byte-for-byte are touched (see
-/// [`crate::acp::agent_mentions::strip_internal_agent_routes`]), and the
+/// [`crate::acp::agent_mentions::strip_internal_frames`]), and the
 /// separator that opens one is scrubbed from every prompt at ingress, so
 /// look-alike user prose is never eligible. A BLOCK left with no content after
 /// stripping carried nothing but the frame and is dropped; a user turn left
@@ -414,17 +527,17 @@ fn sanitize_summary(summary: &mut ConversationSummary) {
 ///
 /// The trailing trim only runs when a frame WAS removed, and it is load-bearing
 /// for the agents that join a prompt's text blocks into one record with a blank
-/// line: `strip_internal_agent_routes` absorbs a single newline adjacent to the
+/// line: `strip_internal_frames` absorbs a single newline adjacent to the
 /// frame, so `"prose\n\n<frame>"` comes back as `"prose\n"` — which
 /// `whitespace-pre-wrap` paints as an extra blank line under the message. Text
 /// with no frame in it is never touched.
 fn sanitize_text(text: &mut String) -> bool {
     // Single scan short-circuit: history with no frame pays one memchr per
     // string, not a parse attempt.
-    if !crate::acp::agent_mentions::contains_internal_agent_routes(text) {
+    if !crate::acp::agent_mentions::contains_internal_frames(text) {
         return false;
     }
-    *text = crate::acp::agent_mentions::strip_internal_agent_routes(text);
+    *text = crate::acp::agent_mentions::strip_internal_frames(text);
     text.truncate(text.trim_end().len());
     true
 }
@@ -709,6 +822,57 @@ pub fn user_turn_block(block: &crate::acp::types::PromptInputBlock) -> ContentBl
 /// decided once rather than per agent.
 pub fn user_turn_block_from_wire(item: &serde_json::Value) -> Option<ContentBlock> {
     crate::acp::types::prompt_block_from_wire(item).map(|b| user_turn_block(&b))
+}
+
+/// The record an agent wrote for a turn that FAILED, as the message closing
+/// its round: a `System` message holding the agent's account of why as one
+/// [`ContentBlock::TurnError`] — `None` when it gives no account.
+///
+/// A `System` turn, never an assistant one: the error is not the model's
+/// reply, so rendering it as one put it in the model's mouth (the reason the
+/// parsers used to drop these records), and every reply count —
+/// `syncTurnMetadata`'s alignment of live replies with parsed ones, the
+/// window's history baseline — counts assistant turns only, so a failure the
+/// live view and the transcript disagree about can never shift those.
+pub(crate) fn turn_error_message(
+    id: String,
+    message: &str,
+    timestamp: DateTime<Utc>,
+) -> Option<crate::models::UnifiedMessage> {
+    let message = message.trim();
+    if message.is_empty() {
+        return None;
+    }
+    Some(crate::models::UnifiedMessage {
+        id,
+        role: crate::models::MessageRole::System,
+        content: vec![ContentBlock::TurnError {
+            message: message.to_string(),
+        }],
+        timestamp,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: Some(timestamp),
+        agent_message_id: None,
+    })
+}
+
+/// How many of `turns` are somebody's message: all but a failed turn's line
+/// ([`turn_error_message`]), which reports a failure rather than saying
+/// anything — the list summaries never counted its record either.
+pub(crate) fn message_turn_count(turns: &[MessageTurn]) -> u32 {
+    turns
+        .iter()
+        .filter(|turn| {
+            !(matches!(turn.role, TurnRole::System)
+                && !turn.blocks.is_empty()
+                && turn
+                    .blocks
+                    .iter()
+                    .all(|block| matches!(block, ContentBlock::TurnError { .. })))
+        })
+        .count() as u32
 }
 
 /// Fill in `duration_ms` for assistant turns whose agent reports no timing of
@@ -1739,7 +1903,7 @@ mod route_sanitizer_tests {
         let truncated = super::truncate_str(format!("hi{frame}").trim(), 80);
         assert!(
             truncated.contains('\u{001e}')
-                && !crate::acp::agent_mentions::contains_internal_agent_routes(&truncated),
+                && !crate::acp::agent_mentions::contains_internal_frames(&truncated),
             "fixture must straddle the frame, or it proves nothing"
         );
 
@@ -1943,6 +2107,52 @@ mod route_sanitizer_tests {
             detail.turns[0].blocks.as_slice(),
             [ContentBlock::Text { text }] if text == "real prompt"
         ));
+    }
+
+    /// A delegated assistant child's first prompt is the task plus the brief
+    /// frame. History shows the task alone — in its own block or joined into
+    /// the task's — the title carries no instruction text, and a record that
+    /// held only the brief is neither rendered nor counted.
+    #[test]
+    fn an_assistant_brief_never_surfaces_in_history() {
+        let task = "Review the diff in /repo and report findings";
+        let brief = crate::acp::agent_mentions::render_assistant_brief(
+            "Reviewer",
+            "Cite file and line.\n- Be terse",
+        )
+        .expect("brief");
+
+        let mut own_block = turn(TurnRole::User, task);
+        own_block.blocks.push(ContentBlock::Text {
+            text: brief.clone(),
+        });
+        let joined = turn(TurnRole::User, &format!("{task}\n\n{brief}"));
+        for user in [own_block, joined] {
+            let detail = sanitized(Fixture {
+                summary: summary(Some(&format!("{task} {brief}")[..120]), 2),
+                turns: vec![user, turn(TurnRole::Assistant, "found two issues")],
+            });
+            assert_eq!(detail.turns.len(), 2);
+            assert!(matches!(
+                detail.turns[0].blocks.as_slice(),
+                [ContentBlock::Text { text }] if text == task
+            ));
+            assert_eq!(detail.summary.message_count, 2);
+            let title = detail.summary.title.expect("title kept");
+            assert!(title.starts_with("Review the diff"));
+            assert!(!title.contains("codeg_internal") && !title.contains('\u{1e}'));
+        }
+
+        let detail = sanitized(Fixture {
+            summary: summary(Some(task), 3),
+            turns: vec![
+                turn(TurnRole::User, task),
+                turn(TurnRole::User, &brief),
+                turn(TurnRole::Assistant, "done"),
+            ],
+        });
+        assert_eq!(detail.turns.len(), 2, "the brief-only record is dropped");
+        assert_eq!(detail.summary.message_count, 2);
     }
 
     #[test]

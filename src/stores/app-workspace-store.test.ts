@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
@@ -169,7 +177,7 @@ describe("openFolder — 新建与复用同一工作区目录", () => {
 })
 
 describe("fetchFolders — offline hydration safety", () => {
-  let errors: ReturnType<typeof vi.spyOn>
+  let errors: MockInstance
 
   beforeEach(() => {
     mockListOpenFolders.mockReset().mockResolvedValue([])
