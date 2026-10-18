@@ -204,6 +204,8 @@ kill_tree = { version = "0.2", features = ["tokio"] }
 which = "7"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"], optional = true }
 axum = { version = "0.8", features = ["ws", "multipart"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
+tower-service = "0.3"
 async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip", "compression-br"] }
 # Direct deps (already in the graph via axum) so the compression predicate can
