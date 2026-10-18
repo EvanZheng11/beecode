@@ -3963,13 +3963,16 @@
       },
       "messageNav": {
         "title": "Navigation des messages",
-        "collapse": "Réduire la navigation des messages",
         "loadingEarlier": "Chargement des messages précédents…",
         "loadEarlier": "Charger les messages précédents",
-        "collapsedSummary": "Messages {count}",
         "fileCount": "{count, plural, one {# fichier} other {# fichiers}}",
-        "remove": "Retirer",
-        "noDiffDataAvailable": "Aucune donnée de diff disponible pour {filePath}"
+        "subAgentCount": "{count, plural, one {# sous-agent} other {# sous-agents}}",
+        "showDiff": "Afficher les modifications de {filePath}",
+        "hideDiff": "Masquer les modifications de {filePath}",
+        "openFile": "Ouvrir {filePath}",
+        "collapse": "Réduire",
+        "currentMessage": "Message actuel",
+        "scrollToCurrent": "Faire défiler jusqu’au message actuel (#{ordinal})"
       },
       "replyArtifacts": {
         "title": "Fichiers modifiés",
@@ -4027,6 +4030,9 @@
         "resumeDelegation": "Reprise de la tâche {task}",
         "resumeDelegationNoId": "Reprise d'une tâche déléguée",
         "promptLabel": "Instruction",
+        "ackRecorded": "Enregistré dans la tâche",
+        "ackNotRecorded": "Non enregistré dans la tâche",
+        "ackNotRecordedWithReason": "Non enregistré dans la tâche : {reason}",
         "verdict": {
           "success": "réussie",
           "needs_review": "à relire",

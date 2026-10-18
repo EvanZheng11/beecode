@@ -3963,13 +3963,16 @@
       },
       "messageNav": {
         "title": "메시지 탐색",
-        "collapse": "메시지 탐색 접기",
         "loadingEarlier": "이전 메시지를 불러오는 중…",
         "loadEarlier": "이전 메시지 불러오기",
-        "collapsedSummary": "메시지 {count}",
         "fileCount": "{count, plural, one {#개 파일} other {#개 파일}}",
-        "remove": "제거",
-        "noDiffDataAvailable": "{filePath}에 대한 diff 데이터가 없습니다"
+        "subAgentCount": "{count, plural, one {서브 에이전트 #개} other {서브 에이전트 #개}}",
+        "showDiff": "{filePath}의 변경 사항 보기",
+        "hideDiff": "{filePath}의 변경 사항 숨기기",
+        "openFile": "{filePath} 열기",
+        "collapse": "접기",
+        "currentMessage": "현재 메시지",
+        "scrollToCurrent": "현재 메시지(#{ordinal})로 스크롤"
       },
       "replyArtifacts": {
         "title": "변경된 파일",
@@ -4027,6 +4030,9 @@
         "resumeDelegation": "작업 {task} 재개 중",
         "resumeDelegationNoId": "위임 작업 재개 중",
         "promptLabel": "프롬프트",
+        "ackRecorded": "작업 항목에 기록됨",
+        "ackNotRecorded": "작업 항목에 기록되지 않음",
+        "ackNotRecordedWithReason": "작업 항목에 기록되지 않음: {reason}",
         "verdict": {
           "success": "성공",
           "needs_review": "검토 필요",

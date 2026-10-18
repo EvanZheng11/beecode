@@ -3963,13 +3963,16 @@
       },
       "messageNav": {
         "title": "訊息導覽",
-        "collapse": "收合訊息導覽",
         "loadingEarlier": "正在載入更早的訊息…",
         "loadEarlier": "載入更早的訊息",
-        "collapsedSummary": "訊息 {count}",
         "fileCount": "{count} 個檔案",
-        "remove": "移除",
-        "noDiffDataAvailable": "找不到 {filePath} 的差異資料"
+        "subAgentCount": "{count} 個子智能體",
+        "showDiff": "展開 {filePath} 的變更",
+        "hideDiff": "收合 {filePath} 的變更",
+        "openFile": "開啟 {filePath}",
+        "collapse": "收合",
+        "currentMessage": "目前訊息",
+        "scrollToCurrent": "捲動到目前訊息（#{ordinal}）"
       },
       "replyArtifacts": {
         "title": "變更檔案",
@@ -4027,6 +4030,9 @@
         "resumeDelegation": "恢復任務 {task}",
         "resumeDelegationNoId": "恢復委派任務",
         "promptLabel": "指令",
+        "ackRecorded": "已記錄到待辦任務",
+        "ackNotRecorded": "未記錄到待辦任務",
+        "ackNotRecordedWithReason": "未記錄到待辦任務：{reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "待複核",

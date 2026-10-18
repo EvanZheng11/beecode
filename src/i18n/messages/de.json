@@ -3963,13 +3963,16 @@
       },
       "messageNav": {
         "title": "Nachrichtennavigation",
-        "collapse": "Nachrichtennavigation ausblenden",
         "loadingEarlier": "Frühere Nachrichten werden geladen…",
         "loadEarlier": "Frühere Nachrichten laden",
-        "collapsedSummary": "Nachrichten {count}",
         "fileCount": "{count, plural, one {# Datei} other {# Dateien}}",
-        "remove": "Entfernen",
-        "noDiffDataAvailable": "Keine Diff-Daten verfügbar für {filePath}"
+        "subAgentCount": "{count, plural, one {# Subagent} other {# Subagenten}}",
+        "showDiff": "Änderungen an {filePath} anzeigen",
+        "hideDiff": "Änderungen an {filePath} ausblenden",
+        "openFile": "{filePath} öffnen",
+        "collapse": "Einklappen",
+        "currentMessage": "Aktuelle Nachricht",
+        "scrollToCurrent": "Zur aktuellen Nachricht (#{ordinal}) scrollen"
       },
       "replyArtifacts": {
         "title": "Geänderte Dateien",
@@ -4027,6 +4030,9 @@
         "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
         "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
         "promptLabel": "Anweisung",
+        "ackRecorded": "In der Arbeitsaufgabe erfasst",
+        "ackNotRecorded": "Nicht in der Arbeitsaufgabe erfasst",
+        "ackNotRecordedWithReason": "Nicht in der Arbeitsaufgabe erfasst: {reason}",
         "verdict": {
           "success": "erfolgreich",
           "needs_review": "Prüfung nötig",
