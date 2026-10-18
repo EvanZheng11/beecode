@@ -37,7 +37,9 @@ git merge --no-edit 2ae6eaf7dc2e9b8bba58d8b67a629f471204b1d1
 
 版本字段冲突均保留 fork 当前的 `0.36.1`。这是因为本次只执行 Task 1，计划中的 `0.37.1` 版本升级属于后续 Task 2；锁文件中的 `codeg` 根包版本同步保留为 `0.36.1`。
 
-会话详情面板冲突保留上游新增的 `messageListNode` 渲染逻辑，并移除所有 Git 冲突标记。其余上游新增文件和自动合并修改均纳入合并结果。
+会话详情面板冲突保留上游新增的 `messageListNode` 语义和 `insightsInSidebar` 属性，并移除所有 Git 冲突标记。其余上游新增文件和自动合并修改均纳入合并结果。
+
+合并后的首次前端回归发现冲突拼接导致 `MessageListView` 在同一组件中重复挂载。已删除重复节点，并把上游的 `insightsInSidebar` 属性合并到 fork 原有节点；针对性测试 `message-list-image-root.test.ts` 通过 4/4。
 
 ## Fork 发布修复保留情况
 
@@ -68,7 +70,13 @@ git merge --no-edit 2ae6eaf7dc2e9b8bba58d8b67a629f471204b1d1
 4. JSON、Cargo 清单、锁文件和 release workflow 的结构化核对。
 5. 受保护发布文件相对 fork 合并前版本的差异核对，结果为 `fork-protected-files=unchanged`。
 
-本次未执行计划中的 Task 2 版本升级、Task 3 本地发布门禁、Task 4 远程推送和浏览器发布验收。
+额外执行的测试结果如下：
+
+- `vitest src/components/message/message-list-image-root.test.ts`：通过 4/4。
+- `pnpm test`：两次全量运行均为 676 个测试文件中 675 个通过、1 个失败（10141/10142）。失败始终位于上游新增或修改的 `sidebar-tag-filter.test.tsx` 键盘焦点用例组，但单独运行该文件和目标用例通过；失败用例在全量运行中因焦点/时序状态不稳定而轮换，未发现可安全归因的确定性业务根因。
+- `cargo test --features test-utils`：未通过构建前置检查。构建脚本报告本地缺少 `out` 目录和两个 sidecar 文件，并因此退出；日志未报告 Rust 源码编译错误。
+
+本次未执行计划中的 Task 2 版本升级、Task 3 中除测试外的本地发布门禁、Task 4 远程推送和浏览器发布验收。
 
 ## 操作边界
 

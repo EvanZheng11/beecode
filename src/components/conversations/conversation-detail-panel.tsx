@@ -2156,54 +2156,6 @@ const ConversationTabView = memo(function ConversationTabView({
     [effectiveConversationId]
   )
 
-  const messageListNode = (
-    <GoalControlProvider value={goalControlValue}>
-      <MessageListView
-        conversationId={effectiveConversationId}
-        imageRoot={workingDirForConnection ?? null}
-        agentType={selectedAgent}
-        availableCommands={connectionCommands}
-        connStatus={connStatus}
-        isActive={isActive}
-        sendSignal={sendSignal}
-        detailLoading={detailLoading}
-        detailError={detailError}
-        acpLoadError={acpLoadError}
-        hideEmptyState={!hasPersistedConversation || hasSentMessage}
-        // The conversation page's navigator, plan and sub-agents show in the
-        // Session Details side panel rather than over the messages.
-        insightsInSidebar
-        onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
-        onNewSession={
-          canShowDetailErrorActions ? handleOpenNewSession : undefined
-        }
-        onQuoteSelection={composerAvailable ? handleQuoteSelection : undefined}
-        // Asking opens its own conversation, so it needs a folder to open it in
-        // rather than a usable composer here — a transcript whose composer is
-        // blocked (session/load failure) can still spawn the question elsewhere.
-        onAskSelection={canAskSelection ? handleAskSelection : undefined}
-        // Fork carries no draft, so — unlike a send — a non-empty queue is
-        // not at risk of being jumped and needs no guard here. A turn in
-        // flight is still rejected, by the backend, which is the only place
-        // that can see it without racing.
-        //
-        // "prompting" belongs on this side of the gate (same shape as the
-        // goal-control gate above): this answers "can this surface fork at
-        // all", and a turn in flight is a passing "not right now" that the
-        // view greys the button out for. Dropping the handler instead made
-        // every reply's fork icon disappear for the length of each reply.
-        // `handleForkFromTurn` re-checks liveness at click time.
-        onForkFromTurn={
-          (connStatus === "connected" || connStatus === "prompting") &&
-          hasPersistedConversation &&
-          conn.supportsFork
-            ? handleForkFromTurn
-            : undefined
-        }
-      />
-    </GoalControlProvider>
-  )
-
   // Live-feedback bar gating + the "agent never read your note" resend fallback.
   // Enqueue rather than `handleSend`: this fallback fires on a turn-end race
   // where the backend already reports no active turn but the frontend may still
@@ -2311,6 +2263,9 @@ const ConversationTabView = memo(function ConversationTabView({
         detailError={detailError}
         acpLoadError={acpLoadError}
         hideEmptyState={!hasPersistedConversation || hasSentMessage}
+        // The conversation page's navigator, plan and sub-agents show in the
+        // Session Details side panel rather than over the messages.
+        insightsInSidebar
         onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
         onNewSession={
           canShowDetailErrorActions ? handleOpenNewSession : undefined
