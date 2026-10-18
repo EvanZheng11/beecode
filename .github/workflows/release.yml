@@ -189,7 +189,7 @@ jobs:
     permissions:
       contents: write
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - name: "macOS x64"
@@ -207,9 +207,6 @@ jobs:
           - name: "Windows x64"
             runner: "windows-2022"
             target: "x86_64-pc-windows-msvc"
-          - name: "Windows arm64"
-            runner: "windows-latest"
-            target: "aarch64-pc-windows-msvc"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -447,6 +444,29 @@ jobs:
               ;;
           esac
 
+      - name: 诊断 Windows Tauri 构建环境
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "运行器：$env:RUNNER_OS $env:RUNNER_ARCH"
+          Write-Host "目标：${{ matrix.target }}"
+          Write-Host "Node：$(node --version)"
+          Write-Host "pnpm：$(pnpm --version)"
+          Write-Host "Rust：$(rustc --version)"
+          Write-Host "Tauri CLI：$(pnpm exec tauri --version)"
+          Write-Host "sidecar："
+          Get-ChildItem -LiteralPath 'src-tauri/binaries' -Force |
+            Select-Object -First 20 Name,Length,LastWriteTime |
+            Format-Table -AutoSize
+          Write-Host "目标 release 目录："
+          $release = "src-tauri/target/${{ matrix.target }}/release"
+          if (Test-Path -LiteralPath $release) {
+            Get-ChildItem -LiteralPath $release -Force |
+              Select-Object -First 40 Name,Length,LastWriteTime |
+              Format-Table -AutoSize
+          }
+
       # I5 门禁：证书模式下的两项运行时验证 —— (1) 内核在 exec 处拒绝不合规镜像，
       # (2) 签名之后 主程序 ↔ helper 的双向握手。用本次 CI 证书签出的无副作用
       # fixture 与定向测试 harness、以及 staging 阶段签名过的真实 helper 实测；
@@ -667,12 +687,28 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          # externalBin 会触发 MSI 的 light.exe 问题，仅生成 NSIS 安装包。
-          # createUpdaterArtifacts 由 tauri.conf.json 打开；latest.json 由
-          # generate-updater-manifest 统一生成，includeUpdaterJson 同步上传 updater 清单。
-          args: --target ${{ matrix.target }} --bundles nsis,updater
-          includeUpdaterJson: true
+          # externalBin 会触发 MSI 的 light.exe 问题，仅生成 NSIS 原包。
+          # createUpdaterArtifacts 由 tauri.conf.json 打开并签名原包；latest.json
+          # 等全部矩阵完成后由 generate-updater-manifest 统一生成。
+          args: --target ${{ matrix.target }} --bundles nsis
+          includeUpdaterJson: false
           retryAttempts: 2
+
+      - name: 收集 Windows Tauri 失败诊断
+        if: ${{ failure() && contains(matrix.target, 'windows') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Write-Host "Windows Tauri 构建失败：${{ matrix.target }}"
+          $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
+          if (Test-Path -LiteralPath $bundle) {
+            Get-ChildItem -LiteralPath $bundle -Recurse -Force |
+              Where-Object { $_.Extension -in '.exe', '.sig', '.nsi', '.log' } |
+              Select-Object -First 200 FullName,Length,LastWriteTime |
+              Format-Table -AutoSize
+          } else {
+            Write-Host "未生成安装包目录：$bundle"
+          }
 
       - name: Build and upload to draft release (Linux x64)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -695,7 +731,7 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           retryAttempts: 2
 
       # 签名身份取导入脚本写入 GITHUB_ENV 的 APPLE_SIGNING_IDENTITY（证书
@@ -724,7 +760,7 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --config '{"bundle":{"macOS":{"hardenedRuntime":true}}}'
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           retryAttempts: 2
 
       # Linux arm64 只打 deb/rpm，按设计不产出 updater 资产；其余桌面目标

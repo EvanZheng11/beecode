@@ -39234,7 +39234,10 @@ mod tests {
         )));
         let ask_config = crate::acp::question::QuestionRuntimeConfig::new();
         ask_config
-            .set(crate::acp::question::QuestionConfig { enabled: true })
+            .set(crate::acp::question::QuestionConfig {
+                enabled: true,
+                ..Default::default()
+            })
             .await;
         let access: Option<(
             Arc<dyn crate::acp::question::SessionQuestionAccess>,
