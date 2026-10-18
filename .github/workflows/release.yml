@@ -207,6 +207,9 @@ jobs:
           - name: "Windows x64"
             runner: "windows-2022"
             target: "x86_64-pc-windows-msvc"
+          - name: "Windows arm64"
+            runner: "windows-latest"
+            target: "aarch64-pc-windows-msvc"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
