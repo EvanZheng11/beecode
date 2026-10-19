@@ -65,6 +65,14 @@ function readSignature(sigDir, assetName) {
   return signature
 }
 
+function releaseAssetUrl(release, asset, version) {
+  const tag = release.tag_name ?? `v${version}`
+  return asset.browser_download_url.replace(
+    /\/releases\/download\/[^/]+(?=\/)/,
+    `/releases/download/${tag}`
+  )
+}
+
 export function buildManifest({
   releaseJson,
   sigDir,
@@ -87,7 +95,7 @@ export function buildManifest({
     }
     platforms[target] = {
       signature: readSignature(sigDir, assetName),
-      url: asset.browser_download_url,
+      url: releaseAssetUrl(release, asset, version),
     }
   }
 
