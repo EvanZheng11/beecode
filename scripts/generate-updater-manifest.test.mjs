@@ -35,16 +35,19 @@ function fixture() {
   for (const name of [...names, SERVER]) {
     assets.push({
       name,
-      browser_download_url: `https://example.test/download/${name}`,
+      browser_download_url: `https://example.test/releases/download/untagged-draft/${name}`,
     })
     assets.push({
       name: `${name}.sig`,
-      browser_download_url: `https://example.test/download/${name}.sig`,
+      browser_download_url: `https://example.test/releases/download/untagged-draft/${name}.sig`,
     })
     writeFileSync(join(sigDir, `${name}.sig`), SIG)
   }
   const releaseJson = join(dir, "release.json")
-  writeFileSync(releaseJson, JSON.stringify({ body: "发布说明", assets }))
+  writeFileSync(
+    releaseJson,
+    JSON.stringify({ body: "发布说明", tag_name: `v${VERSION}`, assets })
+  )
   return { dir, releaseJson, sigDir, assets }
 }
 
@@ -62,7 +65,7 @@ test("生成全部平台键、URL 与签名", (t) => {
   )
   assert.equal(
     manifest.platforms["windows-aarch64-nsis"].url,
-    `https://example.test/download/codeg_${VERSION}_arm64-setup.exe`
+    `https://example.test/releases/download/v${VERSION}/codeg_${VERSION}_arm64-setup.exe`
   )
   assert.equal(manifest.platforms["darwin-x86_64"].signature, SIG)
 })
@@ -76,7 +79,7 @@ test("桌面产物缺少 .sig 资产时拒绝生成", (t) => {
   )
   writeFileSync(
     releaseJson,
-    JSON.stringify({ body: "发布说明", assets: broken })
+    JSON.stringify({ body: "发布说明", tag_name: `v${VERSION}`, assets: broken })
   )
 
   assert.throws(
@@ -92,7 +95,7 @@ test("服务器包缺少 .sig 资产时拒绝生成", (t) => {
   const broken = assets.filter((asset) => asset.name !== `${SERVER}.sig`)
   writeFileSync(
     releaseJson,
-    JSON.stringify({ body: "发布说明", assets: broken })
+    JSON.stringify({ body: "发布说明", tag_name: `v${VERSION}`, assets: broken })
   )
 
   assert.throws(
@@ -185,17 +188,24 @@ test("v0.35.2 回归：Linux/Windows 期望资产是 .AppImage / -setup.exe", (t
   for (const name of names) {
     writeFileSync(join(sigDir, `${name}.sig`), SIG)
     releaseAssets.push(
-      { name, browser_download_url: `https://example.test/download/${name}` },
+    {
+      name,
+      browser_download_url: `https://example.test/releases/download/untagged-draft/${name}`,
+    },
       {
         name: `${name}.sig`,
-        browser_download_url: `https://example.test/download/${name}.sig`,
+        browser_download_url: `https://example.test/releases/download/untagged-draft/${name}.sig`,
       }
     )
   }
   const releaseJson = join(dir, "release.json")
   writeFileSync(
     releaseJson,
-    JSON.stringify({ body: "发布说明", assets: releaseAssets })
+    JSON.stringify({
+      body: "发布说明",
+      tag_name: `v${v2Version}`,
+      assets: releaseAssets,
+    })
   )
 
   const platforms = buildManifest({
@@ -205,14 +215,14 @@ test("v0.35.2 回归：Linux/Windows 期望资产是 .AppImage / -setup.exe", (t
   }).platforms
   assert.equal(
     platforms["linux-x86_64"].url,
-    `https://example.test/download/${names[0]}`
+    `https://example.test/releases/download/v${v2Version}/${names[0]}`
   )
   assert.equal(
     platforms["windows-x86_64-nsis"].url,
-    `https://example.test/download/${names[1]}`
+    `https://example.test/releases/download/v${v2Version}/${names[1]}`
   )
   assert.equal(
     platforms["windows-aarch64-nsis"].url,
-    `https://example.test/download/${names[2]}`
+    `https://example.test/releases/download/v${v2Version}/${names[2]}`
   )
 })
