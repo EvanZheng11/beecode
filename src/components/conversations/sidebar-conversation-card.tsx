@@ -77,15 +77,14 @@ import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
 import { useAssistant } from "@/stores/assistants-store"
 
 /**
- * Horizontal indent added per delegation-nesting level. Chosen so a child's
- * agent-icon GLYPH left edge lands exactly under its parent's title TEXT start:
- * the gap from a row's rail axis to its title is `0.875rem`, and the icon glyph
- * is centred on the axis (half-width `0.375rem`), so one level must shift the
- * child axis right by `0.875 + 0.375 = 1.25rem` for `axis(child) − 0.375 =
- * title(parent)`. The root axis (`0.875rem`) and the axis→title gap (`0.875rem`)
- * are separate constants — don't fold them into this step.
+ * Horizontal indent added per tree level. `0.75rem` = 12px, the compact
+ * rounded multi-level menu this sidebar follows: one step reads as a clear
+ * nested level without pushing deep rows off a narrow sidebar. It is a visual
+ * step, NOT a glyph-alignment constant — a child icon does not exactly sit
+ * under its parent's title text. The root axis (`0.875rem`) and the axis→title
+ * gap (`0.875rem`) are separate constants — don't fold them into this step.
  */
-export const CONV_RAIL_DEPTH_STEP = "1.25rem"
+export const CONV_RAIL_DEPTH_STEP = "0.75rem"
 
 /**
  * Vertical guide rails for a delegation sub-session's ANCESTORS. A row at `depth`

@@ -488,13 +488,13 @@ describe("SidebarConversationCard sub-session chevron", () => {
     expect(chevron.style.left).toContain("--conv-rail-axis")
   })
 
-  it("indents deeper rows by CONV_RAIL_DEPTH_STEP per level so the child icon aligns under the parent title", () => {
+  it("indents deeper rows by CONV_RAIL_DEPTH_STEP per level", () => {
     const { container } = renderCard(conv(3), { hasChildren: false, depth: 2 })
     const outer = container.querySelector("[data-conv-key]") as HTMLElement
-    // 0.875rem root axis + depth · 1.25rem (gap 0.875 + half glyph 0.375) lands
-    // the child icon glyph's left edge under the parent title text start.
+    // 0.875rem root axis + depth · 0.75rem (12px per tree level, the compact
+    // multi-level menu the sidebar follows).
     expect(outer.style.getPropertyValue("--conv-rail-axis")).toBe(
-      "calc(0.875rem + 2 * 1.25rem)"
+      "calc(0.875rem + 2 * 0.75rem)"
     )
   })
 

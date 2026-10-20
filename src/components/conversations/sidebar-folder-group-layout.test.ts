@@ -484,7 +484,7 @@ describe("buildRows with folder groups", () => {
     ])
   })
 
-  it("indents a group member's conversations one level", () => {
+  it("indents a group member's conversations one level below its folder", () => {
     const rows = buildRows({
       ...baseArgs,
       orderedFolderIds: [1, 5],
@@ -497,8 +497,9 @@ describe("buildRows with folder groups", () => {
     const depths = rows
       .filter((r) => r.kind === "conversation")
       .map((r) => (r.kind === "conversation" ? r.depth : -1))
-    // Top-level folder's conversation at 0, the grouped folder's at 1.
-    expect(depths).toEqual([0, 1])
+    // A top-level folder's conversation sits one level below its header (1);
+    // a grouped folder's header is at depth 1, so its conversation is at 2.
+    expect(depths).toEqual([1, 2])
   })
 
   it("emits a group-empty hint for an expanded empty group", () => {

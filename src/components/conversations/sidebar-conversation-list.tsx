@@ -3100,14 +3100,15 @@ export function SidebarConversationList({
       })
     }
     if (row.kind === "empty") {
-      // A worktree / root sub-group's empty hint is indented one level so its
-      // text lines up under the (depth-1) sub-group's sessions, matching the
-      // header. A plain folder's hint stays at depth 0. Group membership adds
-      // another level on top, exactly as it does for the header.
+      // A worktree / root sub-group's empty hint is indented one level below
+      // its folder header, exactly where that header's sessions would start —
+      // so its text lines up with them. A plain folder's hint is likewise one
+      // level below its own (depth-0) header. Group membership adds another
+      // level on top, exactly as it does for the header.
       const nested =
         showWorktrees &&
         (childToParent.has(row.folderId) || containerRepoIds.has(row.folderId))
-      const depth = (nested ? 1 : 0) + groupDepth(row.folderId)
+      const depth = (nested ? 1 : 0) + groupDepth(row.folderId) + 1
       return (
         // Full row height (h-[2rem], the fixed virtua item size) so the container
         // connector spine stays continuous THROUGH an empty sub-group ("no
