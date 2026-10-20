@@ -18,6 +18,7 @@ import {
   Map as MapIcon,
   Menu,
   MessagesSquare,
+  Search,
   SquarePen,
   Zap,
   type LucideIcon,
@@ -34,6 +35,7 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -109,6 +111,23 @@ const SHORTCUT_BADGE_CLASS = cn(
   "group-hover:opacity-100 group-focus-visible:opacity-100"
 )
 
+// 45px 图标主菜单栏里的角标：把未读 / 待办的计数缩成图标右上角的小圆片，
+// 信息不丢（图标态的栏里放不下整条计数 chip）。两种色调沿用行内的语义：
+// 失败 = destructive，待办 = primary。
+const RAIL_BADGE_BASE_CLASS = cn(
+  "pointer-events-none absolute -top-1 -right-1 inline-flex h-[0.8125rem]",
+  "min-w-[0.8125rem] items-center justify-center rounded-full px-0.5",
+  "font-mono text-[0.5625rem] font-medium leading-none"
+)
+const RAIL_BADGE_FAILURE_CLASS = cn(
+  RAIL_BADGE_BASE_CLASS,
+  "bg-destructive/15 text-destructive"
+)
+const RAIL_BADGE_ATTENTION_CLASS = cn(
+  RAIL_BADGE_BASE_CLASS,
+  "bg-primary/10 text-primary"
+)
+
 // Which sections the order editor should render as switched-off. Module
 // constants rather than a per-render `new Set`, so the reference is stable and
 // the two states are spelled out once. "Recent" is the only section with a
@@ -127,23 +146,20 @@ const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
 }
 
 /**
- * A fixed top-of-sidebar action / route row. `active` marks the row as the
- * current workbench route (selected styling); `trailing` carries a shortcut hint
- * or a count badge. Extracting this keeps every fixed nav item — and any future
- * route — on one geometry instead of copy-pasting the className. Each row is a
- * `group` so a `group-hover`-revealed trailing element works.
+ * A fixed top-of-sidebar action row (today: New chat). `trailing` carries a
+ * shortcut hint. Extracting this keeps the fixed action on one geometry instead
+ * of copy-pasting the className. Each row is a `group` so the
+ * `group-hover`-revealed trailing hint works.
  */
 function SidebarNavButton({
   icon: Icon,
   label,
   onClick,
-  active,
   trailing,
 }: {
   icon: LucideIcon
   label: string
   onClick: () => void
-  active?: boolean
   trailing?: ReactNode
 }) {
   return (
@@ -151,18 +167,60 @@ function SidebarNavButton({
       type="button"
       onClick={onClick}
       title={label}
-      aria-current={active ? "page" : undefined}
       className={cn(
         "group flex h-8 w-full items-center gap-[0.4375rem] rounded-full pl-[0.4375rem] pr-1.5",
         "text-[0.875rem] text-sidebar-foreground outline-none",
         "transition-colors duration-150 hover:bg-sidebar-accent",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-        active && "bg-sidebar-primary/8"
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       )}
     >
       <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {trailing}
+    </button>
+  )
+}
+
+/**
+ * 45px 图标主菜单栏里的一枚入口：只有图标，名字靠 tooltip（title）和
+ * aria-label 给出（无障碍与测试都读后者）。命中当前路由时整枚按钮高亮。
+ */
+function SidebarRailButton({
+  icon: Icon,
+  label,
+  onClick,
+  active,
+  badge,
+  badgeClassName,
+}: {
+  icon: LucideIcon
+  label: string
+  onClick: () => void
+  active?: boolean
+  badge?: number
+  badgeClassName?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none",
+        "text-muted-foreground transition-colors duration-150",
+        "hover:bg-sidebar-accent hover:text-sidebar-foreground",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        active && "bg-sidebar-primary/15 text-sidebar-foreground"
+      )}
+    >
+      <Icon aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
+      {badge != null && badge > 0 && (
+        <span className={cn(RAIL_BADGE_BASE_CLASS, badgeClassName)}>
+          {badge}
+        </span>
+      )}
     </button>
   )
 }
@@ -202,6 +260,8 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  // 会话标题搜索词：受控输入，即时过滤下面的列表（不落盘，关掉侧栏/重开就清空）。
+  const [titleQuery, setTitleQuery] = useState("")
   // What the user picked, persisted as picked. The list gets it PRUNED to tags
   // that still exist (below) — but only once the tag list has loaded: matching
   // needs nothing but ids, so a persisted filter applies from the first paint
@@ -530,130 +590,150 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Fixed actions above the scrollable list. `shrink-0` keeps them pinned —
-          they never scroll with the conversation list. Rows are `rounded-full`
-          like the conversation pills, and the icon/text geometry matches the
-          folder header: a 0.875rem icon + 0.875rem label at a 0.4375rem gap, with
-          the row's pl-[0.4375rem] (atop the container's px-1.5) placing the icon
-          center on the same 0.875rem rail axis as the folder/conversation icons in
-          the list below. Each row is a `group` so its shortcut hint reveals on
-          hover / keyboard focus. */}
-      <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
-        <SidebarNavButton
-          icon={SquarePen}
-          label={t("newChat")}
-          onClick={handleNewConversation}
-          trailing={
-            newConversationShortcutLabel ? (
-              <kbd className={SHORTCUT_BADGE_CLASS}>
-                {newConversationShortcutLabel}
-              </kbd>
-            ) : null
-          }
-        />
-        {/* Search is deliberately NOT a row here: it moved to the fixed top-left
-            window chrome (`LeftEdgeChrome`, plus the mobile `FolderTitleBar`),
-            which — unlike this sidebar — never unmounts, so the button survives
-            a collapse. ⌘K still works from anywhere. */}
-        {/* Each route row can be switched off from the view-options menu's
-            "Navigation items" group — for a workspace that never uses one of
-            them, this block is pure noise above the list. The routes stay
-            reachable from the status bar's quick-actions menu either way.
-            All three close the mobile Drawer on the way out, like tapping a
-            conversation card (handled by the list wrapper below) — otherwise the
-            page they just opened stays hidden behind the sidebar. */}
-        {isNavItemVisible(navItems, "automations") && (
-          <SidebarNavButton
-            icon={Zap}
-            label={t("automations")}
-            active={routeId === "automations"}
-            onClick={() => {
-              if (isMobile) toggle()
-              setRoute("automations")
-            }}
-            trailing={
-              unseenFailures > 0 ? (
-                <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-destructive">
-                  {unseenFailures}
-                </span>
-              ) : null
-            }
-          />
+      {/* 顶栏以下左右分栏：左侧是 45px 图标主菜单栏（仅桌面），右侧是二级
+          菜单（New chat + 搜索 + 会话列表）。图标栏放在顶栏
+          **下方**而不是整个 aside 的最左边：桌面端的 window-chrome 覆盖层
+          固定在窗口 top-0、高 h-10（macOS 红绿灯 + 切换/搜索按钮），
+          只要图标栏从顶栏下方开始，它就永远落在覆盖层之外，
+          `leftReserve` 的预留也照旧作用于整条顶栏，不必改。 */}
+      <div className="flex min-h-0 flex-1">
+        {!isMobile && (
+          // 45px 定宽：只放图标，横向空间全部让给右侧的会话列表。用
+          // `bg-sidebar-accent/40` + 右边框与右侧的二级菜单拉开层次。
+          // 每一项都可以从视图菜单的「导航项」组里关掉；关掉后仍能从状态栏
+          // 的快捷动作菜单进入该路由，不会成为死路。
+          <nav
+            aria-label={t("navigationItems")}
+            className={cn(
+              "flex w-[45px] shrink-0 flex-col items-center gap-1",
+              "border-r border-sidebar-border bg-sidebar-accent/40 pt-1.5 pb-2"
+            )}
+          >
+            {isNavItemVisible(navItems, "automations") && (
+              <SidebarRailButton
+                icon={Zap}
+                label={t("automations")}
+                active={routeId === "automations"}
+                onClick={() => setRoute("automations")}
+                badge={unseenFailures}
+                badgeClassName={RAIL_BADGE_FAILURE_CLASS}
+              />
+            )}
+            {isNavItemVisible(navItems, "tasks") && (
+              <SidebarRailButton
+                icon={ListTodo}
+                label={t("tasks")}
+                active={routeId === "tasks"}
+                onClick={() => setRoute("tasks")}
+                // Attention（待办）不是失败：跟快捷提示一样用 primary 色。
+                badge={attentionCount}
+                badgeClassName={RAIL_BADGE_ATTENTION_CLASS}
+              />
+            )}
+            {isNavItemVisible(navItems, "forge") && (
+              <SidebarRailButton
+                icon={LayoutTemplate}
+                label={t("forge")}
+                active={routeId === "forge"}
+                onClick={() => setRoute("forge")}
+              />
+            )}
+            {isNavItemVisible(navItems, "canvas") && (
+              <SidebarRailButton
+                icon={MapIcon}
+                label={t("canvas")}
+                active={routeId === "canvas"}
+                onClick={() => {
+                  // Coming from elsewhere returns to the canvas that was open;
+                  // clicking it again from inside one goes up to the list — the
+                  // route's own home, like re-tapping an active tab.
+                  if (routeId === "canvas") {
+                    useCanvasBoardsStore.getState().closeBoard()
+                  }
+                  setRoute("canvas")
+                }}
+              />
+            )}
+          </nav>
         )}
-        {isNavItemVisible(navItems, "tasks") && (
-          <SidebarNavButton
-            icon={ListTodo}
-            label={t("tasks")}
-            active={routeId === "tasks"}
-            onClick={() => {
-              if (isMobile) toggle()
-              setRoute("tasks")
-            }}
-            trailing={
-              attentionCount > 0 ? (
-                // Attention (not failure): tasks waiting on the user — primary
-                // tint like the shortcut chips, not destructive.
-                <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
-                  {attentionCount}
-                </span>
-              ) : null
-            }
-          />
-        )}
-        {isNavItemVisible(navItems, "forge") && (
-          <SidebarNavButton
-            icon={LayoutTemplate}
-            label={t("forge")}
-            active={routeId === "forge"}
-            onClick={() => {
-              if (isMobile) toggle()
-              setRoute("forge")
-            }}
-          />
-        )}
-        {isNavItemVisible(navItems, "canvas") && (
-          <SidebarNavButton
-            icon={MapIcon}
-            label={t("canvas")}
-            active={routeId === "canvas"}
-            onClick={() => {
-              if (isMobile) toggle()
-              // Coming from elsewhere returns to the canvas that was open;
-              // clicking it again from inside one goes up to the list — the
-              // route's own home, like re-tapping an active tab.
-              if (routeId === "canvas") {
-                useCanvasBoardsStore.getState().closeBoard()
-              }
-              setRoute("canvas")
-            }}
-          />
-        )}
-      </div>
 
-      {/* On mobile, clicking a conversation card auto-closes the Drawer */}
-      <div
-        className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
-        onClick={
-          isMobile
-            ? (e) => {
-                const target = e.target as HTMLElement
-                if (target.closest("[data-conversation-id]")) {
-                  toggle()
-                }
+        {/* 二级菜单：图标栏右侧的那一列。手机（Drawer）里图标栏不渲染，
+            这里就是原来的整列。 */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* Fixed actions above the scrollable list. `shrink-0` keeps them pinned —
+              they never scroll with the conversation list. Rows are `rounded-full`
+              like the conversation pills, and the icon/text geometry matches the
+              folder header: a 0.875rem icon + 0.875rem label at a 0.4375rem gap, with
+              the row's pl-[0.4375rem] (atop the container's px-1.5) placing the icon
+              center on the same 0.875rem rail axis as the folder/conversation icons in
+              the list below. Each row is a `group` so its shortcut hint reveals on
+              hover / keyboard focus. */}
+          <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
+            <SidebarNavButton
+              icon={SquarePen}
+              label={t("newChat")}
+              onClick={handleNewConversation}
+              trailing={
+                newConversationShortcutLabel ? (
+                  <kbd className={SHORTCUT_BADGE_CLASS}>
+                    {newConversationShortcutLabel}
+                  </kbd>
+                ) : null
               }
-            : undefined
-        }
-      >
-        <SidebarTagFilterBar filter={tagFilter} onChange={handleSetTagFilter} />
-        <SidebarConversationList
-          ref={listRef}
-          showCompleted={showCompleted}
-          showWorktrees={showWorktrees}
-          showRecent={showRecent}
-          sortMode={sortMode}
-          sectionOrder={sectionOrder}
-          tagFilter={tagFilter}
-        />
+            />
+          </div>
+
+          {/* 会话标题搜索：只管下面的列表（不区分大小写的子串匹配），与窗口
+              顶栏里那个始终存在的全局搜索（⌘K）不是同一个东西 —— 那个从
+              `LeftEdgeChrome` / 手机端 `FolderTitleBar` 进。 */}
+          <div className="relative shrink-0 px-1.5 pt-1.5">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 left-3.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              value={titleQuery}
+              onChange={(event) => setTitleQuery(event.target.value)}
+              // 输入即时过滤，不需要回车；Esc 清空恢复全部。
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setTitleQuery("")
+              }}
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("search")}
+              className="h-8 rounded-full pr-2.5 pl-7"
+            />
+          </div>
+
+          {/* On mobile, clicking a conversation card auto-closes the Drawer */}
+          <div
+            className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
+            onClick={
+              isMobile
+                ? (e) => {
+                    const target = e.target as HTMLElement
+                    if (target.closest("[data-conversation-id]")) {
+                      toggle()
+                    }
+                  }
+                : undefined
+            }
+          >
+            <SidebarTagFilterBar
+              filter={tagFilter}
+              onChange={handleSetTagFilter}
+            />
+            <SidebarConversationList
+              ref={listRef}
+              showCompleted={showCompleted}
+              showWorktrees={showWorktrees}
+              showRecent={showRecent}
+              sortMode={sortMode}
+              sectionOrder={sectionOrder}
+              tagFilter={tagFilter}
+              titleQuery={titleQuery}
+            />
+          </div>
+        </div>
       </div>
     </aside>
   )

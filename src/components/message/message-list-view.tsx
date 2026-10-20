@@ -80,7 +80,7 @@ import type {
   ConnectionStatus,
   MessageTurn,
 } from "@/lib/types"
-import { copyTextToClipboard } from "@/lib/utils"
+import { cn, copyTextToClipboard } from "@/lib/utils"
 import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
 import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
 import {
@@ -200,6 +200,11 @@ export interface ResolvedMessageGroup {
    * post-turn metadata patch may sit on any sub-turn, not just the last.
    */
   completed_at?: string | null
+  /**
+   * 消息发送时间（RFC3339，来自 Rust 侧 `MessageTurn.timestamp`）。
+   * 委派 kickoff 的占位用户轮可能是空串，此时不渲染时间。
+   */
+  timestamp?: string | null
 }
 
 export type ThreadRenderItem =
@@ -786,6 +791,9 @@ export function mergeConsecutiveAssistantTurns(
         group: {
           ...last.group,
           id: first.group.id,
+          // 发送时间取这段连续回复的首个子轮：末轮的 timestamp 记录的是最后一段输出，
+          // 与底部 TurnStats 的完成时间几乎重合，展示没有意义。
+          timestamp: first.group.timestamp,
           parts: mergedParts,
           usage: mergedUsage,
           duration_ms: mergedDuration,
@@ -961,6 +969,55 @@ export function isForkPointUnnamed(
   return forkPoint.source_turn_id == null && isLiveTurnId(forkPoint.id)
 }
 
+/**
+ * 消息发送时间的展示文案。
+ * 时分为固定 24 小时制 `HH:mm`，tooltip 为固定 `YYYY-MM-DD HH:mm:ss`；
+ * 两者都是写死的格式，`Intl` 的输出随 locale 变化无法同时满足，故直接用
+ * 本地时区手工拼接。
+ * `timestamp` 为空串（委派 kickoff 的占位用户轮）或非法时返回 null，调用方
+ * 据此不渲染，避免出现 `Invalid Date` / `NaN`。
+ */
+function formatMessageTimestamp(timestamp?: string | null) {
+  if (!timestamp) return null
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return null
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const short = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const full = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )} ${short}:${pad(date.getSeconds())}`
+  return { short, full }
+}
+
+/**
+ * 单条消息的发送时间：常显但弱化（用户要“看得到”，不该再藏进 hover）。
+ * 悬停的完整日期时间用原生 `title`：这里不是按钮，不需要定制 tooltip，
+ * 也避免给每条消息再挂一层 TooltipProvider。
+ * 系统消息不渲染（它没有“发送”这个动作，也没有可归属的发送者）。
+ */
+const MessageSentTime = memo(function MessageSentTime({
+  timestamp,
+  className,
+}: {
+  timestamp?: string | null
+  className?: string
+}) {
+  const formatted = formatMessageTimestamp(timestamp)
+  if (!formatted) return null
+  return (
+    <time
+      dateTime={timestamp ?? undefined}
+      title={formatted.full}
+      className={cn(
+        "shrink-0 text-[0.625rem] font-medium leading-none text-muted-foreground/70 tabular-nums",
+        className
+      )}
+    >
+      {formatted.short}
+    </time>
+  )
+})
+
 const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   group,
   dimmed = false,
@@ -1021,19 +1078,23 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             <MessageContent>
               <CollapsibleUserMessage parts={group.parts} />
             </MessageContent>
+            <MessageSentTime timestamp={group.timestamp} className="self-end" />
           </div>
         ) : (
-          <MessageContent>
-            <CompletedTurnContent
-              parts={group.parts}
-              durationMs={group.duration_ms}
-              completed={isResponseComplete}
-              currentRound={currentRound}
-              roundOpen={roundOpen}
-              onRoundOpenChange={onRoundOpenChange}
-              foldEpoch={foldEpoch}
-            />
-          </MessageContent>
+          <>
+            <MessageSentTime timestamp={group.timestamp} />
+            <MessageContent>
+              <CompletedTurnContent
+                parts={group.parts}
+                durationMs={group.duration_ms}
+                completed={isResponseComplete}
+                currentRound={currentRound}
+                roundOpen={roundOpen}
+                onRoundOpenChange={onRoundOpenChange}
+                foldEpoch={foldEpoch}
+              />
+            </MessageContent>
+          </>
         )}
         {group.role === "user" && group.resources.length > 0 ? (
           <UserResourceLinks resources={group.resources} className="self-end" />
@@ -1283,6 +1344,7 @@ export function MessageListView({
           duration_ms: msg.duration_ms,
           model: msg.model,
           completed_at: msg.completed_at,
+          timestamp: msg.timestamp,
         }
         groupCache.set(msg, group)
       }

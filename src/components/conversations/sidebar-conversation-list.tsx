@@ -898,6 +898,9 @@ export interface SidebarConversationListProps {
    *  `matchesTagFilter`). Must be referentially stable — it feeds the bucket
    *  memos. Defaults to no filter. */
   tagFilter?: TagFilter
+  /** 会话标题搜索词：不区分大小写的子串匹配，只过滤不重排（列目录的排序保持
+   *  用户选的那种），空串 = 不过滤。状态由 Sidebar 的搜索框持有并下传。 */
+  titleQuery?: string
 }
 
 export function SidebarConversationList({
@@ -908,6 +911,7 @@ export function SidebarConversationList({
   showWorktrees = false,
   showRecent = false,
   tagFilter = EMPTY_TAG_FILTER,
+  titleQuery = "",
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
 }) {
@@ -1359,13 +1363,27 @@ export function SidebarConversationList({
   // running badge answers "is work under way in there", filter or not. With no
   // filter this is `conversations` itself, so nothing downstream changes.
   const tagFilterActive = isTagFilterActive(tagFilter)
-  const shownConversations = useMemo(
-    () =>
-      tagFilterActive
-        ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
-        : conversations,
-    [conversations, tagFilter, tagFilterActive]
-  )
+  // 标题搜索：最朴素的不区分大小写子串匹配。不用 `rankByTextMatch` —— 它会按
+  // 得分重排，而用户只要求过滤，没要求改排序。没有搜索词时返回上游那个
+  // 引用（`conversations` 本体），下游的引用复用备忘录照旧生效。
+  const titleNeedle = titleQuery.trim().toLowerCase()
+  const titleQueryActive = titleNeedle.length > 0
+  const shownConversations = useMemo(() => {
+    const tagged = tagFilterActive
+      ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
+      : conversations
+    if (!titleQueryActive) return tagged
+    return tagged.filter((c) =>
+      (c.title ?? "").toLowerCase().includes(titleNeedle)
+    )
+  }, [conversations, tagFilter, tagFilterActive, titleNeedle, titleQueryActive])
+  // 标签筛选与标题搜索都是「收窄」：叠在一起用，空文件夹也一样跟着隐藏。
+  const filterNarrowed = tagFilterActive || titleQueryActive
+  // 空状态文案：搜索词优先（被标题搜索收窄时说「没有匹配的会话」比说
+  // 「没有带这些标签的会话」准确），否则仍是标签筛选那句。
+  const noMatchHint = titleQueryActive
+    ? t("noMatchingConversations")
+    : tTags("filter.noMatches")
 
   // Folder grouping source: pinned conversations are surfaced in the dedicated
   // Pinned section, and folderless chat conversations in the dedicated Chat
@@ -1603,7 +1621,7 @@ export function SidebarConversationList({
         rootGroupCollapsed,
         layout,
         groupExpanded: folderGroupExpanded,
-        hideEmptyFolders: tagFilterActive,
+        hideEmptyFolders: filterNarrowed,
       }),
     [
       pinned,
@@ -1627,7 +1645,7 @@ export function SidebarConversationList({
       rootGroupCollapsed,
       layout,
       folderGroupExpanded,
-      tagFilterActive,
+      filterNarrowed,
     ]
   )
 
@@ -3135,7 +3153,7 @@ export function SidebarConversationList({
       // section header's text inset (px-[0.5rem]) rather than the folder rail.
       return (
         <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
-          {tagFilterActive ? tTags("filter.noMatches") : t("noChats")}
+          {filterNarrowed ? noMatchHint : t("noChats")}
         </div>
       )
     }
@@ -3146,7 +3164,7 @@ export function SidebarConversationList({
       // Under a tag filter it means no folder has a match, which says so.
       return (
         <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
-          {tagFilterActive ? tTags("filter.noMatches") : t("noFolders")}
+          {filterNarrowed ? noMatchHint : t("noFolders")}
         </div>
       )
     }
@@ -3158,8 +3176,8 @@ export function SidebarConversationList({
       // filter so the user knows what to undo.
       return (
         <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
-          {tagFilterActive
-            ? tTags("filter.noMatches")
+          {filterNarrowed
+            ? noMatchHint
             : recentFilter === "chats"
               ? t("noRecentChats")
               : recentFilter === "folders"

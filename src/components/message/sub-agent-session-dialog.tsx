@@ -23,15 +23,23 @@
  *    viewer mounts INSIDE this one's React tree and Base UI stacks it (parent
  *    scales back, its content fades, Escape unwinds one layer at a time).
  *    A modal dialog has no such stack: the second one simply buried the first.
+ *
+ * 子智能体任务到终态（完成 / 失败 / 取消）后，标题栏会出现「通知主智能体」按钮：
+ * 主智能体此时往往在等下一轮 `get_delegation_status` 轮询，点一下即可让它立刻
+ * 处理该子任务的结果。
  */
 
+import { useState } from "react"
+import { Bell, Check, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 
 import {
   DelegationIdentityAvatar,
   DelegationIdentityName,
 } from "@/components/message/delegation-identity"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
+import { Button } from "@/components/ui/button"
 import {
   Drawer,
   DrawerContent,
@@ -39,8 +47,11 @@ import {
   DrawerTitle,
   SIDE_PANEL_CONTENT_CLASS,
 } from "@/components/ui/drawer"
+import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
+import { notifyDelegationCompletion } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 
 interface Props {
   open: boolean
@@ -71,6 +82,49 @@ export function SubAgentSessionDialog({
   // it, the back gesture unloads the whole page instead of closing the panel.
   useHistoryBackDismiss(open, () => onOpenChange(false))
 
+  // 子任务是否已到终态、以及它的 broker 任务 id，都取自子会话的持久化摘要
+  //（`delegation_call_id` 即卡片模型 meta 里的 `task_id`）。这份详情由下方
+  // `LiveTranscriptView` 在打开时拉取，这里只是读同一份运行时缓存，因此传
+  // `enabled: false` 不再重复请求。
+  const { detail } = useConversationDetail(childConversationId, {
+    enabled: false,
+  })
+  const taskId = detail?.summary.delegation_call_id ?? null
+  // 按钮只看 task id，不看本地状态：详情只在打开弹框时拉一次（结束后刻意不
+  // 重拉，避免和转录文件写入抢时序），所以「开着弹框看它跑完」这个最常见场景
+  // 里，本地 status 会一直停在 in_progress。真正的状态由后端判定——任务还在
+  // 跑时 `notify_delegation_completion` 会返回「task is still running」，这里
+  // 只需把它当成提示而不是错误。
+
+  // 「已通知」只在本次弹框实例内记着，不落存储：重新打开时靠上面的终态判定
+  // 重新给按钮（模型与后端都没有「已通知」标记可读）。按 task id 记而不是布尔值——
+  // 同一个弹框实例会在查看另一张卡片时直接换掉子会话。
+  const [notifiedTaskId, setNotifiedTaskId] = useState<string | null>(null)
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
+  const notified = taskId !== null && notifiedTaskId === taskId
+  const notifying = taskId !== null && pendingTaskId === taskId
+
+  const handleNotify = async () => {
+    if (!taskId || notifying || notified) return
+    setPendingTaskId(taskId)
+    try {
+      const result = await notifyDelegationCompletion(taskId)
+      if (result.notified) {
+        setNotifiedTaskId(taskId)
+        toast.success(t("notifyMainAgentDone"))
+      } else if (result.message === "already notified") {
+        // 之前已通知过：同样按「已通知」处理，不当作错误提示。
+        setNotifiedTaskId(taskId)
+      } else {
+        toast.error(result.message || t("notifyMainAgentFailed"))
+      }
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setPendingTaskId(null)
+    }
+  }
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
       {/* An x-axis drawer is already `inset-y-0`, so the old dialog's explicit
@@ -95,6 +149,28 @@ export function SubAgentSessionDialog({
                 identity={identity}
                 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
               />
+              {taskId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => void handleNotify()}
+                  disabled={notifying || notified}
+                  title={t("notifyMainAgentHint")}
+                  className="shrink-0 text-muted-foreground"
+                >
+                  {notified ? (
+                    <Check />
+                  ) : notifying ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Bell />
+                  )}
+                  {notified
+                    ? t("notifyMainAgentNotified")
+                    : t("notifyMainAgent")}
+                </Button>
+              ) : null}
             </div>
             <LiveTranscriptView
               conversationId={childConversationId}

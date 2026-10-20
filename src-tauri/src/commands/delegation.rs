@@ -6,6 +6,8 @@
 //!   * `delegation.agent_defaults` — per-agent spawn overrides (JSON blob)
 //!   * `delegation.completed_cache_max_mb` — per-parent byte budget (in MB) for
 //!     the broker's in-memory cache of completed result text (`0` = unlimited)
+//!   * `delegation.notify_on_completion` — push a finished task's result to the
+//!     parent's LLM immediately (default on)
 //!
 //! On startup `apply_persisted_config` reads these keys from `app_metadata`
 //! and pushes them into the live `DelegationBroker`. On UI save,
@@ -39,6 +41,9 @@ pub const KEY_DELEGATION_DEPTH: &str = "delegation.depth_limit";
 pub const KEY_DELEGATION_AGENT_DEFAULTS: &str = "delegation.agent_defaults";
 /// Per-parent completed-result cache budget, in MB. `0` = unlimited.
 pub const KEY_DELEGATION_COMPLETED_CACHE_MB: &str = "delegation.completed_cache_max_mb";
+/// Whether a finished sub-agent task pushes a completion notice to the parent's
+/// LLM immediately (instead of it waiting on the next `get_delegation_status`).
+pub const KEY_DELEGATION_NOTIFY_ON_COMPLETION: &str = "delegation.notify_on_completion";
 
 pub const DEPTH_MIN: u32 = 1;
 pub const DEPTH_MAX: u32 = 8;
@@ -50,6 +55,12 @@ pub const DEFAULT_COMPLETED_CACHE_MB: u32 = 512;
 
 fn default_completed_cache_max_mb() -> u32 {
     DEFAULT_COMPLETED_CACHE_MB
+}
+
+/// A payload that omits the completion-notice switch gets the product default
+/// (on), so an older client cannot silently turn the notice off.
+fn default_notify_on_completion() -> bool {
+    true
 }
 
 /// Newtype so the Tauri managed-state lookup can distinguish the delegation
@@ -72,6 +83,11 @@ pub struct DelegationSettings {
     /// unlimited), so an older client can't silently disable the valve.
     #[serde(default = "default_completed_cache_max_mb")]
     pub completed_cache_max_mb: u32,
+    /// Push a finished task's result to the parent's LLM right away instead of
+    /// leaving it to the next `get_delegation_status` poll. The manual button
+    /// in the sub-agent dialog always delivers regardless of this switch.
+    #[serde(default = "default_notify_on_completion")]
+    pub notify_on_completion: bool,
 }
 
 impl Default for DelegationSettings {
@@ -81,6 +97,7 @@ impl Default for DelegationSettings {
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_max_mb: DEFAULT_COMPLETED_CACHE_MB,
+            notify_on_completion: true,
         }
     }
 }
@@ -98,6 +115,7 @@ impl DelegationSettings {
             // No upper clamp: the cache budget is a user memory choice, not a
             // safety rail. `0` stays `0` (unlimited).
             completed_cache_max_mb: self.completed_cache_max_mb,
+            notify_on_completion: self.notify_on_completion,
         }
     }
 
@@ -110,6 +128,7 @@ impl DelegationSettings {
             // value from wrapping on 32-bit `usize` targets.
             completed_cache_cap_bytes: (self.completed_cache_max_mb as usize)
                 .saturating_mul(1024 * 1024),
+            notify_on_completion: self.notify_on_completion,
         }
     }
 }
@@ -134,6 +153,13 @@ pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSe
     {
         if let Ok(v) = raw.parse::<u32>() {
             settings.completed_cache_max_mb = v;
+        }
+    }
+    if let Ok(Some(raw)) =
+        app_metadata_service::get_value(conn, KEY_DELEGATION_NOTIFY_ON_COMPLETION).await
+    {
+        if let Ok(v) = raw.parse::<bool>() {
+            settings.notify_on_completion = v;
         }
     }
     if let Ok(Some(raw)) =
@@ -216,6 +242,13 @@ pub async fn set_delegation_settings_core(
     )
     .await
     .map_err(AppCommandError::from)?;
+    app_metadata_service::upsert_value(
+        conn,
+        KEY_DELEGATION_NOTIFY_ON_COMPLETION,
+        &clamped.notify_on_completion.to_string(),
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     // Whole-blob replace semantics: save mirrors what the UI sent. Empty map
     // serializes to "{}" — still write it so a user can clear all overrides
     // back to the agent defaults.
@@ -230,6 +263,50 @@ pub async fn set_delegation_settings_core(
         .await;
     emit_event(emitter, DELEGATION_SETTINGS_CHANGED_EVENT, &clamped);
     Ok(clamped)
+}
+
+/// Wire shape of the manual "notify main agent" action, shared by the Tauri
+/// command and the HTTP handler so both modes answer identically:
+/// `notified: true` means the notice went out (`message` names the channel),
+/// `notified: false` with `message: "already notified"` is not an error, and
+/// any other `message` is the failure reason.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyDelegationCompletionResult {
+    pub notified: bool,
+    pub message: String,
+}
+
+/// Deliver a finished delegation's result notice to the parent session's LLM on
+/// demand — the user asking for it, so it ignores `notify_on_completion` but
+/// shares the automatic notice's per-task dedupe.
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn notify_delegation_completion(
+    #[cfg(feature = "tauri-runtime")] broker: tauri::State<'_, Arc<DelegationBroker>>,
+    task_id: String,
+) -> Result<NotifyDelegationCompletionResult, AppCommandError> {
+    #[cfg(feature = "tauri-runtime")]
+    {
+        // Both outcomes keep the same `{ notified, message }` shape: a duplicate
+        // click ("already notified") and a real failure differ only by message,
+        // so the caller has one contract on both transports.
+        let result = match broker.inner().notify_task_completion(&task_id).await {
+            Ok(delivery) => NotifyDelegationCompletionResult {
+                notified: true,
+                message: format!("delivered via {}", delivery.as_str()),
+            },
+            Err(err) => NotifyDelegationCompletionResult {
+                notified: false,
+                message: err.to_string(),
+            },
+        };
+        Ok(result)
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        // Server mode reaches this via the web handler, not this command.
+        let _ = task_id;
+        Err(AppCommandError::configuration_invalid("tauri-only command"))
+    }
 }
 
 // -------- Tauri commands -----------------------------------------------------

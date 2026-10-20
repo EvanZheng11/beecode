@@ -24,7 +24,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { AlertTriangle, Bubbles, Gauge, HardDrive, Power } from "lucide-react"
+import {
+  AlertTriangle,
+  BellRing,
+  Bubbles,
+  Gauge,
+  HardDrive,
+  Power,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
@@ -96,6 +103,7 @@ export function DelegationSettingsSection() {
   const [enabled, setEnabled] = useState(false)
   const [depth, setDepth] = useState<number>(1)
   const [cacheMb, setCacheMb] = useState<number>(DEFAULT_CACHE_MB)
+  const [notifyOnCompletion, setNotifyOnCompletion] = useState(true)
   const [agentDefaults, setAgentDefaults] = useState<
     Partial<Record<AgentType, AgentDelegationDefaults>>
   >({})
@@ -136,6 +144,7 @@ export function DelegationSettingsSection() {
         }
         setDepth(s.depth_limit)
         setCacheMb(s.completed_cache_max_mb)
+        setNotifyOnCompletion(s.notify_on_completion)
         setAgentDefaults(s.agent_defaults ?? {})
         setLoadError(null)
       })
@@ -235,6 +244,7 @@ export function DelegationSettingsSection() {
       enabled,
       depth_limit: clamp(depth, DEPTH_MIN, DEPTH_MAX),
       completed_cache_max_mb: clampCacheMb(cacheMb),
+      notify_on_completion: notifyOnCompletion,
       agent_defaults: agentDefaults,
     }
     setSaving(true)
@@ -256,6 +266,7 @@ export function DelegationSettingsSection() {
       // inputs reflect what was actually persisted.
       setDepth(applied.depth_limit)
       setCacheMb(applied.completed_cache_max_mb)
+      setNotifyOnCompletion(applied.notify_on_completion)
       setAgentDefaults(applied.agent_defaults ?? {})
       toast.success(t("saved"))
     } catch (err: unknown) {
@@ -265,13 +276,14 @@ export function DelegationSettingsSection() {
     } finally {
       setSaving(false)
     }
-  }, [enabled, depth, cacheMb, agentDefaults, t])
+  }, [enabled, depth, cacheMb, notifyOnCompletion, agentDefaults, t])
 
   const generalDirty =
     persisted !== null &&
     (enabled !== persisted.enabled ||
       clamp(depth, DEPTH_MIN, DEPTH_MAX) !== persisted.depth_limit ||
-      clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb)
+      clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb ||
+      notifyOnCompletion !== persisted.notify_on_completion)
   const defaultsDirty =
     persisted !== null &&
     !sameDefaults(agentDefaults, persisted.agent_defaults ?? {})
@@ -383,6 +395,20 @@ export function DelegationSettingsSection() {
                   }}
                   disabled={loading || !enabled}
                   className="h-8 w-24 bg-background text-xs"
+                />
+              }
+            />
+            <SettingRow
+              icon={BellRing}
+              title={t("notifyOnCompletionLabel")}
+              description={t("notifyOnCompletionHint")}
+              htmlFor="delegation-notify-on-completion"
+              control={
+                <Switch
+                  id="delegation-notify-on-completion"
+                  checked={notifyOnCompletion}
+                  onCheckedChange={setNotifyOnCompletion}
+                  disabled={loading || !enabled}
                 />
               }
             />

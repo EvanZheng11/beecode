@@ -31,11 +31,13 @@
 //! broker's meta write.
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
-use crate::acp::delegation::types::AssistantRef;
+use crate::acp::delegation::types::{AssistantRef, TaskStatus};
+use crate::acp::error::AcpError;
 use crate::acp::manager::ConnectionManager;
-use crate::acp::types::{AcpEvent, DelegationResultSummary};
+use crate::acp::types::{AcpEvent, DelegationResultSummary, PromptInputBlock};
 use crate::models::AgentType;
 use crate::web::event_bridge::emit_with_state;
 
@@ -207,6 +209,310 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
     }
 }
 
+// ─── Completion notice ───────────────────────────────────────────────────
+//
+// The broker resolves every terminal path through `emit_completed`, so that is
+// where the parent's LLM is told the task is done. Without the notice the
+// parent can only poll `get_delegation_status`, which means it sits idle for a
+// whole poll interval after a child finishes. The notice rides the channels a
+// human's mid-turn note already uses, so it lands in the parent's transcript
+// (visible to the user too) instead of being invisible side-channel state.
+
+/// Where a completion notice landed: mid-turn steering (the parent's current
+/// turn keeps running) or a fresh prompt (the parent was idle / has no
+/// steering channel).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyDelivery {
+    Steering,
+    Prompt,
+}
+
+impl NotifyDelivery {
+    /// Wire word for `message: "delivered via <...>"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Steering => "steering",
+            Self::Prompt => "prompt",
+        }
+    }
+}
+
+/// Why a completion notice did not go out. `Display` doubles as the `message`
+/// the manual "notify main agent" endpoint hands back, so the strings stay
+/// short and user-facing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NotifyError {
+    #[error("already notified")]
+    AlreadyNotified,
+    #[error("task not found")]
+    TaskNotFound,
+    #[error("task is still running")]
+    StillRunning,
+    #[error("parent session is not connected")]
+    NoParentConnection,
+    #[error("notification unavailable")]
+    Unavailable,
+    #[error("{0}")]
+    DeliveryFailed(String),
+}
+
+/// Task ids whose completion notice already went out. The broker's terminal
+/// path and the manual button share one instance, so a task notifies the
+/// parent LLM at most once — whichever gets there first.
+///
+/// `try_claim` is the gate: it records the id and refuses any later attempt.
+/// `release` drops the claim when delivery failed, which keeps a failed notice
+/// retryable from the manual button.
+#[derive(Default)]
+pub struct NotifiedTasks {
+    ids: Mutex<VecDeque<String>>,
+}
+
+/// Upper bound on remembered ids. Only terminal tasks enter, so the ring just
+/// has to outlive a session's worth of delegations; past it the OLDEST id is
+/// forgotten (and could, in theory, notify twice).
+const NOTIFIED_TASKS_CAP: usize = 512;
+
+impl NotifiedTasks {
+    /// Record `task_id` and return `true`, or return `false` when it was
+    /// already notified. One critical section, so two concurrent callers can
+    /// never both win.
+    pub fn try_claim(&self, task_id: &str) -> bool {
+        // A poison cannot happen here (nothing in this section panics), but a
+        // notice must never take the caller down with it, so recover instead.
+        let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
+        if ids.iter().any(|id| id == task_id) {
+            return false;
+        }
+        ids.push_back(task_id.to_string());
+        while ids.len() > NOTIFIED_TASKS_CAP {
+            ids.pop_front();
+        }
+        true
+    }
+
+    /// Forget a claim so a later attempt can retry it (failed delivery).
+    pub fn release(&self, task_id: &str) {
+        let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
+        ids.retain(|id| id != task_id);
+    }
+}
+
+/// Cap on the result-summary line of a notice. The parent LLM reads this
+/// inline; the full text is one `get_delegation_status` away, so a preview is
+/// enough — and it keeps the notice far below `MAX_FEEDBACK_CHARS` (4096,
+/// `acp::feedback`), which is what the steering channel enforces.
+const NOTICE_SUMMARY_CHARS: usize = 300;
+
+/// Hard ceiling on one notice delivery. See `CompletionNotifier::deliver`: the
+/// notice runs on the broker's terminal path, so a stuck parent must not hold
+/// the child's teardown open.
+const NOTICE_DELIVERY_TIMEOUT_SECS: u64 = 10;
+
+/// Render the notice the parent LLM receives. `summary` is the result preview
+/// (completed) or `error_code: <code>` (failed / canceled). Newlines are
+/// flattened so the three-line shape survives whatever the child wrote.
+pub fn build_completion_notice(task_id: &str, status: TaskStatus, summary: &str) -> String {
+    let status = match status {
+        TaskStatus::Completed => "Completed",
+        TaskStatus::Failed => "Failed",
+        TaskStatus::Canceled => "Canceled",
+        // Running / Unknown never reach a notice; never claim success for them.
+        TaskStatus::Running | TaskStatus::Unknown => "Unknown",
+    };
+    let summary = one_line_preview(summary);
+    format!(
+        "[system] Sub-agent task {task_id} finished with status: {status}.\n{summary}\nCall get_delegation_status with task_ids [\"{task_id}\"] to read the full result. Do not start a new delegate_to_agent call for this task."
+    )
+}
+
+/// Project a terminal event summary onto the notice's `(status, detail)` pair.
+/// `canceled` is the broker's wire-stable code for every cancel path.
+pub fn notice_from_summary(result: &DelegationResultSummary) -> (TaskStatus, String) {
+    match result {
+        DelegationResultSummary::Ok { text_preview, .. } => (
+            TaskStatus::Completed,
+            text_preview.clone().unwrap_or_default(),
+        ),
+        DelegationResultSummary::Err { error_code } if error_code == "canceled" => (
+            TaskStatus::Canceled,
+            format!("error_code: {error_code}"),
+        ),
+        DelegationResultSummary::Err { error_code } => (
+            TaskStatus::Failed,
+            format!("error_code: {error_code}"),
+        ),
+    }
+}
+
+/// Collapse `text` to ONE line of at most [`NOTICE_SUMMARY_CHARS`] characters,
+/// so a multi-line child answer cannot break the notice's structure.
+fn one_line_preview(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "(no text output)".to_string();
+    }
+    let mut preview: String = flat.chars().take(NOTICE_SUMMARY_CHARS).collect();
+    if flat.chars().count() > NOTICE_SUMMARY_CHARS {
+        preview.push_str("...");
+    }
+    preview
+}
+
+/// Delivers completion notices to a parent conversation's LLM. Steering first
+/// (the parent's turn keeps going — no extra turn), a plain prompt when the
+/// parent is idle or has no steering channel.
+pub struct CompletionNotifier {
+    manager: Arc<ConnectionManager>,
+    notified: NotifiedTasks,
+}
+
+impl CompletionNotifier {
+    pub fn new(manager: Arc<ConnectionManager>) -> Self {
+        Self {
+            manager,
+            notified: NotifiedTasks::default(),
+        }
+    }
+
+    /// Fire-and-forget variant for the autorun path: the broker's terminal
+    /// teardown must finish no matter what happens here, so a failed notice is
+    /// a log line, never an error at the caller.
+    pub async fn notify_quietly(
+        &self,
+        parent_connection_id: &str,
+        task_id: &str,
+        status: TaskStatus,
+        summary: &str,
+    ) {
+        match self
+            .notify(parent_connection_id, task_id, status, summary)
+            .await
+        {
+            Ok(delivery) => tracing::info!(
+                task_id = %task_id,
+                parent_connection_id = %parent_connection_id,
+                delivery = delivery.as_str(),
+                "已向主智能体投递子任务完成通知"
+            ),
+            // A duplicate is the normal outcome of "auto notice won the race
+            // with the manual button" — not a warning.
+            Err(NotifyError::AlreadyNotified) => tracing::debug!(
+                task_id = %task_id,
+                "子任务完成通知此前已投递，跳过"
+            ),
+            Err(err) => tracing::warn!(
+                task_id = %task_id,
+                parent_connection_id = %parent_connection_id,
+                error = %err,
+                "子任务完成通知投递失败"
+            ),
+        }
+    }
+
+    /// Deliver the terminal notice for `task_id` to the live connection
+    /// `parent_connection_id`, claiming the dedupe slot first. The claim is
+    /// released again when delivery fails, so the manual button can retry.
+    pub async fn notify(
+        &self,
+        parent_connection_id: &str,
+        task_id: &str,
+        status: TaskStatus,
+        summary: &str,
+    ) -> Result<NotifyDelivery, NotifyError> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return Err(NotifyError::TaskNotFound);
+        }
+        if parent_connection_id.is_empty() {
+            return Err(NotifyError::NoParentConnection);
+        }
+        if !self.notified.try_claim(task_id) {
+            return Err(NotifyError::AlreadyNotified);
+        }
+        let text = build_completion_notice(task_id, status, summary);
+        match self.deliver(parent_connection_id, &text).await {
+            Ok(delivery) => Ok(delivery),
+            Err(err) => {
+                self.notified.release(task_id);
+                Err(err)
+            }
+        }
+    }
+
+    /// Deliver to whatever live connection currently owns
+    /// `parent_conversation_id`. This is the DB-fallback path: the task's broker
+    /// entry aged out, so only the child row's parent conversation is known.
+    pub async fn notify_conversation(
+        &self,
+        parent_conversation_id: i32,
+        task_id: &str,
+        status: TaskStatus,
+        summary: &str,
+    ) -> Result<NotifyDelivery, NotifyError> {
+        let Some(connection_id) = self
+            .manager
+            .find_connection_by_conversation_id(parent_conversation_id)
+            .await
+        else {
+            return Err(NotifyError::NoParentConnection);
+        };
+        self.notify(&connection_id, task_id, status, summary).await
+    }
+
+    async fn deliver(
+        &self,
+        parent_connection_id: &str,
+        text: &str,
+    ) -> Result<NotifyDelivery, NotifyError> {
+        // Bounded: this runs on the broker's terminal path (before the child is
+        // torn down) and `submit_feedback` waits on an adapter round-trip while
+        // `send_prompt` waits on the parent's prompt lock. An unresponsive
+        // parent must not stall the teardown it is merely being notified about.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(NOTICE_DELIVERY_TIMEOUT_SECS),
+            self.deliver_inner(parent_connection_id, text),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(NotifyError::DeliveryFailed(format!(
+                "timed out after {NOTICE_DELIVERY_TIMEOUT_SECS}s"
+            ))),
+        }
+    }
+
+    async fn deliver_inner(
+        &self,
+        parent_connection_id: &str,
+        text: &str,
+    ) -> Result<NotifyDelivery, NotifyError> {
+        match self
+            .manager
+            .submit_feedback(parent_connection_id, text.to_string(), None)
+            .await
+        {
+            Ok(_) => Ok(NotifyDelivery::Steering),
+            // No turn to steer (parent idle) or no steering channel at all —
+            // fall back to a prompt, which starts the turn that reads it.
+            Err(AcpError::NoActiveTurn) | Err(AcpError::FeedbackDisabled) => self
+                .manager
+                .send_prompt(
+                    parent_connection_id,
+                    vec![PromptInputBlock::Text {
+                        text: text.to_string(),
+                    }],
+                )
+                .await
+                .map(|_| NotifyDelivery::Prompt)
+                .map_err(|e| NotifyError::DeliveryFailed(e.to_string())),
+            // The parent connection is gone, or the note was rejected: no
+            // fallback can help, report why.
+            Err(e) => Err(NotifyError::DeliveryFailed(e.to_string())),
+        }
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock {
     use super::*;
@@ -313,5 +619,67 @@ pub mod mock {
                 result,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_notice_tests {
+    use super::*;
+
+    #[test]
+    fn a_second_notification_for_the_same_task_is_blocked() {
+        let notified = NotifiedTasks::default();
+        assert!(notified.try_claim("task-1"));
+        assert!(
+            !notified.try_claim("task-1"),
+            "the same task may only notify the parent once"
+        );
+        assert!(notified.try_claim("task-2"), "another task is unaffected");
+    }
+
+    #[test]
+    fn a_failed_delivery_stays_retryable() {
+        let notified = NotifiedTasks::default();
+        assert!(notified.try_claim("task-1"));
+        notified.release("task-1");
+        assert!(notified.try_claim("task-1"), "a release frees the slot");
+    }
+
+    #[test]
+    fn the_ring_forgets_the_oldest_ids() {
+        let notified = NotifiedTasks::default();
+        for i in 0..(NOTIFIED_TASKS_CAP + 1) {
+            assert!(notified.try_claim(&format!("t{i}")));
+        }
+        assert!(!notified.try_claim(&format!("t{}", NOTIFIED_TASKS_CAP - 1)));
+        assert!(notified.try_claim("t0"), "the evicted id may notify again");
+    }
+
+    #[test]
+    fn the_notice_keeps_its_three_line_shape() {
+        let text = build_completion_notice(
+            "task-1",
+            TaskStatus::Completed,
+            "line one\nline two\t  three",
+        );
+        assert_eq!(text.lines().count(), 3);
+        assert!(text.contains("status: Completed."));
+        assert!(text.contains("line one line two three"));
+        assert!(text.contains("task_ids [\"task-1\"]"));
+    }
+
+    #[test]
+    fn a_long_or_empty_result_is_bounded() {
+        let long = "x".repeat(NOTICE_SUMMARY_CHARS + 50);
+        let text = build_completion_notice("task-1", TaskStatus::Failed, &long);
+        assert!(text.chars().count() < crate::acp::feedback::MAX_FEEDBACK_CHARS);
+
+        let empty = build_completion_notice("task-1", TaskStatus::Completed, "");
+        assert!(empty.contains("(no text output)"));
+
+        let failed = notice_from_summary(&DelegationResultSummary::Err {
+            error_code: "child_max_tokens".into(),
+        });
+        assert_eq!(failed, (TaskStatus::Failed, "error_code: child_max_tokens".into()));
     }
 }
