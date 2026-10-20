@@ -411,7 +411,7 @@ const FolderHeader = memo(function FolderHeader({
               onPointerDown={(e) => onGripPointerDown?.(folderId, e)}
               className={cn(
                 "group flex h-[1.9375rem] w-full items-center",
-                "rounded-full",
+                "rounded-md",
                 "transition-colors duration-150",
                 isDragging
                   ? "cursor-grabbing"
@@ -425,7 +425,7 @@ const FolderHeader = memo(function FolderHeader({
                 aria-expanded={expanded}
                 className={cn(
                   "relative flex h-full min-w-0 flex-1 items-center pr-[0.5rem] outline-none",
-                  "rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  "rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                   "text-sidebar-foreground",
                   isDragging ? "cursor-grabbing" : "cursor-grab"
                 )}
@@ -3198,7 +3198,7 @@ export function SidebarConversationList({
               // onto it — the row read as un-hovered while the cursor was still
               // inside it. Same reason the section headers put their group on
               // the row container rather than the toggle button.
-              "relative flex h-[1.9375rem] w-full items-center rounded-full text-left text-[0.75rem] text-muted-foreground/80 outline-none transition-colors duration-[120ms] group-hover/recent-more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/recent-more:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "relative flex h-[1.9375rem] w-full items-center rounded-md text-left text-[0.75rem] text-muted-foreground/80 outline-none transition-colors duration-[120ms] group-hover/recent-more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/recent-more:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               // Reserved unconditionally (not just while hovered) so revealing
               // the reset icon never reflows the label under the cursor.
               showMore && row.canReset ? "pr-[1.75rem]" : "pr-[0.25rem]"
@@ -3425,7 +3425,7 @@ export function SidebarConversationList({
                           <div
                             key="ungroup"
                             className={cn(
-                              "flex h-[2rem] items-center rounded-full",
+                              "flex h-[2rem] items-center rounded-md",
                               "border border-dashed border-sidebar-border",
                               "px-[0.75rem] text-[0.75rem] text-muted-foreground/80"
                             )}

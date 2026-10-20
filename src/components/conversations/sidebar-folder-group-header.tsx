@@ -49,7 +49,7 @@ import { SubsessionAncestorRails } from "./sidebar-conversation-card"
  * Geometry is deliberately the folder header's, not the section header's: a
  * group sits at the same top-level indent as an ungrouped folder and the two
  * interleave in one list, so they have to read as siblings. Same `h-[2rem]`
- * outer box (virtua's fixed item size), same rounded-full hover pill, same
+ * outer box (virtua's fixed item size), same rounded-md hover pill, same
  * rail-axis glyph, same hover-revealed trailing `⋯` — and, past geometry, the
  * same title type (size, weight and colour) and the same running-sessions
  * badge. The one thing that sets a group apart is its glyph: Layers, not a
@@ -162,7 +162,7 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
         onPointerDown={(e) => onGripPointerDown?.(groupId, e)}
         className={cn(
           "group flex h-[1.9375rem] w-full items-center",
-          "rounded-full",
+          "rounded-md",
           "transition-colors duration-150",
           isDragging
             ? "cursor-grabbing"
@@ -175,7 +175,7 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
           aria-expanded={expanded}
           className={cn(
             "relative flex h-full min-w-0 flex-1 items-center pr-[0.5rem] outline-none",
-            "rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            "rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
             "text-sidebar-foreground",
             isDragging ? "cursor-grabbing" : "cursor-grab"
           )}
