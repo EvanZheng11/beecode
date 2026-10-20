@@ -48,6 +48,38 @@ const LOADED = [user("turn-4", "third"), write("turn-5", "/repo/b.ts")]
 const THREAD_INDEX = new Map([["turn-4", 0]])
 
 describe("buildMessageNavEntries", () => {
+  it("历史委派与窗口开头的委派归到同一用户消息且不重复", () => {
+    const source = { parentToolUseId: "delegate-1", input: null }
+    const historical = reply("reply-1")
+    historical.blocks = [
+      {
+        type: "tool_use",
+        tool_use_id: "delegate-1",
+        tool_name: "delegate_to_agent",
+        input_preview: null,
+        meta: { "codeg.delegation": { status: "completed" } },
+      },
+    ]
+    const entries = buildMessageNavEntries({
+      earlierTurns: [user("turn-0", "first"), historical],
+      earlierUserCount: 1,
+      loadedTurns: [reply("reply-2"), user("turn-3", "next")],
+      threadIndexByTurnId: new Map([["turn-3", 1]]),
+      loadedSubAgents: {
+        byUserTurnId: new Map([
+          ["turn-3", [{ parentToolUseId: "delegate-3" }]],
+        ]),
+        leading: [source, { parentToolUseId: "delegate-2" }],
+      },
+    })
+    expect(entries[0].subAgents?.map((item) => item.parentToolUseId)).toEqual([
+      "delegate-1",
+      "delegate-2",
+    ])
+    expect(entries[1].subAgents?.map((item) => item.parentToolUseId)).toEqual([
+      "delegate-3",
+    ])
+  })
   it("lists every message, numbering the earlier ones first", () => {
     const entries = buildMessageNavEntries({
       earlierTurns: EARLIER,

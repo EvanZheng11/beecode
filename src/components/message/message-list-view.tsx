@@ -1,6 +1,8 @@
 "use client"
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
+import { useSessionDetailsMessageNav } from "@/contexts/aux-panel-context"
 import {
   isLiveTurnId,
   selectTimelineTurns,
@@ -1205,6 +1207,7 @@ export function MessageListView({
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
+  const messageNavTarget = useSessionDetailsMessageNav()?.target
   const pageHandoffName = usePageHandoffName()
   // Resolved once for the whole thread rather than per reply: the labels are a
   // property of the agent, not of any one turn.
@@ -1630,12 +1633,11 @@ export function MessageListView({
     : `subagents-history-${conversationId}`
 
   // --- Message navigator panel ------------------------------------------------
-  // Lifted scroll handle so the panel (which lives in the overlay stack, outside
-  // the MessageScrollProvider subtree) can drive scrollToIndex.
+  // 导航通过 Portal 显示在会话详情，仍使用当前消息列表的滚动句柄。
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   // Collapse state is owned here (not in the panel) so the expensive per-file
   // `navEntries` is computed only while the panel is open.
-  const [navExpanded, setNavExpanded] = useState(false)
+  const [navExpanded, setNavExpanded] = useState(true)
 
   // Positioning box for the text-selection bubble. It is the transcript's outer
   // (non-scrolling) frame, so the bubble is clipped to the message area and
@@ -1673,7 +1675,8 @@ export function MessageListView({
     fetchId: session?.dbConversationId ?? conversationId,
     offset: windowedDetail?.turns_offset ?? 0,
     prefixHash: windowedDetail?.prefix_hash ?? null,
-    enabled: navExpanded && earlierUserCount > 0,
+    enabled:
+      navExpanded && isActive && !!messageNavTarget && earlierUserCount > 0,
   })
   const earlierOutlineState = earlierOutline.state
 
@@ -1683,7 +1686,26 @@ export function MessageListView({
   // streaming hot path free of diff parsing. Thread indices are recomputed
   // with the items on every prepend, so the jump targets never go stale.
   const navEntries = useMemo<MessageNavEntry[]>(() => {
-    if (!showMessageNav || !navExpanded) return EMPTY_NAV_ENTRIES
+    if (!showMessageNav || !navExpanded || !isActive || !messageNavTarget)
+      return EMPTY_NAV_ENTRIES
+    // 按用户轮次归集已适配的委派，复用正文对恢复任务和拒绝结果的判断。
+    const subAgentsByTurnId = new Map<string, DelegationCardSource[]>()
+    const leading: DelegationCardSource[] = []
+    let currentUserTurnId: string | null = null
+    for (const item of threadItems) {
+      if (item.kind !== "turn") continue
+      if (item.group.role === "user") {
+        currentUserTurnId = item.group.id
+      } else if (item.group.role === "assistant") {
+        const sources = extractDelegationSources(item.group.parts)
+        if (currentUserTurnId == null) {
+          leading.push(...sources)
+        } else if (sources.length > 0) {
+          const previous = subAgentsByTurnId.get(currentUserTurnId) ?? []
+          subAgentsByTurnId.set(currentUserTurnId, [...previous, ...sources])
+        }
+      }
+    }
     const entries = buildMessageNavEntries({
       earlierTurns:
         earlierOutlineState.status === "ready"
@@ -1692,15 +1714,19 @@ export function MessageListView({
       earlierUserCount,
       loadedTurns: timelineTurns.map((item) => item.turn),
       threadIndexByTurnId: loadedUserMessages.threadIndexByTurnId,
+      loadedSubAgents: { byUserTurnId: subAgentsByTurnId, leading },
     })
     return entries.length > 0 ? entries : EMPTY_NAV_ENTRIES
   }, [
     showMessageNav,
     navExpanded,
+    isActive,
+    messageNavTarget,
     earlierOutlineState,
     earlierUserCount,
     timelineTurns,
     loadedUserMessages,
+    threadItems,
   ])
 
   const navJump = useMessageNavJump({
@@ -1849,33 +1875,29 @@ export function MessageListView({
             isStreaming={connStatus === "prompting"}
           />
         )}
-        {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
-        top-right in RTL). A flex column keeps the order stable regardless of
-        each panel's expand/collapse height: the message navigator first, then
-        the plan panel, then the sub-agent panel. Empty panels render null and
-        collapse out. Positioning lives here (not in the child overlays); the
-        chips are "bullets" — flat on the start side (flush to the pinned
-        edge), rounded on the end side — that expand toward the inline-end on
-        hover. Logical `start-0` + `items-start` keep the anchor and the bullet
-        on the same side, so the whole stack mirrors cleanly in RTL. */}
+        {showMessageNav && isActive && messageNavTarget && userMessageCount > 0
+          ? createPortal(
+              <ConversationMessageNav
+                count={userMessageCount}
+                expanded={navExpanded}
+                onToggle={setNavExpanded}
+                entries={navEntries}
+                onSelect={navJump.select}
+                revealingTurnId={navJump.revealingTurnId}
+                earlier={
+                  earlierOutlineState.status === "loading" ||
+                  earlierOutlineState.status === "error"
+                    ? earlierOutlineState.status
+                    : null
+                }
+                onRetryEarlier={earlierOutline.retry}
+              />,
+              messageNavTarget
+            )
+          : null}
+        {/* 计划和子智能体仍按顺序排列在消息区起始侧，空面板不占位。
+            定位由此容器负责，逻辑方向类同时兼容 RTL。 */}
         <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
-          {showMessageNav && userMessageCount > 0 && (
-            <ConversationMessageNav
-              count={userMessageCount}
-              expanded={navExpanded}
-              onToggle={setNavExpanded}
-              entries={navEntries}
-              onSelect={navJump.select}
-              revealingTurnId={navJump.revealingTurnId}
-              earlier={
-                earlierOutlineState.status === "loading" ||
-                earlierOutlineState.status === "error"
-                  ? earlierOutlineState.status
-                  : null
-              }
-              onRetryEarlier={earlierOutline.retry}
-            />
-          )}
           <AgentPlanOverlay
             key={agentPlanOverlayKey}
             message={liveMessage ?? null}

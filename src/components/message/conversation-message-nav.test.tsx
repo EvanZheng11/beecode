@@ -21,6 +21,21 @@ vi.mock("@/contexts/workspace-context", () => ({
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: { path: "/repo" } }),
 }))
+vi.mock("@/hooks/use-delegation-card-model", () => ({
+  useDelegationCardModel: () => ({
+    identity: { agentType: "codex", assistantId: null, assistantName: null },
+    task: "检查导航布局",
+    status: "ok",
+    childConversationId: null,
+  }),
+}))
+vi.mock("./delegation-identity", () => ({
+  DelegationIdentityAvatar: () => null,
+  DelegationIdentityName: () => <span>Codex</span>,
+}))
+vi.mock("./delegation-status-badge", () => ({
+  StatusBadge: () => <span>已完成</span>,
+}))
 
 const DELETION_DIFF = "*** Delete File: old.ts\n-a\n-b\n-c\n-d"
 
@@ -96,6 +111,32 @@ describe("ConversationMessageNav", () => {
     vi.clearAllMocks()
   })
 
+  it("紧凑单行导航只展开选中消息的委派卡", () => {
+    render(
+      <ConversationMessageNav
+        count={2}
+        expanded
+        onToggle={vi.fn()}
+        entries={[
+          { ...entries[0], subAgents: [{ parentToolUseId: "delegate-1" }] },
+          entries[1],
+        ]}
+        onSelect={vi.fn()}
+      />
+    )
+    expect(screen.queryByText("检查导航布局")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText("first message"))
+    expect(screen.getByText("检查导航布局")).toBeInTheDocument()
+    expect(screen.getByText("first message").closest("button")).toHaveAttribute(
+      "aria-current",
+      "location"
+    )
+    expect(screen.queryByTitle("src/a.ts")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText("edit something"))
+    expect(screen.queryByText("检查导航布局")).not.toBeInTheDocument()
+    expect(screen.getByTitle("src/a.ts")).toBeInTheDocument()
+  })
+
   it("renders nothing when there are no user messages", () => {
     const { container } = render(
       <ConversationMessageNav
@@ -120,8 +161,9 @@ describe("ConversationMessageNav", () => {
         onSelect={vi.fn()}
       />
     )
-    // No card while collapsed.
-    expect(screen.queryByText("title")).not.toBeInTheDocument()
+    // 会话详情内折叠后仍显示导航标题，消息条目保持隐藏。
+    expect(screen.getByText("title")).toBeInTheDocument()
+    expect(screen.queryByText("first message")).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "collapsedSummary:3" }))
     expect(onToggle).toHaveBeenCalledWith(true)
   })
@@ -231,10 +273,10 @@ describe("ConversationMessageNav", () => {
         onSelect={vi.fn()}
       />
     )
-    // u2 added 5, deleted 0 — both rendered.
+    fireEvent.click(screen.getByText("edit something"))
     expect(screen.getByText("+5")).toBeInTheDocument()
     expect(screen.getByText("-0")).toBeInTheDocument()
-    // u3 added 0, deleted 4 — both rendered.
+    fireEvent.click(screen.getByText("delete a file"))
     expect(screen.getByText("+0")).toBeInTheDocument()
     expect(screen.getByText("-4")).toBeInTheDocument()
     // Placeholder message still renders its label.
@@ -271,8 +313,8 @@ describe("ConversationMessageNav", () => {
         onSelect={vi.fn()}
       />
     )
-    // Expand u3's file list (second changed group).
-    fireEvent.click(screen.getAllByRole("button", { name: /^fileCount:/ })[1])
+    // 最后一条消息默认展开，点击消息本身保持展开并跳转。
+    fireEvent.click(screen.getByText("delete a file"))
     fireEvent.click(screen.getByTitle("old.ts"))
     expect(mockOpenDiff).toHaveBeenCalledWith(
       "/repo/old.ts",

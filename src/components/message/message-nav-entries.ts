@@ -1,6 +1,12 @@
 import type { MessageNavEntry } from "@/components/message/conversation-message-nav"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import type { MessageTurn } from "@/lib/types"
+import type { DelegationCardSource } from "@/hooks/use-delegation-card-model"
+import { normalizeToolName } from "@/lib/tool-call-normalization"
+import {
+  isDelegateToAgentToolName,
+  parseDelegationMeta,
+} from "@/lib/delegation-card"
 
 export interface MessageNavEntriesInput {
   /**
@@ -16,6 +22,11 @@ export interface MessageNavEntriesInput {
   loadedTurns: readonly MessageTurn[]
   /** Each loaded user turn's index among the rendered thread items. */
   threadIndexByTurnId: ReadonlyMap<string, number>
+  /** 已加载正文中的委派，以及窗口起点处尚未遇到用户消息的委派。 */
+  loadedSubAgents?: {
+    byUserTurnId: ReadonlyMap<string, readonly DelegationCardSource[]>
+    leading: readonly DelegationCardSource[]
+  }
 }
 
 /**
@@ -41,6 +52,7 @@ export function buildMessageNavEntries({
   earlierUserCount,
   loadedTurns,
   threadIndexByTurnId,
+  loadedSubAgents,
 }: MessageNavEntriesInput): MessageNavEntry[] {
   const turns =
     earlierTurns && earlierTurns.length > 0
@@ -49,8 +61,29 @@ export function buildMessageNavEntries({
   const groups = extractSessionFilesGrouped(turns, { includeEmpty: true })
 
   const earlierIndexById = new Map<string, number>()
+  const earlierSubAgents = new Map<string, DelegationCardSource[]>()
+  let currentUserTurnId: string | null = null
   earlierTurns?.forEach((turn, index) => {
-    if (turn.role === "user") earlierIndexById.set(turn.id, index)
+    if (turn.role === "user") {
+      earlierIndexById.set(turn.id, index)
+      currentUserTurnId = turn.id
+    } else if (turn.role === "assistant" && currentUserTurnId != null) {
+      // 历史大纲只信任实际产生委派的快照，不把被拒绝的调用当成子任务。
+      for (const block of turn.blocks) {
+        if (block.type !== "tool_use" || !block.tool_use_id) continue
+        if (!isDelegateToAgentToolName(normalizeToolName(block.tool_name)))
+          continue
+        if (parseDelegationMeta(block.meta) == null) continue
+        const sources = earlierSubAgents.get(currentUserTurnId) ?? []
+        sources.push({
+          parentToolUseId: block.tool_use_id,
+          input: block.input_preview,
+          meta: block.meta,
+          state: "output-available",
+        })
+        earlierSubAgents.set(currentUserTurnId, sources)
+      }
+    }
   })
 
   const entries: MessageNavEntry[] = []
@@ -72,6 +105,21 @@ export function buildMessageNavEntries({
       deletions += file.deletions
     }
     ordinal += 1
+    const subAgents = [...(earlierSubAgents.get(group.userTurnId) ?? [])]
+    const loaded = earlierIndexById.has(group.userTurnId)
+      ? group.userTurnId === currentUserTurnId
+        ? loadedSubAgents?.leading
+        : null
+      : loadedSubAgents?.byUserTurnId.get(group.userTurnId)
+    for (const source of loaded ?? []) {
+      if (
+        !subAgents.some(
+          (item) => item.parentToolUseId === source.parentToolUseId
+        )
+      ) {
+        subAgents.push(source)
+      }
+    }
     entries.push({
       threadIndex,
       turnIndex,
@@ -82,6 +130,7 @@ export function buildMessageNavEntries({
       deletions,
       files: group.files,
       hasChanges: group.files.length > 0,
+      subAgents,
     })
   }
   return entries

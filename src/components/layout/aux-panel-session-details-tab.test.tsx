@@ -1,4 +1,5 @@
 import { render } from "@testing-library/react"
+import { createPortal } from "react-dom"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
@@ -21,7 +22,10 @@ vi.mock("@/components/agent-icon", () => ({ AgentIcon: () => null }))
 // the API so an accidental call is inert rather than a real transport hit.
 vi.mock("@/lib/api", () => ({ getFolderConversation: vi.fn() }))
 
-vi.mock("@/contexts/aux-panel-context", () => ({ useAuxPanelContext: vi.fn() }))
+vi.mock("@/contexts/aux-panel-context", () => ({
+  useAuxPanelContext: vi.fn(),
+  useSessionDetailsMessageNav: vi.fn(),
+}))
 vi.mock("@/contexts/tab-context", () => ({ useTabStore: vi.fn() }))
 vi.mock("@/stores/conversation-runtime-store", () => ({
   useConversationRuntimeStore: vi.fn(),
@@ -31,12 +35,16 @@ vi.mock("@/stores/app-workspace-store", () => ({
 }))
 
 import { SessionDetailsTab } from "./aux-panel-session-details-tab"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import {
+  useAuxPanelContext,
+  useSessionDetailsMessageNav,
+} from "@/contexts/aux-panel-context"
 import { useTabStore } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 const mockAux = useAuxPanelContext as unknown as Mock
+const mockMessageNav = useSessionDetailsMessageNav as unknown as Mock
 const mockTabs = useTabStore as unknown as Mock
 const mockRuntime = useConversationRuntimeStore as unknown as Mock
 const mockWorkspace = useAppWorkspaceStore as unknown as Mock
@@ -102,6 +110,39 @@ function renderTab() {
 describe("SessionDetailsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockMessageNav.mockReturnValue(null)
+  })
+
+  it("消息导航挂载在会话详情内部，空会话时移除挂载点", () => {
+    setupScene({ hasActiveConversation: true })
+    const setTarget = vi.fn()
+    mockMessageNav.mockReturnValue({ target: null, setTarget })
+    const { container, rerender } = renderTab()
+    const target = setTarget.mock.calls[0][0] as HTMLDivElement
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SessionDetailsTab />
+        {createPortal(<button>消息导航</button>, target)}
+      </NextIntlClientProvider>
+    )
+    expect(container.contains(target)).toBe(true)
+    expect(target).toHaveTextContent("消息导航")
+    expect(target.parentElement).toHaveTextContent("My session")
+    const card = target.previousElementSibling
+    expect(card?.tagName).toBe("SECTION")
+    expect(card).toHaveTextContent("ext-abc")
+    expect(card).toHaveTextContent("main")
+    expect(container).not.toHaveTextContent("Token usage")
+
+    setupScene({ hasActiveConversation: false })
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SessionDetailsTab />
+      </NextIntlClientProvider>
+    )
+    expect(setTarget.mock.calls[setTarget.mock.calls.length - 1][0]).toBeNull()
+    expect(container).not.toHaveTextContent("消息导航")
   })
 
   it("renders the active session's details with no folder-actions bar", () => {

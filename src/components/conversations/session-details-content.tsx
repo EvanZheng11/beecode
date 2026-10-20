@@ -282,6 +282,121 @@ function CopyableValue({
  * Data inputs are dialog-agnostic: a `summary` plus the tri-state
  * `stats`/`model` contract (see the prop docs).
  */
+/** 会话详情侧栏的紧凑摘要，布局沿用上游 v0.38.0。 */
+export function SessionDetailsCard({
+  summary,
+  model,
+}: {
+  summary: DbConversationSummary
+  model: string | null
+}) {
+  const t = useTranslations("Folder.sessionDetails")
+  const modelLabel = useModelLabels(summary.agent_type)
+  const displayModel = modelLabel(model ?? summary.model ?? null)
+  const title = formatConversationTitle(summary.title) || t("untitled")
+
+  return (
+    <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
+      <p
+        title={title}
+        className="line-clamp-2 text-[0.8125rem] leading-[1.125rem] font-semibold [overflow-wrap:anywhere]"
+      >
+        {title}
+      </p>
+      <div className="mt-1">
+        <SessionIdentityChips
+          agentType={summary.agent_type}
+          status={summary.status}
+        />
+      </div>
+      <dl className="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-2xs">
+        <PropertyRow label={t("model")}>
+          <span className="min-w-0 truncate" title={displayModel || undefined}>
+            {displayModel || t("none")}
+          </span>
+        </PropertyRow>
+        <PropertyRow label={t("gitBranch")}>
+          <span
+            className="min-w-0 truncate font-mono"
+            title={summary.git_branch || undefined}
+          >
+            {summary.git_branch || t("none")}
+          </span>
+        </PropertyRow>
+        <PropertyRow label={t("sessionId")}>
+          <CopyableValue
+            text={String(summary.id)}
+            className="font-mono tabular-nums"
+            copyLabel={t("copyField", { field: t("sessionId") })}
+            copiedLabel={t("copiedField", { field: t("sessionId") })}
+          >
+            {summary.id}
+          </CopyableValue>
+        </PropertyRow>
+        <PropertyRow label={t("externalId")}>
+          {summary.external_id ? (
+            <CopyableValue
+              text={summary.external_id}
+              className="flex min-w-0 font-mono"
+              copyLabel={t("copyField", { field: t("externalId") })}
+              copiedLabel={t("copiedField", { field: t("externalId") })}
+            >
+              <span
+                dir="ltr"
+                title={summary.external_id}
+                className="flex min-w-0"
+              >
+                <span className="min-w-0 truncate">
+                  {summary.external_id.length > 16
+                    ? summary.external_id.slice(0, -8)
+                    : summary.external_id}
+                </span>
+                {summary.external_id.length > 16 && (
+                  <span className="shrink-0">
+                    {summary.external_id.slice(-8)}
+                  </span>
+                )}
+              </span>
+            </CopyableValue>
+          ) : (
+            t("none")
+          )}
+        </PropertyRow>
+        {summary.parent_id != null && (
+          <PropertyRow label={t("parentId")}>
+            <span className="font-mono tabular-nums">{summary.parent_id}</span>
+          </PropertyRow>
+        )}
+        {summary.assistant_id != null && (
+          <PropertyRow label={t("assistant")}>
+            <AssistantInline
+              id={summary.assistant_id}
+              snapshotName={summary.assistant_name ?? null}
+            />
+          </PropertyRow>
+        )}
+      </dl>
+    </section>
+  )
+}
+
+function PropertyRow({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="flex h-5 min-w-0 items-center gap-1 text-foreground/80">
+        {children}
+      </dd>
+    </div>
+  )
+}
+
 export function SessionDetailsContent({
   summary: summaryProp,
   stats: statsProp,
