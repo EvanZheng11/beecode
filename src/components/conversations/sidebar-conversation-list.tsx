@@ -3112,9 +3112,9 @@ export function SidebarConversationList({
       return (
         // Full row height (h-[2rem], the fixed virtua item size) so the container
         // connector spine stays continuous THROUGH an empty sub-group ("no
-        // conversations") instead of breaking at a shorter box. The ancestor rail
-        // spans this row; it renders nothing at depth 0 (a plain folder has no
-        // spine).
+        // conversations") instead of breaking at a shorter box. The hint always
+        // sits one level below its folder header, so the ancestor rail runs
+        // through it and keeps that folder's spine going.
         <div
           className="relative flex h-[2rem] items-center text-[0.75rem] text-muted-foreground/70"
           style={{
