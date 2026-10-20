@@ -454,7 +454,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     <span
                       className={cn(
                         "relative min-w-0 max-w-max flex-1 truncate text-[0.875rem] font-normal",
-                        isOpenInTab && "text-primary"
+                        // 选中态（当前激活的会话行）与「已在标签页打开」共用同一个主题
+                        // accent 色，而不是继承默认的前景色：主题色令牌，不写死色值。
+                        (isSelected || isOpenInTab) && "text-primary"
                       )}
                     >
                       {formatConversationTitle(conversation.title) ||

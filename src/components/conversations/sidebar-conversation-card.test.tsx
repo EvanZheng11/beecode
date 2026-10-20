@@ -862,3 +862,31 @@ describe("SidebarConversationCard — assistant sub-sessions", () => {
     expect(probe.agentIconRenders).toBe(before)
   })
 })
+
+describe("SidebarConversationCard selected row", () => {
+  // 选中态标题用主题 accent 色（`text-primary`），而不是继承默认前景色。
+  const ACCENT_TITLE = /(^|\s)text-primary(\s|$)/
+
+  function renderRow(isSelected: boolean) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(1)}
+        isSelected={isSelected}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("highlights the title of the selected row only", () => {
+    const selected = renderRow(true)
+    expect(screen.getByText("conv-1").className).toMatch(ACCENT_TITLE)
+    selected.unmount()
+
+    renderRow(false)
+    expect(screen.getByText("conv-1").className).not.toMatch(ACCENT_TITLE)
+  })
+})
