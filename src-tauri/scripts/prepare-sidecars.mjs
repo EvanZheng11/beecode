@@ -7,7 +7,8 @@
 //      `TAURI_TARGET_TRIPLE` env, or the host's `rustc -vV` host triple.
 //   2. Runs `cargo build --release --no-default-features`, with the feature
 //      each binary target requires, for each sidecar bin (`codeg-mcp`,
-//      `codeg-computer-helper`) for that triple from `src-tauri/`.
+//      `codeg-computer-helper`, `codeg-cli`) for that triple from
+//      `src-tauri/`.
 //   3. Copies each produced binary to
 //      `src-tauri/binaries/<bin>-<triple>{.exe}` so Tauri's externalBin
 //      bundler picks it up under its bare name at install time.
@@ -17,7 +18,7 @@
 //      `tauri.macos.conf.json`). macOS charges an executable's permissions to
 //      the app bundle it sits in: a helper beside codeg in `Contents/MacOS/`
 //      would hold codeg's — every agent's shell's — and none of its own.
-//   5. macOS 目标还会给 staged 的 `codeg-mcp` 与 helper app 显式签名：identifier
+//   5. macOS 目标还会给 staged 的 `codeg-mcp`、`codeg-cli` 与 helper app 显式签名：identifier
 //      写死，证书模式（APPLE_SIGNING_IDENTITY）带 hardened runtime 与 SHA-256
 //      CodeDirectory。codesign 不带 `-i` 重签会按文件名重推 identifier，见
 //      `signMac`。
@@ -60,10 +61,13 @@ const SRC_TAURI = resolve(SCRIPT_DIR, "..")
 const BINARIES_DIR = join(SRC_TAURI, "binaries")
 // Every sidecar in `bundle.externalBin`, in the order they are built. (On
 // macOS the helper is bundled as an app instead; see `stageHelperApp`.)
-const BIN_NAMES = ["codeg-mcp", "codeg-computer-helper"]
-// The features their binary targets require (Cargo.toml).
-const FEATURES = "mcp-bin,computer-helper"
+const BIN_NAMES = ["codeg-mcp", "codeg-computer-helper", "codeg-cli"]
+// The features their binary targets require (Cargo.toml) — all of them, in one
+// cargo invocation: naming only a new sidecar's feature would leave the
+// others' binary targets disabled.
+const FEATURES = "mcp-bin,computer-helper,cli-bin"
 const MCP = "codeg-mcp"
+const CLI = "codeg-cli"
 const HELPER = "codeg-computer-helper"
 const HELPER_APP = join(BINARIES_DIR, `${HELPER}.app`)
 // 签名标识：与 workflow 的验签条件（req_mcp / helper requirement）必须完全一致。
@@ -208,10 +212,11 @@ function main() {
     }
     log(`sidecar staged at ${dest}`)
     if (target.includes("apple-darwin")) {
-      if (name === MCP) {
+      if (name === MCP || name === CLI) {
         // 裸二进制在 staging 就固定 identifier（signMac 注释）；否则留在里面的
-        // 是 Rust linker 生成的 codeg_mcp-<hash>，与验签条件 `codeg-mcp` 不符。
-        signMac(dest, MCP)
+        // 是 Rust linker 生成的 codeg_mcp-<hash> / codeg_cli-<hash>，与验签
+        // 条件 `codeg-mcp` / `codeg-cli` 不符。
+        signMac(dest, name)
       } else if (name === HELPER) {
         stageHelperApp(built)
       }
