@@ -3079,3 +3079,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0;
   }
 }
+
+/* 隐藏侧栏树形层级导轨：把祖先导轨与行自身导轨的线条宽度归零，
+   保留原组件与缩进逻辑不动，仅去掉竖线，现有布局对齐不受影响。 */
+.bg-sidebar-border {
+  width: 0 !important;
+}
