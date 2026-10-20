@@ -3976,13 +3976,16 @@
       },
       "messageNav": {
         "title": "メッセージナビ",
-        "collapse": "メッセージナビを閉じる",
         "loadingEarlier": "以前のメッセージを読み込み中…",
         "loadEarlier": "以前のメッセージを読み込む",
-        "collapsedSummary": "メッセージ {count}",
         "fileCount": "{count, plural, one {# 個のファイル} other {# 個のファイル}}",
-        "remove": "削除",
-        "noDiffDataAvailable": "{filePath} の差分データがありません"
+        "subAgentCount": "{count, plural, one {# 個のサブエージェント} other {# 個のサブエージェント}}",
+        "showDiff": "{filePath} の変更を表示",
+        "hideDiff": "{filePath} の変更を隠す",
+        "openFile": "{filePath} を開く",
+        "collapse": "折りたたむ",
+        "currentMessage": "現在のメッセージ",
+        "scrollToCurrent": "現在のメッセージ（#{ordinal}）へスクロール"
       },
       "replyArtifacts": {
         "title": "変更されたファイル",
@@ -4040,6 +4043,9 @@
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
+        "ackRecorded": "作業タスクに記録しました",
+        "ackNotRecorded": "作業タスクに記録されていません",
+        "ackNotRecordedWithReason": "作業タスクに記録されていません: {reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "要確認",

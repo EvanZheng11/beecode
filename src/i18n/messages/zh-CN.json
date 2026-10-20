@@ -3976,13 +3976,16 @@
       },
       "messageNav": {
         "title": "消息导航",
-        "collapse": "收起消息导航",
         "loadingEarlier": "正在加载更早的消息…",
         "loadEarlier": "加载更早的消息",
-        "collapsedSummary": "消息 {count}",
         "fileCount": "{count} 个文件",
-        "remove": "移除",
-        "noDiffDataAvailable": "未找到 {filePath} 的差异数据"
+        "subAgentCount": "{count} 个子智能体",
+        "showDiff": "展开 {filePath} 的改动",
+        "hideDiff": "收起 {filePath} 的改动",
+        "openFile": "打开 {filePath}",
+        "collapse": "收起",
+        "currentMessage": "当前消息",
+        "scrollToCurrent": "滚动到当前消息（#{ordinal}）"
       },
       "replyArtifacts": {
         "title": "改动文件",
@@ -4040,6 +4043,9 @@
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
+        "ackRecorded": "已记录到待办任务",
+        "ackNotRecorded": "未记录到待办任务",
+        "ackNotRecordedWithReason": "未记录到待办任务：{reason}",
         "verdict": {
           "success": "成功",
           "needs_review": "待复核",

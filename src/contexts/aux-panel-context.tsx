@@ -63,16 +63,6 @@ interface AuxPanelContextValue {
 
 const AuxPanelContext = createContext<AuxPanelContextValue | null>(null)
 
-// 导航仍由消息列表管理跳转，只将显示位置挂载到会话详情。
-const SessionDetailsMessageNavContext = createContext<{
-  target: HTMLDivElement | null
-  setTarget: (target: HTMLDivElement | null) => void
-} | null>(null)
-
-export function useSessionDetailsMessageNav() {
-  return useContext(SessionDetailsMessageNavContext)
-}
-
 export function useAuxPanelContext() {
   const ctx = useContext(AuxPanelContext)
   if (!ctx) {
@@ -98,16 +88,6 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
   const [activeTab, setActiveTab] = useState<AuxPanelTab>("session_details")
   const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(
     null
-  )
-  const [messageNavTarget, setMessageNavTarget] =
-    useState<HTMLDivElement | null>(null)
-  const messageNavMount = useMemo(
-    () => ({
-      target:
-        isOpen && activeTab === "session_details" ? messageNavTarget : null,
-      setTarget: setMessageNavTarget,
-    }),
-    [messageNavTarget, isOpen, activeTab]
   )
   // Platform-derived minimum (see resolveAuxMinWidth); stable for the session.
   const minWidth = useMemo(() => resolveAuxMinWidth(), [])
@@ -197,9 +177,7 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
 
   return (
     <AuxPanelContext.Provider value={value}>
-      <SessionDetailsMessageNavContext.Provider value={messageNavMount}>
-        {children}
-      </SessionDetailsMessageNavContext.Provider>
+      {children}
     </AuxPanelContext.Provider>
   )
 }
