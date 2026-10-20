@@ -121,3 +121,66 @@ INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
 - ESLint：next/core-web-vitals + typescript + prettier
 - TypeScript：strict 模式，启用 `noUnusedLocals` 和 `noUnusedParameters`
 - Rust：2021 edition，使用 `thiserror` 定义错误类型
+
+## 多平台发布与打包经验
+
+发布新版本时，必须把 Linux、Windows、macOS 的桌面包、服务器包、Docker、updater manifest 和最终 Release 当成一个整体验证。只看到某几个矩阵 job 成功，不能视为发布完成。
+
+### 发布前固定检查
+
+- 先对照原版仓库的 `release.yml`，确认本仓库的构建矩阵、依赖版本和发布门禁没有被旧配置覆盖。
+- `build-tauri` 矩阵必须包含 6 个目标：
+  - `x86_64-unknown-linux-gnu`
+  - `aarch64-unknown-linux-gnu`
+  - `x86_64-pc-windows-msvc`
+  - `aarch64-pc-windows-msvc`
+  - `x86_64-apple-darwin`
+  - `aarch64-apple-darwin`
+- 矩阵必须设置 `fail-fast: false`，避免一个平台失败时取消其它平台，方便区分代码问题和 runner 问题。
+- Windows arm64 不能遗漏；updater manifest 要求 `codeg_<版本>_arm64-setup.exe`。
+- 发布同一版本的修复时，确认远程 `v<版本>` 标签指向最终提交，再触发对应 workflow，避免 workflow 使用旧提交。
+
+### 依赖版本必须保持同一主线
+
+- `src-tauri/Cargo.toml` 中 `tauri-plugin-opener` 使用 `2`，不要固定到与 npm 插件不一致的旧 Rust 版本。
+- `package.json` 中 `@tauri-apps/plugin-opener` 使用 `^2.7.2`，并让 `pnpm-lock.yaml` 与它一致。
+- Windows 依赖使用 `webview2-com 0.39` 和 `windows 0.62`，避免 `windows-core 0.61` 与 `0.62` 同时进入同一编译路径，产生 `ICoreWebView2Environment` 类型不匹配。
+- 修改版本后必须同时更新 `src-tauri/Cargo.lock` 和 `pnpm-lock.yaml`，不能只改 manifest 文件。
+
+### updater manifest 门禁
+
+- 以 `src-tauri/scripts/generate-updater-manifest.mjs` 的 `expectedAssets()` 为唯一资产命名依据，不要凭经验手写名称。
+- 当前必须存在这些桌面 updater 资产及同名 `.sig`：macOS x64、macOS arm64、Linux x64、Windows x64、Windows arm64；manifest 会为基础键和安装器后缀键建立 10 个平台键。
+- 每个服务器 `.tar.gz` 或 `.zip` 包也必须有同名 `.sig`。
+- 6 个桌面矩阵全部成功并上传资产后，才运行 `Generate updater manifest`；manifest 成功后才允许 `publish-release`。
+- manifest job 失败时，优先检查缺失的资产名或签名名，再修改代码。不要用手工补文件绕过门禁。
+
+### 本地验证门禁
+
+在推送发布标签前，至少执行：
+
+```bash
+cargo metadata --manifest-path src-tauri/Cargo.toml --locked --no-deps --format-version 1
+cargo tree --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc -e normal -i webview2-com@0.39.1
+cargo check --manifest-path src-tauri/Cargo.toml --locked --features mcp-bin,computer-helper
+git diff --check
+```
+
+同时解析 `.github/workflows/release.yml`，断言 6 个 Tauri target、`fail-fast: false` 和 Windows arm64 资产均存在。发布配置变更后，必须保留用户已有的 `tsconfig.json`、`.codegraph/` 等工作树变更。
+
+### CI 结果判读
+
+- GitHub macOS runner 可能因容量不足排队较久；页面显示 queued 或 capacity constraints 且没有失败日志时，应继续等待，不要立即改代码。
+- `System.IO.IOException: A device which does not exist was specified` 这类 runner 文件系统错误属于基础设施瞬时故障；先重跑失败 job，只有重跑仍出现相同代码错误时才修改配置。
+- GitHub Actions 的 Node.js 20 deprecation annotation 是警告，不是构建失败原因。
+- 最终完成条件是 Run 显示 `Success`，`build-server` 为 5/5，`build-tauri` 为 6/6，Docker、updater manifest、`publish-release` 均成功，并在 GitHub Release 页面核对资产数量和 Windows arm64 资产存在。
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
