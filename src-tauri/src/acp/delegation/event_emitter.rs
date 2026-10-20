@@ -487,29 +487,42 @@ impl CompletionNotifier {
         parent_connection_id: &str,
         text: &str,
     ) -> Result<NotifyDelivery, NotifyError> {
-        match self
-            .manager
-            .submit_feedback(parent_connection_id, text.to_string(), None)
-            .await
-        {
-            Ok(_) => Ok(NotifyDelivery::Steering),
-            // No turn to steer (parent idle) or no steering channel at all —
-            // fall back to a prompt, which starts the turn that reads it.
-            Err(AcpError::NoActiveTurn) | Err(AcpError::FeedbackDisabled) => self
+        // Pick the channel from the parent's CURRENT turn state, instead of
+        // letting `submit_feedback` fail its way there. A steer that arrives as
+        // the parent's turn ends is accepted but never consumed: the note lands
+        // in the composer as an unsent draft and the parent keeps waiting —
+        // exactly the stall this notice exists to remove. An idle parent gets a
+        // prompt, which is what actually starts the turn that reads it.
+        let turn_in_flight = match self.manager.get_state(parent_connection_id).await {
+            Some(state) => state.read().await.turn_in_flight,
+            // No such connection: let the prompt path report it.
+            None => false,
+        };
+        if turn_in_flight {
+            match self
                 .manager
-                .send_prompt(
-                    parent_connection_id,
-                    vec![PromptInputBlock::Text {
-                        text: text.to_string(),
-                    }],
-                )
+                .submit_feedback(parent_connection_id, text.to_string(), None)
                 .await
-                .map(|_| NotifyDelivery::Prompt)
-                .map_err(|e| NotifyError::DeliveryFailed(e.to_string())),
-            // The parent connection is gone, or the note was rejected: no
-            // fallback can help, report why.
-            Err(e) => Err(NotifyError::DeliveryFailed(e.to_string())),
+            {
+                Ok(_) => return Ok(NotifyDelivery::Steering),
+                // The turn ended between the read and the steer, or this adapter
+                // has no steering channel. A prompt is the remaining channel.
+                Err(AcpError::NoActiveTurn) | Err(AcpError::FeedbackDisabled) => {}
+                // The parent connection is gone, or the note was rejected: no
+                // fallback can help, report why.
+                Err(e) => return Err(NotifyError::DeliveryFailed(e.to_string())),
+            }
         }
+        self.manager
+            .send_prompt(
+                parent_connection_id,
+                vec![PromptInputBlock::Text {
+                    text: text.to_string(),
+                }],
+            )
+            .await
+            .map(|_| NotifyDelivery::Prompt)
+            .map_err(|e| NotifyError::DeliveryFailed(e.to_string()))
     }
 }
 
