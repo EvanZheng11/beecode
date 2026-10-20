@@ -1277,7 +1277,10 @@ jobs:
             echo "::error::缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
             exit 1
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+          if [ -z "$RELEASE_TAG" ]; then
+            RELEASE_TAG="v$(node -p 'require("./package.json").version')"
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
             echo "::error::发布标签不是 SemVer，拒绝签名：$RELEASE_TAG"
             exit 1
           fi
@@ -1300,7 +1303,10 @@ jobs:
             Write-Error "缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
             exit 1
           }
-          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$') {
+          if ([string]::IsNullOrEmpty($env:RELEASE_TAG)) {
+            $env:RELEASE_TAG = 'v' + (node -p 'require("./package.json").version')
+          }
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$') {
             Write-Error "发布标签不是 SemVer，拒绝签名：$env:RELEASE_TAG"
             exit 1
           }

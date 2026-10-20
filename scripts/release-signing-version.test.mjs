@@ -92,3 +92,35 @@ test("标签推送仍从 GITHUB_REF_NAME 解析发布标签", () => {
   assert.match(meta, /TAG="\$GITHUB_REF_NAME"/)
   assert.match(meta, /tag=%s/)
 })
+
+test("仅构建 Artifacts 时使用源码版本，已解析标签优先", () => {
+  const steps = parse(workflow).jobs["build-server"].steps
+  const unix = steps.find(
+    (step) => step.name === "用更新签名密钥签服务器包（Unix）"
+  )
+  const prelude = unix.run.slice(0, unix.run.indexOf("file="))
+  const version = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url))
+  ).version
+  for (const tag of ["", "v0.38.1", "v0.38.1-rc.1+test"]) {
+    const result = execFileSync(
+      "bash",
+      ["-c", prelude + 'printf "%s" "$RELEASE_TAG"'],
+      {
+        cwd: new URL("../", import.meta.url),
+        env: {
+          ...process.env,
+          TAURI_SIGNING_PRIVATE_KEY: "test",
+          RELEASE_TAG: tag,
+        },
+        encoding: "utf8",
+      }
+    )
+    assert.equal(result, tag || "v" + version)
+  }
+  const windows = steps.find(
+    (step) => step.name === "用更新签名密钥签服务器包（Windows）"
+  )
+  assert.ok(windows.run.includes("IsNullOrEmpty($env:RELEASE_TAG)"))
+  assert.ok(windows.run.includes('require("./package.json").version'))
+})
