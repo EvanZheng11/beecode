@@ -66,6 +66,10 @@ pub fn build_router(
             post(handlers::delegation::set_delegation_settings),
         )
         .route(
+            "/notify_delegation_completion",
+            post(handlers::delegation::notify_delegation_completion),
+        )
+        .route(
             "/get_codeg_mcp_service_status",
             post(handlers::mcp_service::get_codeg_mcp_service_status),
         )

@@ -5343,6 +5343,13 @@ export interface DelegationSettings {
   /** Per-parent byte budget (in MB) for the broker's in-memory cache of
    * completed sub-agent result text. `0` = unlimited. */
   completed_cache_max_mb: number
+  /** 子任务进入终态后，是否立刻把结果推给主智能体，而不是等它下一轮
+   * `get_delegation_status` 查询。
+   *
+   * Whether a finished sub-agent task pushes its result to the main agent right
+   * away instead of leaving it to the next status poll. Off only silences the
+   * automatic notice — the manual “notify main agent” button always delivers. */
+  notify_on_completion: boolean
   /** Optional per-agent overrides applied when codeg-mcp spawns a subagent.
    * Keyed by `agent_type`. Missing entries mean "use agent defaults." */
   agent_defaults?: Partial<Record<AgentType, AgentDelegationDefaults>>
@@ -5356,6 +5363,29 @@ export async function setDelegationSettings(
   settings: DelegationSettings
 ): Promise<DelegationSettings> {
   return getTransport().call("set_delegation_settings", { settings })
+}
+
+/**
+ * 子智能体任务已到终态后，由用户手动点「通知主智能体」触发：后端立刻向主智能体
+ * 的会话投递一次 steering 插话（或新 prompt），主智能体不必再等下一轮
+ * `get_delegation_status` 轮询。
+ *
+ * `notified: true` = 已投递；`notified: false` 且 `message === "already notified"`
+ * = 此前已通知过（不是错误）；其它 `notified: false` 的 `message` 是失败原因。
+ */
+export interface NotifyDelegationCompletionResult {
+  notified: boolean
+  message: string
+}
+
+export async function notifyDelegationCompletion(
+  taskId: string
+): Promise<NotifyDelegationCompletionResult> {
+  // 字段名沿用后端契约的 snake_case（`task_id`），与本区块其它 delegation
+  // 结构体（如 `DelegationSettings`）的命名方式一致。
+  return getTransport().call("notify_delegation_completion", {
+    task_id: taskId,
+  })
 }
 
 // ─── codeg-mcp service status ──────────────────────────────────────────

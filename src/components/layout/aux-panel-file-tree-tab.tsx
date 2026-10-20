@@ -15,13 +15,14 @@ import {
 } from "react"
 import { revealItemInDir, subscribe } from "@/lib/platform"
 import ignore from "ignore"
-import { Check, ChevronRight, Link2 } from "lucide-react"
+import { Check, ChevronRight, FileIcon, Link2, Search, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTabStore } from "@/contexts/tab-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
+import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
   useWorkspaceActions,
@@ -30,6 +31,7 @@ import {
 import { useWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import { detectPlatform } from "@/hooks/use-platform"
 import { findOwningFolder } from "@/lib/file-open-target"
+import { rankFileMatches } from "@/lib/file-search-match"
 import { AuxPanelNoFolderEmpty } from "@/components/layout/aux-panel-no-folder-empty"
 import { WorkspaceDegradedBanner } from "@/components/layout/workspace-degraded-banner"
 import { WorkspaceUploadDialog } from "@/components/layout/workspace-upload-dialog"
@@ -73,6 +75,8 @@ import {
   FileTree,
   FileTreeFolder,
   FileTreeFile,
+  FileTreeIcon,
+  FileTreeName,
 } from "@/components/ai-elements/file-tree"
 import {
   buildVisibleTreeRows,
@@ -88,6 +92,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -243,6 +253,92 @@ function findDirectoryChildren(
     if (nested) return nested
   }
   return null
+}
+
+/**
+ * 搜索态最多渲染多少个匹配文件。匹配本身是单遍扇描（几万条也只是一瞬间），
+ * 但一次渲染几千行带行级 ContextMenu 的树节点会明显卡顿；超出部分不渲染，
+ * 计数仍用全量匹配数，并在搜索状态行里说明被截断。
+ */
+const FILE_TREE_SEARCH_LIMIT = 500
+
+/**
+ * 把匹配到的文件相对路径还原成只含“匹配文件 + 其祖先目录”的树。
+ * 目录排在文件前、同类按小写名称排序，与后端快照的顺序一致。
+ */
+function buildSearchTreeNodes(filePaths: readonly string[]): FileTreeNode[] {
+  const roots: FileTreeNode[] = []
+  const childrenByDir = new Map<string, FileTreeNode[]>([["", roots]])
+
+  // 逐个路径补齐祖先目录，已建过的目录直接复用（保证同一目录只有一个节点）。
+  const ensureDir = (dirPath: string): FileTreeNode[] => {
+    const existing = childrenByDir.get(dirPath)
+    if (existing) return existing
+    const slash = dirPath.lastIndexOf("/")
+    const children: FileTreeNode[] = []
+    const node: FileTreeNode = {
+      kind: "dir",
+      name: dirPath.slice(slash + 1),
+      path: dirPath,
+      children,
+    }
+    ensureDir(slash < 0 ? "" : dirPath.slice(0, slash)).push(node)
+    childrenByDir.set(dirPath, children)
+    return children
+  }
+
+  for (const filePath of filePaths) {
+    const slash = filePath.lastIndexOf("/")
+    ensureDir(slash < 0 ? "" : filePath.slice(0, slash)).push({
+      kind: "file",
+      name: filePath.slice(slash + 1),
+      path: filePath,
+    })
+  }
+
+  sortSearchTree(roots)
+  return roots
+}
+
+function sortSearchTree(nodes: FileTreeNode[]): void {
+  nodes.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  })
+  for (const node of nodes) {
+    if (node.kind === "dir") sortSearchTree(node.children)
+  }
+}
+
+/** 收集树里的所有目录路径（搜索态下它们必须全部展开）。 */
+function collectDirPaths(
+  nodes: readonly FileTreeNode[],
+  into: Set<string>
+): void {
+  for (const node of nodes) {
+    if (node.kind !== "dir") continue
+    into.add(node.path)
+    collectDirPaths(node.children, into)
+  }
+}
+
+/**
+ * 把文件名里连续命中查询词的第一段包进 <mark>。`query` 必须是已小写化的
+ * 非空查询词；子序列匹配（字母不连续）不产生高亮，整名原样返回。
+ */
+function highlightFileName(name: string, query: string): ReactNode {
+  if (!query) return name
+  const index = name.toLowerCase().indexOf(query)
+  if (index < 0) return name
+  return (
+    <>
+      {name.slice(0, index)}
+      <mark className="rounded-sm bg-primary/25 text-inherit">
+        {name.slice(index, index + query.length)}
+      </mark>
+      {name.slice(index + query.length)}
+    </>
+  )
 }
 
 function classifyGitFileState(status: string): GitFileState | null {
@@ -608,6 +704,8 @@ interface RenderNodeProps {
   node: FileTreeNode
   depth: number
   expandedPaths: ReadonlySet<string>
+  /** 搜索态下用于高亮的查询词（已小写）；空串表示不在搜索。 */
+  highlightQuery: string
   workspacePath: string
   activeSessionTabId: string | null
   dnd: TreeDndHandlers
@@ -641,6 +739,7 @@ function RenderNode({
   node,
   depth,
   expandedPaths,
+  highlightQuery,
   workspacePath,
   activeSessionTabId,
   dnd,
@@ -762,7 +861,20 @@ function RenderNode({
               dnd.onEntryDragEnd()
             }}
             actions={<RowMoreButton />}
-          />
+          >
+            {/* 搜索态下高亮命中片段：子元素会接管默认的“图标 + 名称”布局，
+                所以这里按原样补回图标列，保证行首字形列不丢。 */}
+            {highlightQuery ? (
+              <>
+                <FileTreeIcon>
+                  <FileIcon className="size-4 text-muted-foreground" />
+                </FileTreeIcon>
+                <FileTreeName>
+                  {highlightFileName(node.name, highlightQuery)}
+                </FileTreeName>
+              </>
+            ) : undefined}
+          </FileTreeFile>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem onSelect={() => onOpenFilePreview(node.path)}>
@@ -993,6 +1105,7 @@ function RenderNode({
                   node={child}
                   depth={depth + 1}
                   expandedPaths={expandedPaths}
+                  highlightQuery={highlightQuery}
                   workspacePath={workspacePath}
                   activeSessionTabId={activeSessionTabId}
                   dnd={dnd}
@@ -1251,6 +1364,62 @@ export function FileTreeTab() {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set([FILE_TREE_ROOT_PATH])
   )
+  // 树内搜索：输入后只显示匹配文件及其祖先目录，清空输入立即回到完整树。
+  const [searchQuery, setSearchQuery] = useState("")
+  // 归一化一次，过滤与高亮共用同一份（rankFileMatches 内部也只按小写比）。
+  const searchTerm = searchQuery.trim().toLowerCase()
+  const searching = searchTerm.length > 0
+  // 扁平清单只在真开搜时才拉取（首字母输入才触发一次后端遍历）；
+  // 空查询完全不碰它，也就意味着不搜索时没有任何行为变化。
+  const { allFiles: searchFiles, loaded: searchFilesLoaded } = useFileTree({
+    folderPath: folder?.path,
+    enabled: searching,
+  })
+  // 全量匹配一次拿总数，渲染只取前 FILE_TREE_SEARCH_LIMIT 条。清单还在加载
+  // （或刚切到另一个 folder）时先留空，由下方日志行显示“搜索中”兜住中间态。
+  const rankedSearchFiles = useMemo<FlatFileEntry[]>(() => {
+    if (!searching || !searchFilesLoaded) return []
+    // 目录不作为结果：只命中目录名的关键词会通过文件路径匹配带出来。
+    const files = searchFiles.filter((entry) => entry.kind === "file")
+    return rankFileMatches(searchTerm, files, files.length)
+  }, [searchFiles, searchFilesLoaded, searchTerm, searching])
+  const searchNodes = useMemo(
+    () =>
+      buildSearchTreeNodes(
+        rankedSearchFiles
+          .slice(0, FILE_TREE_SEARCH_LIMIT)
+          .map((entry) => entry.relativePath)
+      ),
+    [rankedSearchFiles]
+  )
+  // 匹配路径上的目录全部视为展开，折叠状态在搜索态下不起作用。
+  const searchExpandedPaths = useMemo(() => {
+    const paths = new Set<string>([FILE_TREE_ROOT_PATH])
+    collectDirPaths(searchNodes, paths)
+    return paths
+  }, [searchNodes])
+  const visibleNodes = searching ? searchNodes : nodes
+  const visibleExpandedPaths = searching ? searchExpandedPaths : expandedPaths
+  // 搜索态下忽略折叠操作：否则被折叠的祖先会把匹配行藏起来，折叠动作还会把
+  // 清空搜索后要恢复的那份展开状态写坏。
+  const handleExpandedChange = useCallback(
+    (next: Set<string>) => {
+      if (searching) return
+      setExpandedPaths(next)
+    },
+    [searching]
+  )
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== "Escape") return
+      // Escape 清空并失焦；阻止冒泡，避免同时触发面板级/全局的 Escape 行为。
+      event.preventDefault()
+      event.stopPropagation()
+      setSearchQuery("")
+      event.currentTarget.blur()
+    },
+    []
+  )
   const [gitignoreIgnoredPaths, setGitignoreIgnoredPaths] = useState<
     Set<string>
   >(new Set())
@@ -1298,6 +1467,8 @@ export function FileTreeTab() {
 
   useEffect(() => {
     setExpandedPaths(new Set([FILE_TREE_ROOT_PATH]))
+    // 搜索词属于上一个文件夹，切 folder 时清空，免得拿着旧关键词过滤新树。
+    setSearchQuery("")
     previousExpandedPathsRef.current = new Set([FILE_TREE_ROOT_PATH])
     setGitignoreIgnoredPaths(new Set())
     lazyLoadedChildrenByPathRef.current.clear()
@@ -2884,10 +3055,57 @@ export function FileTreeTab() {
     )
   }
 
+  // 搜索结果状态行：加载中 / 无匹配 / 匹配数（被截断时说明只渲染了前几条）。
+  const searchStatusLabel = !searchFilesLoaded
+    ? t("searchLoading")
+    : rankedSearchFiles.length === 0
+      ? t("searchNoResults")
+      : rankedSearchFiles.length > FILE_TREE_SEARCH_LIMIT
+        ? t("searchTruncated", {
+            count: rankedSearchFiles.length,
+            limit: FILE_TREE_SEARCH_LIMIT,
+          })
+        : t("searchMatchCount", { count: rankedSearchFiles.length })
+
   return (
     <div className="flex flex-col h-full">
       {workspaceState.degraded && (
         <WorkspaceDegradedBanner onRetry={workspaceState.restart} />
+      )}
+      {/* 搜索条：输入后在树内过滤，只留匹配文件及其祖先目录。 */}
+      <div className="flex shrink-0 items-center border-b border-border/50 px-2 py-1.5">
+        <InputGroup className="h-7 min-w-0 flex-1 rounded-full">
+          <InputGroupAddon align="inline-start">
+            <Search className="size-3.5" aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder={t("searchPlaceholder")}
+            aria-label={t("searchPlaceholder")}
+            spellCheck={false}
+            autoComplete="off"
+            className="h-7 text-xs"
+          />
+          {searchQuery !== "" ? (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-xs"
+                aria-label={t("clearSearch")}
+                title={t("clearSearch")}
+                onClick={() => setSearchQuery("")}
+              >
+                <X className="size-3" />
+              </InputGroupButton>
+            </InputGroupAddon>
+          ) : null}
+        </InputGroup>
+      </div>
+      {searching && (
+        <p className="shrink-0 border-b border-border/50 px-3 py-1 text-3xs text-muted-foreground">
+          {searchStatusLabel}
+        </p>
       )}
       <ContextMenu>
         <ContextMenuTrigger asChild>
@@ -2904,8 +3122,8 @@ export function FileTreeTab() {
               // the nearest edge, which would otherwise scroll the padding
               // away when stepping back up to the root.
               className="border-0 rounded-none bg-transparent w-max min-w-full px-1.5 pt-1.5 focus:outline-none focus-visible:outline-none [&_[data-tree-row-path]]:scroll-mt-1.5"
-              expanded={expandedPaths}
-              onExpandedChange={setExpandedPaths}
+              expanded={visibleExpandedPaths}
+              onExpandedChange={handleExpandedChange}
               selectedPath={focusedTreePath}
               onSelect={handleTreeSelect}
             >
@@ -2928,12 +3146,13 @@ export function FileTreeTab() {
                     */}
                     <ContextMenuTrigger asChild>
                       <RootDropFolder name={rootNodeName} dnd={treeDndValue}>
-                        {nodes.map((node) => (
+                        {visibleNodes.map((node) => (
                           <RenderNode
                             key={node.path}
                             node={node}
                             depth={1}
-                            expandedPaths={expandedPaths}
+                            expandedPaths={visibleExpandedPaths}
+                            highlightQuery={searching ? searchTerm : ""}
                             workspacePath={folder.path}
                             activeSessionTabId={activeSessionTabId}
                             dnd={treeDndValue}

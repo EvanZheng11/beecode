@@ -146,8 +146,9 @@ describe("Sidebar — fixed nav region", () => {
   })
 
   it("Automations navigates to the automations route", () => {
-    const { getByText } = renderSidebar()
-    fireEvent.click(getByText("Automations"))
+    const { getByRole } = renderSidebar()
+    // 纯图标按钮：名字只在 aria-label / title 上，没有文本节点。
+    fireEvent.click(getByRole("button", { name: "Automations" }))
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
   })
 

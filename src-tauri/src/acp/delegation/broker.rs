@@ -59,7 +59,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 
-use crate::acp::delegation::event_emitter::{DelegationEventEmitter, NoopEventEmitter};
+use crate::acp::delegation::event_emitter::{
+    notice_from_summary, CompletionNotifier, DelegationEventEmitter, NoopEventEmitter,
+    NotifyDelivery, NotifyError,
+};
 use crate::acp::delegation::live_reply::{ChildLiveReplyLookup, NoopChildLiveReplyLookup};
 use crate::acp::delegation::meta_writer::{
     build_delegation_meta, is_synthetic_parent_tool_use_id, DelegationMetaWriter, NoopMetaWriter,
@@ -244,6 +247,11 @@ pub struct DelegationConfig {
     /// converted to bytes in `into_broker_config`. Pushed into the pending-calls
     /// bucket by `set_config` so `insert_completed` reads it lock-free.
     pub completed_cache_cap_bytes: usize,
+    /// Deliver a completion notice to the parent's LLM as soon as a task is
+    /// terminal, so it stops polling `get_delegation_status` and reads the
+    /// result right away. Defaults to on; the manual "notify main agent"
+    /// button ignores this switch (it is the user asking explicitly).
+    pub notify_on_completion: bool,
 }
 
 impl Default for DelegationConfig {
@@ -253,6 +261,7 @@ impl Default for DelegationConfig {
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_cap_bytes: DEFAULT_COMPLETED_CACHE_CAP_BYTES,
+            notify_on_completion: true,
         }
     }
 }
@@ -839,6 +848,20 @@ fn outcome_to_summary(outcome: &DelegationOutcome, duration_ms: u64) -> Delegati
         DelegationOutcome::Err { code, .. } => DelegationResultSummary::Err {
             error_code: code.clone(),
         },
+    }
+}
+
+/// One-line detail for a cached terminal task in a completion notice: its
+/// result preview when it completed, the stable error code otherwise. Same
+/// shape [`outcome_to_summary`] gives the live event, so the automatic and
+/// manual notices say the same thing.
+fn cached_task_notice_summary(task: &CompletedTask) -> String {
+    match task.status {
+        TaskStatus::Completed => task.text.clone().unwrap_or_default(),
+        _ => format!(
+            "error_code: {}",
+            task.error_code.as_deref().unwrap_or("unknown")
+        ),
     }
 }
 
@@ -1517,6 +1540,11 @@ pub struct DelegationBroker {
     /// assistants"; production wires `DbAssistantLookup` via
     /// `with_assistants`.
     assistants: Arc<dyn AssistantLookup>,
+    /// Delivers a "your sub-agent finished" notice to the parent's LLM on every
+    /// terminal path (and on the manual button). Defaults to `None` so tests
+    /// that don't observe it need no wiring; production builds one in
+    /// `build_delegation_stack`.
+    completion_notifier: Option<Arc<CompletionNotifier>>,
     pending: Arc<PendingCalls>,
     tool_calls: Arc<ToolCallTracker>,
     pre_canceled_handles: Arc<PreCanceledHandles>,
@@ -1580,6 +1608,7 @@ impl DelegationBroker {
             status_lookup: Arc::new(NoopChildStatusLookup),
             live_reply_lookup: Arc::new(NoopChildLiveReplyLookup),
             assistants: Arc::new(NoAssistants),
+            completion_notifier: None,
             pending: Arc::new(PendingCalls::default()),
             tool_calls: Arc::new(ToolCallTracker::default()),
             pre_canceled_handles: Arc::new(PreCanceledHandles::default()),
@@ -1614,6 +1643,13 @@ impl DelegationBroker {
     /// like `with_status_lookup`.
     pub fn with_assistants(mut self, assistants: Arc<dyn AssistantLookup>) -> Self {
         self.assistants = assistants;
+        self
+    }
+
+    /// Replace the completion notifier (default: none — no notice is sent).
+    /// Builder-style, layered onto `with_writers` by the production wiring.
+    pub fn with_completion_notifier(mut self, notifier: Arc<CompletionNotifier>) -> Self {
+        self.completion_notifier = Some(notifier);
         self
     }
 
@@ -2974,6 +3010,7 @@ impl DelegationBroker {
                     DelegationResultSummary::Err {
                         error_code: "canceled".to_string(),
                     },
+                    &call_id,
                 )
                 .await;
                 let _ = self.spawner.cancel(&child_connection_id).await;
@@ -3051,6 +3088,7 @@ impl DelegationBroker {
                         DelegationResultSummary::Err {
                             error_code: "canceled".to_string(),
                         },
+                        &call_id,
                     )
                     .await;
                     let _ = self.spawner.cancel(&child_connection_id).await;
@@ -3215,6 +3253,7 @@ impl DelegationBroker {
             agent_type,
             assistant,
             outcome_to_summary(outcome, duration_ms),
+            task_id,
         )
         .await;
         // v1 one-shot: always tear down the child.
@@ -3281,6 +3320,12 @@ impl DelegationBroker {
     /// Synthetic ids (the `"delegation-<uuid>"` UUID fallback) map to no
     /// live UI binding, so the emit would be wasted noise — same skip
     /// criterion as `write_meta_if_real`.
+    ///
+    /// Every terminal path funnels through here, so this is also where the
+    /// parent's LLM is told the task is done (see `notify_parent_on_completion`).
+    /// That notice deliberately runs BEFORE the synthetic-id guard: a
+    /// delegation whose tool_call never got a real id still has a parent LLM
+    /// waiting on a poll, and only the UI emit depends on the id.
     #[allow(clippy::too_many_arguments)]
     async fn emit_completed_if_real(
         &self,
@@ -3291,7 +3336,10 @@ impl DelegationBroker {
         agent_type: AgentType,
         assistant: Option<&AssistantRef>,
         result: DelegationResultSummary,
+        task_id: &str,
     ) {
+        self.notify_parent_on_completion(parent_connection_id, task_id, &result)
+            .await;
         if is_synthetic_parent_tool_use_id(parent_tool_use_id) {
             return;
         }
@@ -3306,6 +3354,86 @@ impl DelegationBroker {
                 result,
             )
             .await;
+    }
+
+    /// Deliver the completion notice to the parent's LLM when the setting is
+    /// on. Automatic notices obey `DelegationConfig::notify_on_completion`;
+    /// the manual button ([`Self::notify_task_completion`]) does not.
+    async fn notify_parent_on_completion(
+        &self,
+        parent_connection_id: &str,
+        task_id: &str,
+        result: &DelegationResultSummary,
+    ) {
+        let Some(notifier) = &self.completion_notifier else {
+            return;
+        };
+        if task_id.is_empty() || !self.config_snapshot().await.notify_on_completion {
+            return;
+        }
+        let (status, summary) = notice_from_summary(result);
+        notifier
+            .notify_quietly(parent_connection_id, task_id, status, &summary)
+            .await;
+    }
+
+    /// Back the manual "notify main agent" button: deliver the completion
+    /// notice for `task_id` now. Not gated by `notify_on_completion` — the user
+    /// asked — but it shares the automatic notice's dedupe ring, so a task the
+    /// broker already announced reports [`NotifyError::AlreadyNotified`].
+    ///
+    /// The parent connection comes from the live pending table first. Once the
+    /// task aged out of the completed-cache, only its child row remains, and the
+    /// status lookup resolves that row's parent CONVERSATION — the notifier then
+    /// finds whichever live connection currently owns it. No new SQL.
+    pub async fn notify_task_completion(
+        &self,
+        task_id: &str,
+    ) -> Result<NotifyDelivery, NotifyError> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return Err(NotifyError::TaskNotFound);
+        }
+        let Some(notifier) = self.completion_notifier.clone() else {
+            return Err(NotifyError::Unavailable);
+        };
+        let cached = {
+            let inner = self.pending.inner.lock().await;
+            if inner.running.contains_key(task_id) {
+                return Err(NotifyError::StillRunning);
+            }
+            inner.completed.get(task_id).map(|task| {
+                (
+                    task.parent_connection_id.clone(),
+                    task.status,
+                    cached_task_notice_summary(task),
+                )
+            })
+        };
+        if let Some((parent_connection_id, status, summary)) = cached {
+            return notifier
+                .notify(&parent_connection_id, task_id, status, &summary)
+                .await;
+        }
+        let Some(record) = self.status_lookup.find_by_call_id(task_id).await else {
+            return Err(NotifyError::TaskNotFound);
+        };
+        if matches!(record.status, TaskStatus::Running | TaskStatus::Unknown) {
+            return Err(NotifyError::StillRunning);
+        }
+        let Some(parent_conversation_id) = record.parent_id else {
+            return Err(NotifyError::NoParentConnection);
+        };
+        // The row keeps no result text (that lives in the child session), so the
+        // notice says so instead of pretending the task produced nothing.
+        notifier
+            .notify_conversation(
+                parent_conversation_id,
+                task_id,
+                record.status,
+                "(result no longer cached; open the sub-agent session)",
+            )
+            .await
     }
 
     /// Cancel the pending delegation whose `external_handle` matches.
@@ -3553,6 +3681,7 @@ impl DelegationBroker {
             DelegationResultSummary::Err {
                 error_code: "canceled".to_string(),
             },
+            &task.task_id,
         )
         .await;
         if cancel_turn {
@@ -4631,6 +4760,7 @@ impl DelegationBroker {
                     DelegationResultSummary::Err {
                         error_code: "canceled".to_string(),
                     },
+                    &call_id,
                 )
                 .await;
                 let _ = self.spawner.cancel(&child_connection_id).await;
@@ -4702,6 +4832,7 @@ impl DelegationBroker {
                         DelegationResultSummary::Err {
                             error_code: "canceled".to_string(),
                         },
+                        &call_id,
                     )
                     .await;
                     let _ = self.spawner.cancel(&child_connection_id).await;

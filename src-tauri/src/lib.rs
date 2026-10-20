@@ -1938,6 +1938,7 @@ mod tauri_app {
                 logging_commands::open_logs_dir,
                 delegation_commands::get_delegation_settings,
                 delegation_commands::set_delegation_settings,
+                delegation_commands::notify_delegation_completion,
                 crate::commands::mcp_service::get_codeg_mcp_service_status,
                 crate::commands::mcp_service::start_codeg_mcp_service,
                 crate::commands::mcp_service::set_codeg_mcp_tool_group,

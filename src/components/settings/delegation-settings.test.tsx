@@ -89,6 +89,7 @@ function settings(
     enabled: false,
     depth_limit: 1,
     completed_cache_max_mb: 512,
+    notify_on_completion: true,
     agent_defaults: {},
     ...overrides,
   }
@@ -217,6 +218,7 @@ describe("DelegationSettingsSection", () => {
         enabled: true,
         depth_limit: 1,
         completed_cache_max_mb: 0,
+        notify_on_completion: true,
         agent_defaults: {},
       })
     })
@@ -241,6 +243,7 @@ describe("DelegationSettingsSection", () => {
         enabled: true,
         depth_limit: 1,
         completed_cache_max_mb: 512,
+        notify_on_completion: true,
         agent_defaults: {},
       })
     })
@@ -263,6 +266,29 @@ describe("DelegationSettingsSection", () => {
         enabled: true,
         depth_limit: 5,
         completed_cache_max_mb: 512,
+        notify_on_completion: true,
+        agent_defaults: {},
+      })
+    })
+  })
+
+  it("saves the completion-notice switch", async () => {
+    mockGetDelegationSettings.mockResolvedValue(settings({ enabled: true }))
+    mockSetDelegationSettings.mockImplementation(async (next) => next)
+
+    renderWithIntl()
+
+    const noticeSwitch = await screen.findByLabelText("Notify on completion")
+    expect(noticeSwitch).toHaveAttribute("data-state", "checked")
+    fireEvent.click(noticeSwitch)
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(mockSetDelegationSettings).toHaveBeenCalledWith({
+        enabled: true,
+        depth_limit: 1,
+        completed_cache_max_mb: 512,
+        notify_on_completion: false,
         agent_defaults: {},
       })
     })
@@ -287,6 +313,7 @@ describe("DelegationSettingsSection", () => {
 
     expect(enableSwitch).toHaveAttribute("data-state", "unchecked")
     expect(depthInput).toBeDisabled()
+    expect(screen.getByLabelText("Notify on completion")).toBeDisabled()
   })
 })
 
