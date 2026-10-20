@@ -388,8 +388,9 @@ jobs:
           CODEG_TEST_REQUIRE_IMPORT: "1"
         run: bash scripts/test-import-macos-self-signed-certificate.sh
 
-      # Build the sidecars — the `codeg-mcp` companion and the
-      # `codeg-computer-helper` computer-use executor — for the matrix target
+      # Build the sidecars — the `codeg-mcp` companion, the
+      # `codeg-computer-helper` computer-use executor and the `codeg-cli`
+      # command-line client — for the matrix target
       # and stage them at `src-tauri/binaries/<bin>-<triple>{.exe}`.
       # `tauri-action` (below) then bundles them via the `bundle.externalBin`
       # entries in `tauri.conf.json` — Tauri installs them next to the main
@@ -412,7 +413,7 @@ jobs:
           case "${{ matrix.target }}" in
             *windows*) ext=".exe" ;;
           esac
-          for bin in codeg-mcp codeg-computer-helper; do
+          for bin in codeg-mcp codeg-computer-helper codeg-cli; do
             file="src-tauri/binaries/${bin}-${{ matrix.target }}${ext}"
             if [ ! -s "$file" ]; then
               echo "FATAL: sidecar $file missing or empty after prepare-sidecars"
@@ -431,7 +432,8 @@ jobs:
               # staging 已显式签名（identifier 写死 + hardened runtime）：bundler 重签
               # 不保留自定义 identifier，这里先确认，别等到打包后才失败。
               mcp="src-tauri/binaries/codeg-mcp-${{ matrix.target }}"
-              for pair in "$mcp:codeg-mcp" "$helper:app.codeg.computer-helper"; do
+              cli="src-tauri/binaries/codeg-cli-${{ matrix.target }}"
+              for pair in "$mcp:codeg-mcp" "$cli:codeg-cli" "$helper:app.codeg.computer-helper"; do
                 path="${pair%:*}"
                 ident="${pair#*:}"
                 info="$(codesign -dv "$path" 2>&1)"
@@ -795,6 +797,7 @@ jobs:
 
       # 保留包结构、严格签名、无权限扩展、hardened runtime 及符号黑名单门禁；证书模式按 SHA-1 指纹双向验签通过。
       - name: 检查自签名包签名、结构与符号（macOS）
+
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
         run: |
@@ -818,11 +821,13 @@ jobs:
             echo "FATAL: codeg-server is in the desktop bundle; its binary target must need server-bin"
             exit 1
           fi
-          if otool -L "$app/Contents/MacOS/codeg-mcp" | grep -q 'WebKit'; then
-            echo "FATAL: codeg-mcp links WebKit: tauri build's own copy replaced the sidecar"
-            exit 1
-          fi
-          for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$helper_app"; do
+          for sidecar in codeg-mcp codeg-cli; do
+            if otool -L "$app/Contents/MacOS/$sidecar" | grep -q 'WebKit'; then
+              echo "FATAL: $sidecar links WebKit: tauri build's own copy replaced the sidecar"
+              exit 1
+            fi
+          done
+          for path in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$app/Contents/MacOS/codeg-cli" "$helper_app"; do
             name="$(basename "$path")"
             codesign --verify --strict "$path"
             if ! codesign -dv "$path" 2>&1 | grep -qE '^CodeDirectory .*\(runtime\)'; then
@@ -856,11 +861,13 @@ jobs:
           done
           codesign --verify --strict -R="$CODEG_COMPUTER_PEER_REQUIREMENT" "$app/Contents/MacOS/codeg"
           codesign --verify --strict -R="$CODEG_COMPUTER_HELPER_REQUIREMENT" "$helper_app"
-          # codeg-mcp 也必须用同一张证书（标识 codeg-mcp + 证书叶子哈希）。
+          # codeg-mcp 与 codeg-cli 也必须用同一张证书（标识 + 证书叶子哈希）。
           req_mcp="identifier \"codeg-mcp\" and certificate leaf = H\"$sha1\""
+          req_cli="identifier \"codeg-cli\" and certificate leaf = H\"$sha1\""
           codesign --verify --strict -R="$req_mcp" "$app/Contents/MacOS/codeg-mcp"
+          codesign --verify --strict -R="$req_cli" "$app/Contents/MacOS/codeg-cli"
           deny='^_(CGEventPost|CGEventPostToPid|CGEventPostToPSN|CGEventTapCreate|CGEventTapCreateForPid|CGEventTapCreateForPSN|CGWindowListCreateImage|CGWindowListCreateImageFromArray|CGDisplayCreateImage|CGDisplayCreateImageForRect|CGDisplayStreamCreate|CGDisplayStreamCreateWithDispatchQueue|CGRequestScreenCaptureAccess|CGRequestPostEventAccess|AXIsProcessTrustedWithOptions|AXUIElement[A-Za-z]*|AXObserver[A-Za-z]*)$|^_OBJC_CLASS_\$_SC(ShareableContent|Stream|ScreenshotManager|ContentFilter|ContentSharingPicker)$'
-          for bin in codeg codeg-mcp; do
+          for bin in codeg codeg-mcp codeg-cli; do
             hits="$(nm -u "$app/Contents/MacOS/$bin" | grep -E "$deny" || true)"
             if [ "$bin" = codeg ]; then
               hits="$(printf '%s\n' "$hits" | grep -vx '_CGEventTapCreate' || true)"
@@ -1094,7 +1101,8 @@ jobs:
           echo "CODEG_COMPUTER_PEER_REQUIREMENT=$peer_req" >> "$GITHUB_ENV"
           echo "已生成 computer-use 双向验签条件（证书 SHA-1 指纹：${sha1}）。"
 
-      - name: Build server + codeg-mcp companion + computer-use helper
+      - name: Build server + codeg-mcp companion + computer-use helper + codeg-cli
+
         working-directory: src-tauri
         # `codeg-mcp` is the stdio MCP companion the runtime injects per
         # session (see acp/delegation/companion.rs). Built with the same
@@ -1104,10 +1112,12 @@ jobs:
         # helper 保持随服务器分发；macOS 在编译期锚定自签名证书的双向验签
         # 条件（computer-use 保留），其他平台仍仅在桌面会话设置
         # CODEG_COMPUTER_USE=1 时启用。
+        # codeg-cli 是命令行客户端（codeg-cli run），供服务器本机的 CI 与脚本使用，也可通过 --url 连接。
         run: |
           cargo build --release --bin codeg-server --no-default-features --features server-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-mcp --no-default-features --features mcp-bin --target ${{ matrix.target }}
           cargo build --release --bin codeg-computer-helper --no-default-features --features computer-helper --target ${{ matrix.target }}
+          cargo build --release --bin codeg-cli --no-default-features --features cli-bin --target ${{ matrix.target }}
 
       # cargo 产物先用同一张自签名证书严格签名，再打包/上传；helper 的签名
       # 标识必须是 helper 编译期验签条件里的 app.codeg.computer-helper。
@@ -1126,13 +1136,16 @@ jobs:
           sign=(--force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --digest-algorithm=sha256)
           codesign "${sign[@]}" -i codeg-server "$dir/codeg-server"
           codesign "${sign[@]}" -i codeg-mcp "$dir/codeg-mcp"
+          codesign "${sign[@]}" -i codeg-cli "$dir/codeg-cli"
           codesign "${sign[@]}" -i app.codeg.computer-helper "$dir/codeg-computer-helper"
           codesign --verify --strict -R="$CODEG_COMPUTER_PEER_REQUIREMENT" "$dir/codeg-server"
           req_mcp="identifier \"codeg-mcp\" and certificate leaf = H\"$sha1\""
+          req_cli="identifier \"codeg-cli\" and certificate leaf = H\"$sha1\""
           codesign --verify --strict -R="$req_mcp" "$dir/codeg-mcp"
+          codesign --verify --strict -R="$req_cli" "$dir/codeg-cli"
           codesign --verify --strict -R="$CODEG_COMPUTER_HELPER_REQUIREMENT" "$dir/codeg-computer-helper"
-          # 三个二进制都验签名标识与 hardened runtime；标识不对或缺 runtime 不得发出。
-          for pair in codeg-server:codeg-server codeg-mcp:codeg-mcp codeg-computer-helper:app.codeg.computer-helper; do
+          # 四个二进制都验签名标识与 hardened runtime；标识不对或缺 runtime 不得发出。
+          for pair in codeg-server:codeg-server codeg-mcp:codeg-mcp codeg-cli:codeg-cli codeg-computer-helper:app.codeg.computer-helper; do
             bin="${pair%%:*}"
             ident="${pair#*:}"
             info="$(codesign -dv "$dir/$bin" 2>&1)"
@@ -1145,7 +1158,7 @@ jobs:
               exit 1
             fi
           done
-          echo 'codeg-server / codeg-mcp / codeg-computer-helper 已用自签名证书签名并通过严格验签。'
+          echo 'codeg-server / codeg-mcp / codeg-cli / codeg-computer-helper 已用自签名证书签名并通过严格验签。'
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -1154,7 +1167,8 @@ jobs:
           cp src-tauri/target/${{ matrix.target }}/release/codeg-server dist/${{ matrix.artifact }}/
           cp src-tauri/target/${{ matrix.target }}/release/codeg-mcp dist/${{ matrix.artifact }}/
           cp src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper dist/${{ matrix.artifact }}/
-          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp dist/${{ matrix.artifact }}/codeg-computer-helper
+          cp src-tauri/target/${{ matrix.target }}/release/codeg-cli dist/${{ matrix.artifact }}/
+          chmod +x dist/${{ matrix.artifact }}/codeg-server dist/${{ matrix.artifact }}/codeg-mcp dist/${{ matrix.artifact }}/codeg-computer-helper dist/${{ matrix.artifact }}/codeg-cli
           cp -r out dist/${{ matrix.artifact }}/web
           cd dist && tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
@@ -1166,6 +1180,7 @@ jobs:
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-server.exe dist/${{ matrix.artifact }}/
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-mcp.exe dist/${{ matrix.artifact }}/
           Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-computer-helper.exe dist/${{ matrix.artifact }}/
+          Copy-Item src-tauri/target/${{ matrix.target }}/release/codeg-cli.exe dist/${{ matrix.artifact }}/
           Copy-Item -Recurse out dist/${{ matrix.artifact }}/web
           Compress-Archive -Path dist/${{ matrix.artifact }} -DestinationPath dist/${{ matrix.artifact }}.zip
 
@@ -1176,6 +1191,7 @@ jobs:
           test -x "dist/${{ matrix.artifact }}/codeg-server"
           test -x "dist/${{ matrix.artifact }}/codeg-mcp"
           test -x "dist/${{ matrix.artifact }}/codeg-computer-helper"
+          test -x "dist/${{ matrix.artifact }}/codeg-cli"
           # `codeg-mcp --help` exits 0 without flags and prints the usage
           # line. Only run it for native targets; cross-compiled arm64
           # binaries on x64 runners can't execute.
@@ -1183,8 +1199,10 @@ jobs:
              [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] || \
              [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
             "dist/${{ matrix.artifact }}/codeg-mcp" --help | grep -F 'codeg-mcp --parent-connection-id'
+            "dist/${{ matrix.artifact }}/codeg-cli" --version | grep -F 'codeg-cli '
+            "dist/${{ matrix.artifact }}/codeg-cli" --help | grep -F 'Usage: codeg-cli'
           else
-            echo "skipping codeg-mcp --help on cross-target ${{ matrix.target }}"
+            echo "skipping codeg-mcp --help and codeg-cli --version on cross-target ${{ matrix.target }}"
           fi
 
       - name: Smoke test packaged artifact (Windows)
@@ -1200,9 +1218,18 @@ jobs:
           if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-computer-helper.exe")) {
             throw "codeg-computer-helper.exe missing from packaged artifact"
           }
+          if (-not (Test-Path "dist/${{ matrix.artifact }}/codeg-cli.exe")) {
+            throw "codeg-cli.exe missing from packaged artifact"
+          }
           $help = & "dist/${{ matrix.artifact }}/codeg-mcp.exe" --help
           if ($help -notlike "*codeg-mcp --parent-connection-id*") {
             throw "codeg-mcp --help output unexpected: $help"
+          }
+          # A console program: its help comes back on stdout, named as the
+          # docs name it (no `.exe`).
+          $cliHelp = (& "dist/${{ matrix.artifact }}/codeg-cli.exe" --help) -join "`n"
+          if ($cliHelp -notlike "*Usage: codeg-cli*") {
+            throw "codeg-cli --help output unexpected: $cliHelp"
           }
 
       - name: Upload artifact for Docker build (Linux only)
@@ -1235,23 +1262,32 @@ jobs:
 
       # 与桌面 updater 同一把 minisign 密钥：服务器自更新安装前会校验
       # `<包名>.sig`（见 src-tauri/src/update/verify.rs），缺签名不得发布。
+      # 可信注释里的 version 必须来自已解析发布标签。workflow_dispatch 的
+      # GITHUB_REF_NAME 是 main，不能拿来签名；标签推送时两者一致。
       - name: 用更新签名密钥签服务器包（Unix）
         if: runner.os != 'Windows'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.create-draft-release.outputs.tag }}
         run: |
           set -euo pipefail
           if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             echo "::error::缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
             exit 1
           fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::发布标签不是 SemVer，拒绝签名：$RELEASE_TAG"
+            exit 1
+          fi
           file="dist/${{ matrix.artifact }}.tar.gz"
           test -s "$file"
-          pnpm tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "$file"
+          pnpm tauri signer sign --app-version "${RELEASE_TAG#v}" "$file"
           test -s "$file.sig"
-          echo "已生成签名：$file.sig"
+          grep -F "trusted comment: timestamp:" "$file.sig"
+          grep -F "version:${RELEASE_TAG#v}" "$file.sig"
+          echo "已生成签名：$file.sig（version:${RELEASE_TAG#v}）"
 
       - name: 用更新签名密钥签服务器包（Windows）
         if: runner.os == 'Windows'
@@ -1259,17 +1295,26 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.create-draft-release.outputs.tag }}
         run: |
           if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
             Write-Error "缺少 Secret TAURI_SIGNING_PRIVATE_KEY：拒绝发布未签名服务器包。"
             exit 1
           }
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$') {
+            Write-Error "发布标签不是 SemVer，拒绝签名：$env:RELEASE_TAG"
+            exit 1
+          }
           $file = "dist/${{ matrix.artifact }}.zip"
           if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "缺少服务器压缩包" }
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = $env:RELEASE_TAG.Substring(1)
           pnpm tauri signer sign --app-version $version $file
           if (-not (Test-Path -LiteralPath "$file.sig" -PathType Leaf)) { throw "缺少签名文件 $file.sig" }
-          Write-Host "已生成签名：$file.sig"
+          $sig = Get-Content -Raw -LiteralPath "$file.sig"
+          if ($sig -notmatch 'trusted comment: timestamp:' -or $sig -notmatch [regex]::Escape("version:$version")) {
+            throw "签名可信注释缺少 version:$version"
+          }
+          Write-Host "已生成签名：$file.sig（version:$version）"
 
       - name: 上传服务器压缩包与完整性校验文件
         uses: actions/upload-artifact@v4
@@ -1401,14 +1446,17 @@ jobs:
           mkdir -p dist/amd64 dist/arm64
           cp artifacts/linux-x64/codeg-server dist/amd64/codeg-server
           cp artifacts/linux-x64/codeg-mcp dist/amd64/codeg-mcp
+          cp artifacts/linux-x64/codeg-cli dist/amd64/codeg-cli
           cp artifacts/linux-arm64/codeg-server dist/arm64/codeg-server
           cp artifacts/linux-arm64/codeg-mcp dist/arm64/codeg-mcp
+          cp artifacts/linux-arm64/codeg-cli dist/arm64/codeg-cli
           cp -r artifacts/linux-x64/web dist/web
-          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp \
-                   dist/arm64/codeg-server dist/arm64/codeg-mcp
+          chmod +x dist/amd64/codeg-server dist/amd64/codeg-mcp dist/amd64/codeg-cli \
+                   dist/arm64/codeg-server dist/arm64/codeg-mcp dist/arm64/codeg-cli
           # Fail fast if any companion went missing — Docker would otherwise
-          # produce an image where delegation silently degrades.
-          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp; do
+          # produce an image where delegation silently degrades, or without
+          # the codeg-cli its docs promise.
+          for f in dist/amd64/codeg-mcp dist/arm64/codeg-mcp dist/amd64/codeg-cli dist/arm64/codeg-cli; do
             test -x "$f" || { echo "FATAL: $f missing or non-exec"; exit 1; }
           done
 
@@ -1431,6 +1479,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The image runs its codeg-cli before it is pushed: an amd64 build loaded
+      # into the runner's daemon, `codeg-cli --version` inside it.
+      - name: Smoke test the image's codeg-cli (amd64)
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --load -t codeg-smoke:local -f Dockerfile.ci .
+          docker run --rm codeg-smoke:local codeg-cli --version | grep -F 'codeg-cli '
+          docker run --rm codeg-smoke:local codeg-cli --help | grep -F 'Usage: codeg-cli'
 
       - name: 规范化 Docker 版本与镜像路径
         id: version
