@@ -1285,8 +1285,7 @@ jobs:
           test -s "$file"
           pnpm tauri signer sign --app-version "${RELEASE_TAG#v}" "$file"
           test -s "$file.sig"
-          grep -F "trusted comment: timestamp:" "$file.sig"
-          grep -F "version:${RELEASE_TAG#v}" "$file.sig"
+          node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const text = Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64").toString("utf8"); const line = text.split(/\r?\n/).find(line => line.startsWith("trusted comment: ")); if (!line?.split("\t").includes(`version:${version}`)) throw new Error(`签名可信注释缺少 version:${version}`); console.log(line)' "$file.sig" "${RELEASE_TAG#v}"
           echo "已生成签名：$file.sig（version:${RELEASE_TAG#v}）"
 
       - name: 用更新签名密钥签服务器包（Windows）
@@ -1310,10 +1309,8 @@ jobs:
           $version = $env:RELEASE_TAG.Substring(1)
           pnpm tauri signer sign --app-version $version $file
           if (-not (Test-Path -LiteralPath "$file.sig" -PathType Leaf)) { throw "缺少签名文件 $file.sig" }
-          $sig = Get-Content -Raw -LiteralPath "$file.sig"
-          if ($sig -notmatch 'trusted comment: timestamp:' -or $sig -notmatch [regex]::Escape("version:$version")) {
-            throw "签名可信注释缺少 version:$version"
-          }
+          node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const text = Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64").toString("utf8"); const line = text.split(/\r?\n/).find(line => line.startsWith("trusted comment: ")); if (!line?.split("\t").includes(`version:${version}`)) throw new Error(`签名可信注释缺少 version:${version}`); console.log(line)' "$file.sig" $version
+          if ($LASTEXITCODE -ne 0) { throw "签名可信注释版本校验失败" }
           Write-Host "已生成签名：$file.sig（version:$version）"
 
       - name: 上传服务器压缩包与完整性校验文件
