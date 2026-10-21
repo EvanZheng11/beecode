@@ -811,6 +811,7 @@ async fn end_to_end_uds_assistant_delegation() {
         Arc::new(FixedParent(1)) as Arc<dyn ParentSessionLookup>,
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(StubQuestions::default()) as Arc<dyn SessionQuestionAccess>,
+        codeg_lib::acp::question::QuestionRuntimeConfig::new(),
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
