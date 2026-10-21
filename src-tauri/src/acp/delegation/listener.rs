@@ -4841,6 +4841,7 @@ mod tests {
             Arc::new(StaticParentLookup(Some(1))),
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
+            QuestionRuntimeConfig::new(),
             Arc::new(StubSessionInfo::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
