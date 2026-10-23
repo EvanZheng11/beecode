@@ -668,7 +668,9 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --bundles deb,rpm --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          # RPM 不接受版本号里的 "-"，rc 版本（x.y.z-rc.N）只出 deb。
+          # Linux arm64 按设计不产出 updater 资产，因此关闭 createUpdaterArtifacts。
+          args: --target ${{ matrix.target }} --bundles ${{ contains(github.ref_name, '-') && 'deb' || 'deb,rpm' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -735,7 +737,10 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }}
+          # rc 版本（x.y.z-rc.N）跳过 rpm：版本号里的 "-" 会让 bundler 报错。
+          # latest.json 等全部矩阵完成后由 generate-updater-manifest 统一生成，
+          # 所以这里 includeUpdaterJson 保持 false。
+          args: --target ${{ matrix.target }}${{ contains(github.ref_name, '-') && ' --bundles deb,appimage' || '' }}
           includeUpdaterJson: false
           retryAttempts: 2
 

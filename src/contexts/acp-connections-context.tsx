@@ -75,6 +75,7 @@ import type {
   PromptCapabilitiesInfo,
   PromptInputBlock,
   RemoteControlInfo,
+  ToolApprovalInfo,
   ToolCallImageWire,
   UserMessageBlock,
 } from "@/lib/types"
@@ -97,6 +98,11 @@ import {
   mergeAsyncTasks,
   upsertAsyncTask,
 } from "@/lib/async-tasks"
+import {
+  EMPTY_TOOL_APPROVALS,
+  mergeToolApprovals,
+  type ToolApprovalMap,
+} from "@/lib/activity/approval"
 import { contentBlocksFromUserMessage } from "@/lib/user-message-blocks"
 import { presentSessionNotice, splitHeadline } from "@/lib/session-notices"
 import { presentPluginLoadFailures } from "@/lib/plugin-load-failures"
@@ -372,6 +378,15 @@ export interface ConnectionState {
    *  merge/settle contract). Retained resolved — entries double as per-id
    *  revision watermarks; the banner splits active from resolved itself. */
   sessionFailures: SessionFailureRecord[]
+  /**
+   * This connection's answered permission requests, by tool call id: what the
+   * transcript draws as a chip on each call's row. Set by `tool_approval` and
+   * merged from a snapshot's `tool_approvals` (`mergeToolApprovals`: the later
+   * decision per call wins, so a stale snapshot can only add). Kept for the
+   * connection's life, not per turn — a finished turn's rows keep their chips,
+   * and the reloaded history carries the backend's stored copy as well.
+   */
+  toolApprovals: ToolApprovalMap
   /** AIR async tasks — Claude's background shells / workflows / monitors (see
    *  `lib/async-tasks.ts` for the merge contract). Retained after they settle,
    *  because the adapter keeps revising a finished task; the strip filters to
@@ -427,8 +442,8 @@ export interface ConnectionState {
   isDelegationChild: boolean
   /**
    * For delegation-child entries: the parent's `tool_use_id` that owns
-   * this child. The DelegatedSubThread component uses this to resolve
-   * the child connection state from its parent-side identifier. Null
+   * this child. The delegation row uses this to resolve the child
+   * connection state from its parent-side identifier. Null
    * for non-delegation connections.
    */
   parentToolUseId: string | null
@@ -487,6 +502,18 @@ export interface ConnectionState {
    * `null` when empty (the common case allocates nothing).
    */
   outOfTurnToolCalls: ReadonlyMap<string, ToolCallInfo> | null
+  /**
+   * Whether a turn has run on this connection: it has been `prompting` at
+   * least once, or the snapshot it was hydrated from says one has (it is
+   * mid-turn, or a prompt has linked it to its conversation row, which the
+   * backend does at the first prompt). Never goes back to `false`.
+   *
+   * Until then, whatever the agent sends outside a turn is its start-up output
+   * and not a turn of its own (see `isUnrenderedAgentTurnContent`), so it must
+   * not raise the "load background activity" notice. Read at event time, never
+   * rendered.
+   */
+  hasPrompted: boolean
   /**
    * A turn the user stopped, while the agent may still be reporting on it.
    * codeg ends a stopped turn the moment the user asks
@@ -684,6 +711,13 @@ type Action =
        * Omit for unconditional clears (e.g. cancel paths).
        */
       requestId?: string
+    }
+  | {
+      // What an answered permission request decided about its tool call
+      // (`tool_approval` event), for the chip on that call's row.
+      type: "TOOL_APPROVAL"
+      contextKey: string
+      approval: ToolApprovalInfo
     }
   | {
       type: "SET_PENDING_QUESTION"
@@ -1072,7 +1106,7 @@ function parseClaudeApiRetryEvent(
   }
 }
 
-function extractPermissionToolCallId(toolCall: unknown): string | null {
+export function extractPermissionToolCallId(toolCall: unknown): string | null {
   const record = asRecord(toolCall)
   if (!record) return null
   const candidates = [
@@ -1909,6 +1943,7 @@ function connectionsReducer(
         pendingPlanApproval: null,
         claudeApiRetry: null,
         sessionFailures: [],
+        toolApprovals: EMPTY_TOOL_APPROVALS,
         asyncTasks: [],
         error: null,
         errorLevel: "error",
@@ -1924,6 +1959,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         outOfTurnToolCalls: null,
+        hasPrompted: false,
         cancelledTurn: null,
       })
       return next
@@ -1973,6 +2009,7 @@ function connectionsReducer(
         pendingPlanApproval: null,
         claudeApiRetry: null,
         sessionFailures: [],
+        toolApprovals: EMPTY_TOOL_APPROVALS,
         asyncTasks: [],
         error: null,
         errorLevel: "error",
@@ -1988,6 +2025,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         outOfTurnToolCalls: null,
+        hasPrompted: false,
         cancelledTurn: null,
       })
       return next
@@ -2033,6 +2071,9 @@ function connectionsReducer(
         current.availableCommands ?? action.patch.availableCommands
       const mergedPromptCapabilities =
         action.patch.promptCapabilities ?? current.promptCapabilities
+      // Latched like `selectorsReady`: a turn that ran stays run, however old
+      // the snapshot that reports it.
+      const mergedHasPrompted = action.patch.hasPrompted || current.hasPrompted
 
       // Race guard: the snapshot may have been generated BEFORE events
       // that have since arrived and been applied to in-memory state.
@@ -2051,6 +2092,13 @@ function connectionsReducer(
       const mergedSessionFailures = mergeSessionFailures(
         current.sessionFailures,
         action.patch.sessionFailures
+      )
+      // Approval records merge on both branches too, by the same reasoning:
+      // the later decision per call wins, so even a stale snapshot can only
+      // add calls this client attached too late to see answered.
+      const mergedToolApprovals = mergeToolApprovals(
+        current.toolApprovals,
+        action.patch.toolApprovals
       )
       // Async tasks contribute on both branches — a client that attached
       // mid-episode has no other way to learn about work already running — but
@@ -2089,7 +2137,9 @@ function connectionsReducer(
           mergedConfigOptions === current.configOptions &&
           mergedAvailableCommands === current.availableCommands &&
           mergedPromptCapabilities === current.promptCapabilities &&
+          mergedHasPrompted === current.hasPrompted &&
           mergedSessionFailures === current.sessionFailures &&
+          mergedToolApprovals === current.toolApprovals &&
           mergedAsyncTasks === current.asyncTasks
         ) {
           return state
@@ -2103,7 +2153,9 @@ function connectionsReducer(
           promptCapabilities: mergedPromptCapabilities,
           selectorsReady: mergedSelectorsReady,
           supportsFork: mergedSupportsFork,
+          hasPrompted: mergedHasPrompted,
           sessionFailures: mergedSessionFailures,
+          toolApprovals: mergedToolApprovals,
           asyncTasks: mergedAsyncTasks,
         })
         return next
@@ -2158,6 +2210,7 @@ function connectionsReducer(
         promptCapabilities: mergedPromptCapabilities,
         selectorsReady: mergedSelectorsReady,
         supportsFork: mergedSupportsFork,
+        hasPrompted: mergedHasPrompted,
         // Staleness is a current-state field (like status): apply the snapshot's
         // value on the fresh path. `configStaleDismissed` is client-local and
         // preserved via `...current`.
@@ -2168,6 +2221,7 @@ function connectionsReducer(
         // replay for it, so its teardown gates hold.
         backgroundOutstanding: action.patch.backgroundOutstanding,
         sessionFailures: mergedSessionFailures,
+        toolApprovals: mergedToolApprovals,
         asyncTasks: mergedAsyncTasks,
         // Current state, like `status`: the session's error as the backend
         // holds it. Never a notification — that fired when it happened.
@@ -2221,6 +2275,7 @@ function connectionsReducer(
         updated.remoteControl = null
       }
       if (action.status === "prompting") {
+        updated.hasPrompted = true
         updated.liveMessage = {
           id: randomUUID(),
           role: "assistant",
@@ -2691,6 +2746,16 @@ function connectionsReducer(
         ...conn,
         pendingPermission: null,
       })
+      return next
+    }
+
+    case "TOOL_APPROVAL": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const merged = mergeToolApprovals(conn.toolApprovals, [action.approval])
+      if (merged === conn.toolApprovals) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, toolApprovals: merged })
       return next
     }
 
@@ -3314,6 +3379,24 @@ export function useConnectionStore(): ConnectionStoreApi {
   return ctx
 }
 
+/**
+ * A fixed store in place of `AcpConnectionsProvider` — for surfaces that render
+ * chat cards outside a workspace (the activity gallery page, component tests).
+ */
+export function StaticConnectionStoreProvider({
+  store,
+  children,
+}: {
+  store: ConnectionStoreApi
+  children: ReactNode
+}) {
+  return (
+    <ConnectionStoreContext.Provider value={store}>
+      {children}
+    </ConnectionStoreContext.Provider>
+  )
+}
+
 /** The store, or `null` outside `AcpConnectionsProvider` — for a card that
  *  renders fine without live state and only enriches itself when it has some
  *  (the `get_delegation_status` row). */
@@ -3607,6 +3690,20 @@ export function useAcpEvent(handler: EventSubscriberHandler): void {
       ctx.subscribers.delete(ref)
     }
   }, [ctx])
+}
+
+/**
+ * The turn `conn` was streaming ended without this client receiving its end —
+ * a re-attach after a disconnect found it over. The part of the reply that
+ * came before the gap is all this client has, so the conversations showing
+ * this session read the reply from the transcript when they settle the turn
+ * (`markTurnEndUnseen`), instead of keeping that part as the whole reply.
+ */
+function noteTurnEndedUnseen(conn: ConnectionState): void {
+  if (!conn.sessionId) return
+  useConversationRuntimeStore
+    .getState()
+    .actions.markTurnEndUnseen(conn.sessionId)
 }
 
 // ── Helper: extract affected key from action ──
@@ -4238,6 +4335,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       } else {
         const key = getAffectedKey(action)
         if (key) {
+          // A snapshot that takes the connection out of a turn ended a turn
+          // this client did not see end: the gap was too long to replay, and
+          // the events in it — the rest of the reply among them — are skipped.
+          // Marked BEFORE the listeners hear of it, so the turn-end edge that
+          // their re-render fires finds the mark.
+          if (action.type === "HYDRATE_FROM_SNAPSHOT") {
+            const before = prev.get(key)
+            const after = next.get(key)
+            if (before?.status === "prompting" && after?.status !== "prompting")
+              noteTurnEndedUnseen(before)
+          }
           mirrorLiveMessage(key)
           notifyKeyListeners(key)
           rememberCommands(key)
@@ -5135,6 +5243,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             requestId: e.request_id,
           })
           break
+        case "tool_approval":
+          // Touches no live message content (the chip is drawn from the
+          // connection's approval map), so like `permission_resolved` it needs
+          // no streaming flush.
+          dispatch({
+            type: "TOOL_APPROVAL",
+            contextKey,
+            approval: e.approval,
+          })
+          break
         case "permission_queue_depth":
           // A request queued up behind the visible card. Only the count on the
           // already-rendered card changes, so no streaming flush is needed.
@@ -6005,7 +6123,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // Localize via the stable `code` field ("resource_not_found" —
           // JSON-RPC -32002 — plus "session_unavailable" and
           // "session_archived", both matched on the wire message, and
-          // "session_busy", read from codex-acp's typed error reason). Fall back
+          // "session_busy", read from codex-acp's typed error reason or
+          // matched on Kimi Code's session-lock message). Fall back
           // to the raw agent message so an unknown future code still surfaces
           // something intelligible rather than getting swallowed.
           const nc = storeRef.current.connections.get(contextKey)
@@ -6056,7 +6175,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               // IDE extension), where freeing it can take quitting that client
               // because closing its tab does not always unload the thread; or
               // a fork codeg just made from it, which closes the parent and
-              // leaves codex to unload it about a minute later.
+              // leaves codex to unload it about a minute later. For Kimi Code
+              // the holder is another Kimi process on the same home (its CLI,
+              // `kimi web`, another codeg), which lets go 3 s after it goes
+              // idle; the same advice holds.
               case "session_busy":
                 return t("backendErrors.sessionLoadBusy", {
                   agent: agentLabel,
@@ -6415,6 +6537,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // so the user sees the conversation tab go away rather than
           // staring at stale state forever.
           attachSubscriptionsRef.current.delete(contextKey)
+          // Still in a turn here: the turn ended without this client — a
+          // connection that ends while attached reports its status first, so
+          // this is a re-attach that found nothing left (the idle sweep takes
+          // a connection nobody touches once its turn is over).
+          const gone = storeRef.current.connections.get(contextKey)
+          if (gone?.status === "prompting") noteTurnEndedUnseen(gone)
           // The composer that survives this is exactly the one whose Reconnect
           // button has to resume the session rather than start a new one.
           captureIdentityBeforeRemoval(contextKey)

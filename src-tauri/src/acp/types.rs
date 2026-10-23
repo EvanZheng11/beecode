@@ -469,6 +469,14 @@ pub enum AcpEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<PermissionAnswerOrigin>,
     },
+    /// What an answered permission request decided about its tool call.
+    /// Follows the `PermissionResolved` that retired the card, and only for an
+    /// answer that took effect on a card naming a tool call and an option it
+    /// offered — never for a withdrawal or a drain. The lifecycle worker keeps
+    /// it in `tool_approval` (agent transcripts record no approvals), and the
+    /// snapshot carries the connection's recent ones for a client that attaches
+    /// later; both end up as a chip on the call's row in the transcript.
+    ToolApproval { approval: ToolApprovalInfo },
     /// Turn completed
     TurnComplete {
         session_id: String,
@@ -1418,6 +1426,35 @@ pub enum PermissionAnswerOrigin {
     CliPolicy { run_id: String },
 }
 
+impl PermissionAnswerOrigin {
+    /// The origin's `kind` tag, which is what an approval record keeps: the
+    /// run id of a CLI policy says nothing about the decision.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::ChatChannel => "chat_channel",
+            Self::CliPolicy { .. } => "cli_policy",
+        }
+    }
+}
+
+/// One answered permission request, as a record about its tool call: what was
+/// chosen, by whom, and when. See [`AcpEvent::ToolApproval`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolApprovalInfo {
+    pub tool_call_id: String,
+    /// The chosen option's ACP kind: `allow_once`, `allow_always`,
+    /// `reject_once` or `reject_always` (passed through verbatim, so a kind a
+    /// newer agent invents survives to the reader).
+    pub option_kind: String,
+    /// The chosen option's label, in the agent's own words — the only place
+    /// that says what an "always" covers for that agent.
+    pub option_name: String,
+    /// [`PermissionAnswerOrigin::kind`] of whoever answered.
+    pub origin: String,
+    pub decided_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionModeInfo {
     pub id: String,
@@ -1903,6 +1940,16 @@ pub struct GrokSettings {
     pub custom_api_backend: Option<String>,
     /// `[model.<id>].context_window` — context size in tokens.
     pub custom_context_window: Option<i64>,
+    /// `[model.<id>].reasoning_efforts` — the reasoning-effort levels the custom
+    /// model declares, each as the `value` Grok sends to the provider (a bare
+    /// string entry is its own value), lowercased since Grok matches them
+    /// case-insensitively, in file order. Empty when the key is absent: Grok
+    /// then inherits levels only from its model catalog's row for the same id
+    /// (xAI's list, or `[endpoints].models_base_url`'s) — never from the model's
+    /// own `base_url` — and a model with neither advertises no effort support,
+    /// so the composer offers no effort selector for it.
+    #[serde(default)]
+    pub custom_reasoning_efforts: Vec<String>,
     /// `[session].auto_compact_threshold_percent` — auto-compact trigger, 0–100
     /// (Grok's default is 85).
     pub auto_compact_threshold_percent: Option<i64>,
@@ -1929,6 +1976,14 @@ pub struct GrokStructuredConfig {
     pub custom_api_key: Option<String>,
     pub custom_api_backend: Option<String>,
     pub custom_context_window: Option<i64>,
+    /// The custom model's `reasoning_efforts` levels. Unlike every other field
+    /// here, `None` leaves the key as it is, following the model through a
+    /// rename: the panel sends levels only once its chips moved, because the
+    /// list may be hand-written — in the panel's own raw config.toml editor, or
+    /// before the panel managed the key — and neither an untouched control nor a
+    /// client that predates the field may undo that. `Some(empty)` removes the
+    /// key; a non-empty list writes it.
+    pub custom_reasoning_efforts: Option<Vec<String>>,
     pub auto_compact_threshold_percent: Option<i64>,
 }
 
