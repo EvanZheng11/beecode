@@ -1,9 +1,8 @@
 name: Release
 
 on:
+  # 只在推送版本标签时自动发布；推送到 main 不再触发
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
   workflow_dispatch:
