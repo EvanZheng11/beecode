@@ -144,8 +144,10 @@ describe("conversationRowTimestamp", () => {
     // Creation-ordered under every parent and in either sort mode, so neither
     // the activity stamp a Recent parent reads nor an activity sort moves
     // their label off it, and the Recent copy matches its twin.
+    // 合并后会话行缩进到其直接文件夹标题的下一级（baseDepth + 1），
+    // 因此子会话在文件夹桶里是 depth 2、在 Recent 副本里仍是 depth 1。
     expect(kids.map((r) => [r.depth, r.recent ?? false])).toEqual([
-      [1, false],
+      [2, false],
       [1, true],
     ])
     expect(kids.map((r) => conversationRowTimestamp(r, "created"))).toEqual([
@@ -181,9 +183,10 @@ describe("conversationRowTimestamp", () => {
       chatsExpanded: true,
       containerChildren: new Map([[10, [11]]]),
     }).filter((r): r is ConversationRow => r.kind === "conversation")
+    // 根分组下 repo 自有行与 worktree 行都在其标题的下一级，即 depth 2。
     expect(nested.map((r) => [r.conversation.id, r.depth])).toEqual([
-      [5, 1],
-      [6, 1],
+      [5, 2],
+      [6, 2],
     ])
     expect(nested.map((r) => conversationRowTimestamp(r, "updated"))).toEqual([
       updated,
