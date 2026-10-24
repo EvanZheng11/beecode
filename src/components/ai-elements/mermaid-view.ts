@@ -211,6 +211,39 @@ export function stripSvgMaxWidth(svg: string): string {
   )
 }
 
+/** A `<rect>` tag, with or without attributes before the closing bracket. */
+const RECT_TAG = /<rect\b[^>]*>/gi
+
+/**
+ * Give every node `<rect>` an explicit `rx`/`ry` **attribute**.
+ *
+ * The theme's `themeCSS` sets the same radius as a CSS property, which is the
+ * documented way to round Mermaid's generated boxes — but WebKit only honoured
+ * CSS `rx`/`ry` from Safari 17.4 (webkit bug 266090; before that the value
+ * parsed and did nothing). Tauri's WKWebView follows the system Safari, so on
+ * macOS every node stayed a 90° rectangle while Chromium-based builds looked
+ * right.
+ *
+ * The attribute form is SVG 1.1 and has been supported since Safari 3.1, so
+ * writing it into the markup is what makes the rounding engine-independent.
+ * CSS stays as well (it wins where both apply, and costs nothing).
+ *
+ * Only boxes that carry a real size are touched: Mermaid also emits zero-size
+ * `<rect>` placeholders inside labels, and rounding those is meaningless.
+ */
+export function roundSvgRects(svg: string, radius: number): string {
+  if (!(radius > 0)) return svg
+  return svg.replace(RECT_TAG, (tag) => {
+    if (/\brx\s*=/.test(tag)) return tag
+    // Skip the degenerate label placeholders (`<rect></rect>`) — no width/height.
+    if (!/\bwidth\s*=/.test(tag) || !/\bheight\s*=/.test(tag)) return tag
+    return tag.replace(
+      /\s*\/?>$/,
+      (end) => ` rx="${radius}" ry="${radius}"${end}`
+    )
+  })
+}
+
 /**
  * `language-mermaid` and nothing else — `language-mermaidx` must not match, and
  * the class sits in a space-separated list alongside Streamdown's own classes.

@@ -12,6 +12,7 @@ import {
   parseSvgSize,
   plantUmlSourceFromPre,
   stepZoom,
+  roundSvgRects,
   stripSvgMaxWidth,
   zoomAroundPoint,
   ZOOM_FACTOR,
@@ -209,6 +210,42 @@ describe("stripSvgMaxWidth", () => {
   it("is a no-op when there is nothing to strip", () => {
     const svg = '<svg viewBox="0 0 10 10"></svg>'
     expect(stripSvgMaxWidth(svg)).toBe(svg)
+  })
+})
+
+describe("roundSvgRects", () => {
+  it("writes rx/ry attributes onto sized node boxes", () => {
+    // The attribute, not the CSS property, is what WebKit honours before
+    // Safari 17.4 — a CSS-only radius left macOS showing square corners.
+    const svg =
+      '<svg><rect class="basic" x="-45" y="-22.5" width="90" height="45"></rect></svg>'
+    expect(roundSvgRects(svg, 8)).toContain(
+      '<rect class="basic" x="-45" y="-22.5" width="90" height="45" rx="8" ry="8"></rect>'
+    )
+  })
+
+  it("leaves Mermaid's zero-size label placeholders alone", () => {
+    // Mermaid puts an empty <rect> inside every node label; rounding it would
+    // be meaningless, and giving it a radius can leak a visible corner.
+    const svg = '<svg><g class="label"><rect></rect></g></svg>'
+    expect(roundSvgRects(svg, 8)).toBe(svg)
+  })
+
+  it("does not double-apply a radius Mermaid already emitted", () => {
+    const svg = '<svg><rect width="10" height="10" rx="3"></rect></svg>'
+    expect(roundSvgRects(svg, 8)).toBe(svg)
+  })
+
+  it("handles self-closing tags and is a no-op for a zero radius", () => {
+    const svg = '<svg><rect width="10" height="10"/></svg>'
+    expect(roundSvgRects(svg, 8)).toContain('rx="8" ry="8"/>')
+    expect(roundSvgRects(svg, 0)).toBe(svg)
+  })
+
+  it("leaves non-rect shapes untouched", () => {
+    const svg =
+      '<svg><polygon points="0,0 10,0 5,10"></polygon><circle r="5"></circle></svg>'
+    expect(roundSvgRects(svg, 8)).toBe(svg)
   })
 })
 

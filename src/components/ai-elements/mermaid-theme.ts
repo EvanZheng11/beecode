@@ -68,6 +68,14 @@ const DARK = {
 } as const
 
 /**
+ * Corner radius of a node box, in CSS px. Applied twice on purpose: as a CSS
+ * property here, and as an `rx`/`ry` **attribute** by `roundSvgRects` after
+ * render (see `./mermaid-view.ts` for why the attribute is the one that
+ * actually works on macOS).
+ */
+export const NODE_CORNER_RADIUS = 8
+
+/**
  * Rounded nodes/clusters plus the pill-shaped edge label of the target design.
  *
  * The label rule must target `.labelBkg`: that is Mermaid's own class, the one
@@ -75,13 +83,15 @@ const DARK = {
  * Styling the wrapping `<foreignObject>` (or `.edgeLabel`, which is the inner
  * text only) does nothing visible.
  *
- * `rx`/`ry` go through `themeCSS` rather than the `%%init}%%` route because
- * the node box is a generated `<rect>` with no radius attribute at all.
+ * `rx`/`ry` appear here (the node box is a generated `<rect>` with no radius
+ * attribute of its own) AND are written as real attributes by
+ * `roundSvgRects` — WebKit ignored the CSS form before Safari 17.4, which is
+ * why macOS kept showing square corners.
  */
 function diagramCss(edgeLabelBorder: string): string {
   return `
-.node rect, .node polygon, .node path { rx: 8; ry: 8; }
-.cluster rect { rx: 12; ry: 12; }
+.node rect, .node polygon, .node path { rx: ${NODE_CORNER_RADIUS}; ry: ${NODE_CORNER_RADIUS}; }
+.cluster rect { rx: ${NODE_CORNER_RADIUS}; ry: ${NODE_CORNER_RADIUS}; }
 .labelBkg {
   border-radius: 999px;
   padding: 1px 7px;

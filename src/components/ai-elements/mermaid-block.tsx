@@ -58,13 +58,14 @@ import {
   mermaidSourceFromPre,
   parseSvgSize,
   plantUmlSourceFromPre,
+  roundSvgRects,
   stepZoom,
   stripSvgMaxWidth,
   zoomAroundPoint,
   type Point,
   type Size,
 } from "./mermaid-view"
-import { mermaidDiagramConfig } from "./mermaid-theme"
+import { mermaidDiagramConfig, NODE_CORNER_RADIUS } from "./mermaid-theme"
 import { renderPlantUml } from "./plantuml-engine"
 import { useMermaidEngine } from "./streamdown-plugins"
 
@@ -182,7 +183,11 @@ function useRenderedDiagram(
       try {
         const svg = await render(source, controller.signal)
         if (controller.signal.aborted) return
-        setState({ svg: stripSvgMaxWidth(svg), error: null, pending: false })
+        setState({
+          svg: stripSvgMaxWidth(roundSvgRects(svg, NODE_CORNER_RADIUS)),
+          error: null,
+          pending: false,
+        })
       } catch (err) {
         if (controller.signal.aborted) return
         const message =
