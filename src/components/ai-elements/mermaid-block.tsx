@@ -64,6 +64,7 @@ import {
   type Point,
   type Size,
 } from "./mermaid-view"
+import { mermaidDiagramConfig } from "./mermaid-theme"
 import { renderPlantUml } from "./plantuml-engine"
 import { useMermaidEngine } from "./streamdown-plugins"
 
@@ -868,12 +869,14 @@ function MermaidBlockImpl({ source }: { source: string }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   const active = useNearViewport(root)
 
-  // Mermaid's own dark palette. Reading `isDarkMode` from context is what makes
-  // a live theme switch work at all: a context update pierces the `memo` around
+  // The app's own palette (see `./mermaid-theme.ts`), not Mermaid's built-in
+  // default — that one is the purple/yellow poster theme with no relation to
+  // the app's colours. Reading `isDarkMode` from context is what makes a live
+  // theme switch work at all: a context update pierces the `memo` around
   // `MessageResponse` and the one around Streamdown itself, neither of which
   // compares anything theme-shaped.
   const config = useMemo<MermaidConfig>(
-    () => ({ theme: isDarkMode ? "dark" : "default" }),
+    () => mermaidDiagramConfig({ isDarkMode }),
     [isDarkMode]
   )
   const render = useMermaidRenderer(config)

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import { mermaidComponents } from "./mermaid-block"
+import { mermaidDiagramConfig } from "./mermaid-theme"
 
 const mocks = vi.hoisted(() => ({
   render: vi.fn(),
@@ -143,23 +144,55 @@ describe("mermaidComponents.pre", () => {
 })
 
 describe("MermaidBlock theming", () => {
-  it("renders with Mermaid's light theme by default", async () => {
+  it("hands Mermaid the app's light palette, not its own default theme", async () => {
     renderWithIntl(mermaidFence())
     await waitFor(() =>
-      expect(mocks.getMermaid).toHaveBeenCalledWith({ theme: "default" })
+      expect(mocks.getMermaid).toHaveBeenCalledWith(
+        mermaidDiagramConfig({ isDarkMode: false })
+      )
     )
+    // The built-in "default" theme is the purple/yellow one this exists to
+    // escape; "base" is what makes themeVariables take effect at all.
+    expect(mocks.getMermaid).not.toHaveBeenCalledWith({ theme: "default" })
   })
 
-  it("re-renders the diagram with the dark theme when the app turns dark", async () => {
+  it("re-renders the diagram with the dark palette when the app turns dark", async () => {
     renderWithIntl(mermaidFence())
     await waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1))
 
     act(() => mocks.setDarkMode(true))
 
     await waitFor(() =>
-      expect(mocks.getMermaid).toHaveBeenLastCalledWith({ theme: "dark" })
+      expect(mocks.getMermaid).toHaveBeenLastCalledWith(
+        mermaidDiagramConfig({ isDarkMode: true })
+      )
     )
     expect(mocks.render).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("mermaidDiagramConfig", () => {
+  const css = (isDarkMode: boolean) =>
+    mermaidDiagramConfig({ isDarkMode }).themeCSS ?? ""
+
+  it("paints the edge label as a bordered pill", () => {
+    // The label box is Mermaid's own .labelBkg; a rule on the wrapping
+    // foreignObject would render nothing.
+    expect(css(false)).toMatch(/\.labelBkg\s*\{[^}]*border-radius:\s*999px/)
+    expect(css(false)).toMatch(/\.labelBkg\s*\{[^}]*border:\s*1px solid /)
+  })
+
+  it("draws straight axis-aligned edges and rounded node boxes", () => {
+    const config = mermaidDiagramConfig({ isDarkMode: false })
+    expect(config.flowchart?.curve).toBe("linear")
+    expect(config.themeCSS).toMatch(/\.node rect[^{]*\{[^}]*rx:\s*8/)
+  })
+
+  it("switches the node fill between light and dark", () => {
+    const light = mermaidDiagramConfig({ isDarkMode: false }).themeVariables
+    const dark = mermaidDiagramConfig({ isDarkMode: true }).themeVariables
+    expect(light?.primaryColor).not.toBe(dark?.primaryColor)
+    expect(dark?.primaryTextColor).not.toBe(light?.primaryTextColor)
   })
 })
 
