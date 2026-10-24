@@ -670,7 +670,7 @@ const NavSubAgentCard = memo(function NavSubAgentCard({
     <span className="flex min-w-0 flex-1 items-center gap-2.5 py-2 ps-2.5 pe-2">
       <DelegationIdentityAvatar
         identity={identity}
-        size="compact"
+        size="header"
         badge={
           resumed ? (
             <span
@@ -688,7 +688,7 @@ const NavSubAgentCard = memo(function NavSubAgentCard({
             identity={identity}
             className="min-w-0 truncate text-xs font-semibold text-foreground"
           />
-          <StatusBadge status={status} errorCode={errorCode} size="sm" />
+          <StatusBadge status={status} errorCode={errorCode} />
         </span>
         {task && (
           <span
