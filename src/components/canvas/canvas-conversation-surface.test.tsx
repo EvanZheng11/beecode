@@ -428,4 +428,42 @@ describe("a send the running turn turns away", () => {
     expect(shell.props?.injectContent).toBeNull()
     expect(notify).not.toHaveBeenCalled()
   })
+
+  it.each([true, false])("恢复回答透传发送确认结果 %s", async (accepted) => {
+    lifecycle.handleSend.mockResolvedValue(accepted)
+    renderPinnedCard()
+    const answer = shell.props?.onAnswerQuestion as (
+      text: string
+    ) => Promise<boolean>
+    await act(async () => {
+      expect(await answer("恢复答案")).toBe(accepted)
+    })
+    expect(lifecycle.handleSend).toHaveBeenCalledTimes(1)
+  })
+
+  it("恢复卡断连提交明确返回未接收，不调用发送", async () => {
+    lifecycle.conn = connection("codex", "disconnected")
+    renderPinnedCard()
+    const answer = shell.props?.onAnswerQuestion as (text: string) => boolean
+    expect(answer("恢复答案")).toBe(false)
+    expect(lifecycle.handleSend).not.toHaveBeenCalled()
+  })
+
+  it("恢复回答被忙碌拒绝时回滚消息且不向输入框复制答案", async () => {
+    lifecycle.handleSend.mockImplementation(
+      async (_draft: PromptDraft, _modeId: unknown, opts: SendOpts) => {
+        opts.onTurnInProgress?.()
+        return false
+      }
+    )
+    renderPinnedCard()
+    const answer = shell.props?.onAnswerQuestion as (
+      text: string
+    ) => Promise<boolean>
+    await act(async () => {
+      expect(await answer("恢复答案")).toBe(false)
+    })
+    expect(getTimelineTurns(5)).toHaveLength(0)
+    expect(shell.props?.injectContent).toBeNull()
+  })
 })

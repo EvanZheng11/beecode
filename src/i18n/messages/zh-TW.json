@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "逾時的提問重新問幾次（0-10 次），0 表示不重試。",
     "questionMcpAutoSelect": "逾時後自動選取第一個選項",
     "questionMcpAutoSelectHint": "等待時間和重試次數都用盡後，直接選取第一個選項，讓代理繼續往下做。",
-    "questionMcpInfiniteWait": "已關閉自動選取：沒人回答的提問會一直等下去，上面的等待時間和重試次數不再生效。",
+    "questionMcpInfiniteWait": "已關閉自動選取：仍依設定計時並完整重提；次數耗盡後保留最後一張表單等待回答，直到宿主請求到期或連線關閉。",
     "questionMcpSaveFailed": "儲存提問設定失敗：{message}",
     "loadFailed": "載入失敗：{message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "永久儲存"
       },
       "questionDialog": {
+        "recoveredHint": "原提問呼叫已結束，提交後將作為新訊息傳送給代理。",
         "title": "代理正在提問",
         "placeholder": "輸入你的回答...",
         "send": "傳送"

@@ -55,6 +55,138 @@ const LISTEN_FLAGS_MIN_VERSION: semver::Version = semver::Version::new(1, 0, 43)
 /// Bound on the `acp --help` probe, like every other status-path probe.
 const HELP_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// 约 24.85 天：覆盖最长 11 天的配置重提，且不超过 JS 计时器的有符号整数上限。
+/// 关闭自动选择后的等待仍受宿主期限约束，不能承诺无限等待。
+pub(crate) const CODEG_MCP_TIMEOUT_MS: u32 = i32::MAX as u32;
+
+/// OpenCode 1.19.3 的 ACP mcpConfig 不转发 timeout；MCP.tools 会回查同名静态配置。
+/// 仅在启动环境覆盖自有服务器，禁用静态启动，由 ACP 注入实际命令和令牌。
+pub(crate) fn with_codeg_mcp_timeout(raw: &str) -> Result<String, String> {
+    let (protected, replacements) = protect_config_templates(raw)?;
+    let mut config = crate::parsers::parse_opencode_config_jsonc(&protected)
+        .ok_or("OpenCode 启动配置不是有效的 JSONC")?;
+    // Unicode 转义解码后的键也可能撞上占位符；全局还原前拒绝，避免改写用户键。
+    let mut pending = vec![&config];
+    while let Some(value) = pending.pop() {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object
+                    .keys()
+                    .any(|key| replacements.iter().any(|(marker, _)| marker == key))
+                {
+                    return Err("OpenCode 启动配置对象键与占位符冲突，保留原配置并跳过期限注入".into());
+                }
+                pending.extend(object.values());
+            }
+            serde_json::Value::Array(array) => pending.extend(array),
+            _ => {}
+        }
+    }
+    let root = config
+        .as_object_mut()
+        .ok_or("OpenCode 启动配置必须是对象")?;
+    let mcp = root.entry("mcp").or_insert_with(|| serde_json::json!({}));
+    let servers = mcp
+        .as_object_mut()
+        .ok_or("OpenCode MCP 配置必须是对象")?;
+    servers.insert(
+        "codeg-mcp".into(),
+        serde_json::json!({
+            "type": "local",
+            "command": ["codeg-mcp"],
+            "enabled": false,
+            "timeout": CODEG_MCP_TIMEOUT_MS,
+        }),
+    );
+    let mut merged = serde_json::to_string(&config)
+        .map_err(|_| "序列化 OpenCode 启动配置失败".to_string())?;
+    for (marker, original) in replacements {
+        merged = merged.replace(&format!("\"{marker}\""), &original);
+    }
+    Ok(merged)
+}
+
+/// 只保护词法内容，不读取环境变量或文件；宿主仍负责替换和解析模板。
+/// 字符串整体保留原始转义，注释中的引号和模板不参与扫描。
+fn protect_config_templates(raw: &str) -> Result<(String, Vec<(String, String)>), String> {
+    let mut prefix = "__codeg_config_literal_".to_string();
+    while raw.contains(&prefix) {
+        prefix.push('_');
+    }
+    let bytes = raw.as_bytes();
+    let mut protected = String::with_capacity(raw.len());
+    let mut replacements = Vec::new();
+    let (mut i, mut copied) = (0, 0);
+    while i < bytes.len() {
+        i = skip_config_trivia(bytes, i);
+        if i >= bytes.len() {
+            break;
+        }
+        let start = i;
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' => i += 2,
+                    b'"' => break,
+                    _ => i += 1,
+                }
+            }
+            if i >= bytes.len() {
+                return Err("OpenCode 启动配置字符串未闭合，跳过期限注入".into());
+            }
+            i += 1;
+            let value: String = serde_json::from_str(&raw[start..i])
+                .map_err(|_| "OpenCode 启动配置字符串无法安全解析".to_string())?;
+            // 对象键保留解析语义（包括重复键）；动态键无法确定是否覆盖自有配置。
+            if bytes.get(skip_config_trivia(bytes, i)) == Some(&b':') {
+                if value.contains("{env:") || value.contains("{file:") {
+                    return Err("OpenCode 启动配置含动态键，保留原配置并跳过期限注入".into());
+                }
+                continue;
+            }
+        } else if bytes[i..].starts_with(b"{env:") || bytes[i..].starts_with(b"{file:") {
+            let end = raw[i..]
+                .find('}')
+                .ok_or("OpenCode 启动配置模板未闭合，跳过期限注入")?;
+            i += end + 1;
+        } else {
+            i += 1;
+            continue;
+        }
+        let marker = format!("{prefix}{}__", replacements.len());
+        protected.push_str(&raw[copied..start]);
+        protected.push('"');
+        protected.push_str(&marker);
+        protected.push('"');
+        replacements.push((marker, raw[start..i].to_string()));
+        copied = i;
+    }
+    protected.push_str(&raw[copied..]);
+    Ok((protected, replacements))
+}
+
+fn skip_config_trivia(bytes: &[u8], mut i: usize) -> usize {
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            while i + 1 < bytes.len() && !bytes[i..].starts_with(b"*/") {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else {
+            return i;
+        }
+    }
+}
+
 /// What a version string alone settles: `Some` for a release, `None` when it
 /// cannot tell. opencode publishes every preview channel (`dev`, `beta`,
 /// `next`, per-branch snapshots) as `0.0.0-<tag>` whatever the build's age —
@@ -184,6 +316,122 @@ pub(crate) async fn listen_args(
 mod tests {
     use super::*;
     use crate::acp::registry::{self, AgentDistribution};
+
+    #[test]
+    fn codeg_mcp_timeout_covers_all_configured_retries_without_changing_other_servers() {
+        let raw = r#"{
+            // 用户启动环境中的其它配置必须保留。
+            "model": "provider/model",
+            "experimental": { "mcp_timeout": 1234 },
+            "mcp": { "other": { "type": "local", "command": ["other"], "timeout": 5000 } },
+        }"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&with_codeg_mcp_timeout(raw).unwrap()).unwrap();
+        assert_eq!(merged["model"], "provider/model");
+        assert_eq!(merged["experimental"]["mcp_timeout"], 1234);
+        assert_eq!(merged["mcp"]["other"]["timeout"], 5000);
+        assert_eq!(merged["mcp"]["codeg-mcp"]["enabled"], false);
+        assert_eq!(merged["mcp"]["codeg-mcp"]["timeout"], CODEG_MCP_TIMEOUT_MS);
+        let max_wait_ms = u64::from(crate::acp::question::MAX_QUESTION_TIMEOUT_MINUTES)
+            * 60_000
+            * u64::from(crate::acp::question::MAX_QUESTION_RETRY_COUNT + 1);
+        let timeout = merged["mcp"]["codeg-mcp"]["timeout"].as_u64().unwrap();
+        assert!(timeout > max_wait_ms);
+        assert!(timeout <= i32::MAX as u64);
+        assert!(with_codeg_mcp_timeout("{}").is_ok());
+        assert!(with_codeg_mcp_timeout("invalid").is_err());
+        assert!(with_codeg_mcp_timeout("[]").is_err());
+        assert!(with_codeg_mcp_timeout(r#"{"mcp": []}"#).is_err());
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_preserves_host_templates_without_expanding_them() {
+        let raw = r#"{
+            // 注释中的 " 和 {env:IGNORED} 不参与词法替换。
+            "experimental": {"mcp_timeout": {env:QUESTION_MCP_TIMEOUT}},
+            "instructions": [{file:./instructions.json}],
+            "provider": {"token": "{env:PRIVATE_TOKEN}", "prompt": "{file:./prompt.txt}"},
+            "mcp": {"other": {"type": "local", "command": ["other"], "timeout": {env:OTHER_TIMEOUT}}}
+        }"#;
+        let merged = with_codeg_mcp_timeout(raw).unwrap();
+        for template in [
+            "{env:QUESTION_MCP_TIMEOUT}",
+            "{file:./instructions.json}",
+            "\"{env:PRIVATE_TOKEN}\"",
+            "\"{file:./prompt.txt}\"",
+            "{env:OTHER_TIMEOUT}",
+        ] {
+            assert!(merged.contains(template));
+        }
+        // 仅用测试常量模拟宿主后续替换，不读取用户环境和文件。
+        let resolved = merged
+            .replace("{env:QUESTION_MCP_TIMEOUT}", "600000")
+            .replace("{file:./instructions.json}", "[\"测试指令\"]")
+            .replace("{env:OTHER_TIMEOUT}", "5000");
+        let parsed: serde_json::Value = serde_json::from_str(&resolved).unwrap();
+        assert_eq!(parsed["experimental"]["mcp_timeout"], 600000);
+        assert_eq!(parsed["mcp"]["other"]["command"][0], "other");
+        assert_eq!(parsed["mcp"]["other"]["timeout"], 5000);
+        assert_eq!(parsed["mcp"]["codeg-mcp"]["timeout"], CODEG_MCP_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_preserves_string_escapes_and_avoids_marker_collisions() {
+        let raw = r#"{
+            /* " {file:IGNORED} */
+            "literal": "__codeg_config_literal_0__",
+            "quoted": "quote: \"{env:PRIVATE_TOKEN}\"; slash: \\",
+            "escaped": "\u007benv:DO_NOT_EXPAND}",
+            "mcp": {"other": {"type": "local", "command": ["{file:./a\\b.txt}"]}},
+        }"#;
+        let merged = with_codeg_mcp_timeout(raw).unwrap();
+        let original = crate::parsers::parse_opencode_config_jsonc(raw).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(parsed["literal"], original["literal"]);
+        assert_eq!(parsed["quoted"], original["quoted"]);
+        assert_eq!(parsed["escaped"], original["escaped"]);
+        assert_eq!(parsed["mcp"]["other"], original["mcp"]["other"]);
+        assert!(merged.contains(r#""\u007benv:DO_NOT_EXPAND}""#));
+        assert!(merged.contains(r#""{file:./a\\b.txt}""#));
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_rejects_unicode_escaped_marker_key() {
+        let raw = r#"{"mcp":{"\u005f_codeg_config_literal_0__":{"type":"local","command":["other"]}}}"#;
+        let reason = with_codeg_mcp_timeout(raw).unwrap_err();
+        assert_eq!(reason, "OpenCode 启动配置对象键与占位符冲突，保留原配置并跳过期限注入");
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_rejects_nested_marker_keys() {
+        for raw in [
+            r#"{"mcp":{"other":{"type":"local","command":["other"],"nested":{"\u005f_codeg_config_literal_0__":true}}}}"#,
+            r#"{"mcp":{"other":{"type":"local","command":["other"]}},"nested":[{"\u005f_codeg_config_literal_1__":true}]}"#,
+        ] {
+            assert!(with_codeg_mcp_timeout(raw).is_err());
+        }
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_reports_unsafe_injection_without_exposing_config() {
+        let raw = r#"{"mcp": {env:PRIVATE_MCP_CONFIG}}"#;
+        let reason = with_codeg_mcp_timeout(raw).unwrap_err();
+        assert!(!reason.contains("PRIVATE_MCP_CONFIG"));
+        assert!(with_codeg_mcp_timeout(r#"{"value": {file:unfinished"#).is_err());
+        assert!(with_codeg_mcp_timeout(r#"{"{env:PRIVATE_KEY}": {}}"#).is_err());
+    }
+
+    #[test]
+    fn codeg_mcp_timeout_preserves_duplicate_key_semantics_with_comments_and_escapes() {
+        let raw = r#"{"mcp": {
+            "other" /* 键与冒号之间允许注释 */: {"timeout": 1},
+            "\u006fther": {"timeout": 5000}
+        }}"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&with_codeg_mcp_timeout(raw).unwrap()).unwrap();
+        assert_eq!(merged["mcp"]["other"]["timeout"], 5000);
+        assert_eq!(merged["mcp"].as_object().unwrap().len(), 2);
+    }
 
     #[test]
     fn a_release_version_settles_it_at_the_floor() {

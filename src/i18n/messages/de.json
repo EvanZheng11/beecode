@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "Wie oft eine abgelaufene Frage erneut gestellt wird (0-10). 0 schaltet die Wiederholungen ab.",
     "questionMcpAutoSelect": "Nach Zeitablauf die erste Option automatisch wählen",
     "questionMcpAutoSelectHint": "Sind Wartezeit und Wiederholungen aufgebraucht, wird mit der ersten Option geantwortet, damit der Agent weitermachen kann.",
-    "questionMcpInfiniteWait": "Die automatische Auswahl ist aus: Eine unbeantwortete Frage wartet unbegrenzt, die Wartezeit und die Wiederholungen oben haben dann keine Wirkung.",
+    "questionMcpInfiniteWait": "Auch ohne automatische Auswahl gelten die Wiederholungen. Danach bleibt das letzte Formular bis zur Antwort, zum Ablauf der Host-Anfrage oder zum Verbindungsende verfügbar.",
     "questionMcpSaveFailed": "Frage-Einstellungen konnten nicht gespeichert werden: {message}",
     "loadFailed": "Laden fehlgeschlagen: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "Dauerhaft gespeichert"
       },
       "questionDialog": {
+        "recoveredHint": "Der ursprüngliche Aufruf ist beendet. Deine Antwort wird als neue Nachricht an den Agenten gesendet.",
         "title": "Agent stellt eine Frage",
         "placeholder": "Antwort eingeben...",
         "send": "Senden"

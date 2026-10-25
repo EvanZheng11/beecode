@@ -720,10 +720,7 @@ export function GeneralSettings() {
                       })
                     }
                     onBlur={() => void persistQuestionSettings(questionDraft)}
-                    disabled={
-                      savingQuestion ||
-                      !questionDraft.auto_select_first_on_timeout
-                    }
+                    disabled={savingQuestion}
                     className="h-8 w-24 bg-background text-xs"
                   />
                 }
@@ -754,10 +751,7 @@ export function GeneralSettings() {
                       })
                     }
                     onBlur={() => void persistQuestionSettings(questionDraft)}
-                    disabled={
-                      savingQuestion ||
-                      !questionDraft.auto_select_first_on_timeout
-                    }
+                    disabled={savingQuestion}
                     className="h-8 w-24 bg-background text-xs"
                   />
                 }

@@ -574,17 +574,22 @@ export function CanvasConversationSurface({
   )
 
   const handleSend = useCallback(
-    (draft: PromptDraft, selectedModeIdArg?: string | null) => {
+    (
+      draft: PromptDraft,
+      selectedModeIdArg?: string | null,
+      retainQuestion = false
+    ) => {
       // Bail BEFORE the optimistic turn exists. A second submit while the first
       // one is still minting the conversation row cannot be sent (there is no
       // row to send it against yet), and painting it into the transcript first
       // would leave the user looking at a message that was never delivered and
       // never rolled back.
       const alreadyPersisted = dbConversationIdRef.current != null
-      if (!alreadyPersisted && (creatingRef.current || !draftTarget)) return
+      if (!alreadyPersisted && (creatingRef.current || !draftTarget))
+        return false
       // The composer already reads as not ready while the connection belongs
       // to another agent; this catches a submit that races the switch.
-      if (connIsForOtherAgent) return
+      if (connIsForOtherAgent) return false
 
       const optimisticTurn = buildOptimisticUserTurn(
         draft,
@@ -622,6 +627,8 @@ export function CanvasConversationSurface({
       // it was simply gone, with no notice either. Hand it back instead.
       const onTurnInProgress = () => {
         onSendFailed()
+        // 恢复表单保留原选择，不再向输入框复制一份答案。
+        if (retainQuestion) return
         setComposerHandBacks((pending) => [
           ...pending,
           { handBack: draft.blocks },
@@ -635,23 +642,22 @@ export function CanvasConversationSurface({
 
       const persistedId = dbConversationIdRef.current
       if (persistedId) {
-        lifecycleSend(draft, selectedModeIdArg, {
+        return lifecycleSend(draft, selectedModeIdArg, {
           folderId: boundFolderId ?? undefined,
           conversationId: persistedId,
           clientMessageId: optimisticTurn.id,
           onTurnInProgress,
           onSendFailed,
         })
-        return
       }
 
       // Draft: create the row BEFORE the prompt goes out, so the backend adopts
       // it instead of minting a duplicate (same ordering as the tab view). The
       // guard for this branch already ran above, before the optimistic turn.
-      if (!draftTarget) return
+      if (!draftTarget) return false
       creatingRef.current = true
       setCreating(true)
-      void (async () => {
+      return (async () => {
         try {
           const title = promptDraftTitleSeed(
             draft,
@@ -684,7 +690,7 @@ export function CanvasConversationSurface({
           setCreatedConversationId(newId)
           refreshConversations()
           onConversationCreated?.(newId, sendFolderId)
-          lifecycleSend(draft, selectedModeIdArg, {
+          return await lifecycleSend(draft, selectedModeIdArg, {
             folderId: sendFolderId,
             conversationId: newId,
             clientMessageId: optimisticTurn.id,
@@ -704,6 +710,7 @@ export function CanvasConversationSurface({
             title: t("createFailed"),
             description: toErrorMessage(e),
           })
+          return false
         } finally {
           creatingRef.current = false
           setCreating(false)
@@ -735,11 +742,15 @@ export function CanvasConversationSurface({
 
   const handleAnswerQuestion = useCallback(
     (answer: string) => {
-      if (connStatus !== "connected") return
-      handleSend({
-        blocks: [{ type: "text", text: answer }],
-        displayText: answer,
-      })
+      if (connStatus !== "connected") return false
+      return handleSend(
+        {
+          blocks: [{ type: "text", text: answer }],
+          displayText: answer,
+        },
+        undefined,
+        true
+      )
     },
     [connStatus, handleSend]
   )

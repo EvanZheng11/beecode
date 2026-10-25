@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "시간이 초과된 질문을 다시 묻는 횟수(0~10회). 0이면 다시 묻지 않습니다.",
     "questionMcpAutoSelect": "시간 초과 후 첫 번째 선택지 자동 선택",
     "questionMcpAutoSelectHint": "기다림과 다시 묻기를 모두 쓰면 첫 번째 선택지로 답해 에이전트가 계속 진행합니다.",
-    "questionMcpInfiniteWait": "자동 선택이 꺼져 있어 답이 없는 질문은 무한히 기다립니다. 위의 대기 시간과 다시 묻는 횟수는 적용되지 않습니다.",
+    "questionMcpInfiniteWait": "자동 선택이 꺼져도 설정한 시간에 따라 다시 묻습니다. 횟수를 모두 쓰면 마지막 양식에서 답변을 기다립니다. 호스트 요청 만료 또는 연결 종료 시 대기가 끝납니다.",
     "questionMcpSaveFailed": "질문 설정을 저장하지 못했습니다: {message}",
     "loadFailed": "불러오기 실패: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "영구 저장"
       },
       "questionDialog": {
+        "recoveredHint": "기존 질문 호출이 종료되었습니다. 답변은 새 메시지로 에이전트에게 전송됩니다.",
         "title": "에이전트가 질문하고 있습니다",
         "placeholder": "답변을 입력하세요...",
         "send": "전송"

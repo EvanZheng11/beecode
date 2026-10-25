@@ -8106,7 +8106,8 @@ mod tests {
             .await
             .expect_err("git refuses a branch held by a worktree");
         assert!(
-            format!("{refused:?}").contains("used by worktree"),
+            format!("{refused:?}").contains("used by worktree")
+                || format!("{refused:?}").contains("checked out at"),
             "expected git's worktree refusal, got: {refused:?}"
         );
 

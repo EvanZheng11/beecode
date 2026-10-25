@@ -2311,7 +2311,33 @@ async fn build_agent(
             // desktop launch never inherits the shell rc line the vendor's
             // installer appended.
             prepend_agent_install_dirs_path(&mut merged_env, agent_type);
-            if agent_type == AgentType::Cursor {
+            if agent_type == AgentType::OpenCode {
+                let inherited = merged_env
+                    .iter()
+                    .find(|(key, _)| key == "OPENCODE_CONFIG_CONTENT")
+                    .map(|(_, value)| value.clone())
+                    .or_else(|| std::env::var("OPENCODE_CONFIG_CONTENT").ok());
+                let content = crate::acp::opencode_launch::with_codeg_mcp_timeout(
+                    inherited
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or("{}"),
+                );
+                match content {
+                    Ok(content) => {
+                        merged_env.retain(|(key, _)| key != "OPENCODE_CONFIG_CONTENT");
+                        merged_env.push(("OPENCODE_CONFIG_CONTENT".into(), content));
+                        tracing::info!(
+                            timeout_ms = crate::acp::opencode_launch::CODEG_MCP_TIMEOUT_MS,
+                            "已设置本次 OpenCode 启动的 codeg-mcp 请求期限"
+                        );
+                    }
+                    Err(reason) => {
+                        // 不输出配置原文；注入失败不能阻止宿主处理原本可用的模板。
+                        tracing::warn!(%reason, "无法安全注入 codeg-mcp 期限，保留原始 OpenCode 启动配置");
+                    }
+                }
+            } else if agent_type == AgentType::Cursor {
                 apply_cursor_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Grok {
                 apply_grok_env_policy(&mut merged_env, runtime_env);

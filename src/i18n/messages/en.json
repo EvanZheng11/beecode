@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "How many times a timed-out question is asked again (0-10). 0 turns the retries off.",
     "questionMcpAutoSelect": "Auto-select the first option after timeout",
     "questionMcpAutoSelectHint": "When the wait and the retries run out, answer with the first option so the agent can continue.",
-    "questionMcpInfiniteWait": "Auto-select is off, so an unanswered question will wait indefinitely - the wait time and the retries above have no effect.",
+    "questionMcpInfiniteWait": "Auto-select is off: timed retries still apply. After retries run out, the last form stays available until you answer, the host request expires, or the connection closes.",
     "questionMcpSaveFailed": "Failed to save question settings: {message}",
     "loadFailed": "Load failed: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "Saved permanently"
       },
       "questionDialog": {
+        "recoveredHint": "The original question call has ended. Your submission will be sent to the agent as a new message.",
         "title": "Agent is asking a question",
         "placeholder": "Type your answer...",
         "send": "Send"

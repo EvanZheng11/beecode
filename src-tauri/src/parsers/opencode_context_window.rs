@@ -277,7 +277,7 @@ fn read_config(path: &Path) -> Option<Value> {
 /// Parse a config file the way OpenCode does (`jsonc-parser`, trailing commas
 /// allowed): JSON, plus `//` and `/* */` comments and trailing commas. A new
 /// OpenCode install writes `opencode.jsonc`, so comments are to be expected.
-fn parse_jsonc(raw: &str) -> Option<Value> {
+pub(crate) fn parse_jsonc(raw: &str) -> Option<Value> {
     let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
     serde_json::from_str(raw)
         .ok()

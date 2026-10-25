@@ -3844,18 +3844,19 @@ impl ConnectionManager {
         answer: QuestionAnswer,
     ) -> Result<(), AcpError> {
         let _ = conn_id;
-        let entry = self.pending_questions.lock().await.remove(question_id);
-        let Some(entry) = entry else {
-            // Already answered / canceled / gone elsewhere — idempotent success.
-            return Ok(());
+        let parent_connection_id = {
+            let mut reg = self.pending_questions.lock().await;
+            let Some(entry) = reg.remove(question_id) else {
+                // 已回答、取消或移除时保持幂等成功。
+                return Ok(());
+            };
+            let outcome = build_outcome(&entry.questions, &answer);
+            // 移除和同步发送共用锁，确保超时取消看到条目消失时答案已经可读。
+            // 接收端可能同时断开；仍忽略发送失败，锁外广播继续清理卡片。
+            let _ = entry.sender.send(outcome);
+            entry.parent_connection_id
         };
-        let outcome = build_outcome(&entry.questions, &answer);
-        // Ignore a dropped receiver: the listener may have abandoned the wait
-        // (peer-close) at the same instant; the resolved-event below still clears
-        // the card.
-        let _ = entry.sender.send(outcome);
-        if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
-        {
+        if let Some((state, emitter)) = self.get_state_and_emitter(&parent_connection_id).await {
             emit_with_state(
                 &state,
                 &emitter,
@@ -10378,6 +10379,58 @@ mod tests {
         mgr.answer_question("cq", &reg.question_id, Default::default())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn answer_question_removal_delivers_before_timeout_cancel_and_broadcast() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cq", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let mut reg = mgr.register_question("cq", q_spec()).await.unwrap();
+        let state = mgr.get_state("cq").await.unwrap();
+        let state_guard = state.write().await;
+        let registry_guard = mgr.pending_questions.lock().await;
+        let answer = QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem {
+                question_id: "qa".into(),
+                labels: vec!["B".into()],
+            }],
+            declined: false,
+        };
+        let answering = mgr.answer_question("cq", &reg.question_id, answer);
+        tokio::pin!(answering);
+        // 先将回答排入注册表锁队列，再将超时取消排入同一队列。
+        tokio::select! {
+            biased;
+            _ = &mut answering => panic!("回答应等待注册表锁"),
+            _ = std::future::ready(()) => {}
+        }
+        let canceling = mgr.cancel_question("cq", &reg.question_id);
+        tokio::pin!(canceling);
+        tokio::select! {
+            biased;
+            _ = &mut canceling => panic!("取消应等待注册表锁"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(registry_guard);
+        // 阻塞状态广播，让回答停在异步清理阶段，取消仍须能够完成。
+        tokio::select! {
+            biased;
+            _ = &mut answering => panic!("广播应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        canceling.await;
+        assert!(!mgr
+            .pending_questions
+            .lock()
+            .await
+            .contains_key(&reg.question_id));
+        let outcome = reg.answer_rx.try_recv().expect("移除后答案必须已经可读");
+        assert!(!outcome.declined);
+        assert_eq!(outcome.answers[0].selected, vec!["B".to_string()]);
+        drop(state_guard);
+        answering.await.unwrap();
+        assert!(state.read().await.pending_question.is_none());
     }
 
     #[tokio::test]

@@ -556,6 +556,7 @@ impl DelegationListener {
                         &parent_conn_id,
                         reg,
                         &cfg,
+                        attempt + 1 == attempts,
                     )
                     .await
                     {
@@ -1424,6 +1425,7 @@ async fn wait_for_question_answer<C>(
     parent_connection_id: &str,
     reg: crate::acp::question::RegisteredQuestion,
     config: &QuestionConfig,
+    last_attempt: bool,
 ) -> AskWaitResult
 where
     C: AsyncReadExt + Unpin,
@@ -1434,24 +1436,33 @@ where
     let peer_closed = conn.read(&mut probe);
     tokio::pin!(peer_closed);
 
-    let mut result = if config.auto_select_first_on_timeout {
-        let timeout = tokio::time::sleep(std::time::Duration::from_secs(
-            u64::from(config.wait_timeout_minutes) * 60,
-        ));
-        tokio::pin!(timeout);
-        tokio::select! {
-            biased;
-            outcome = &mut answer_rx => question_answer_result(outcome),
-            _ = &mut peer_closed => AskWaitResult::PeerClosed,
-            _ = &mut timeout => AskWaitResult::TimedOut,
-        }
-    } else {
-        tokio::select! {
-            biased;
-            outcome = &mut answer_rx => question_answer_result(outcome),
-            _ = &mut peer_closed => AskWaitResult::PeerClosed,
-        }
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(
+        u64::from(config.wait_timeout_minutes) * 60,
+    ));
+    tokio::pin!(timeout);
+    let mut result = tokio::select! {
+        biased;
+        outcome = &mut answer_rx => question_answer_result(outcome),
+        _ = &mut peer_closed => AskWaitResult::PeerClosed,
+        _ = &mut timeout => AskWaitResult::TimedOut,
     };
+
+    if matches!(result, AskWaitResult::TimedOut)
+        && last_attempt
+        && !config.auto_select_first_on_timeout
+    {
+        // 重提耗尽后保留最后一张有效表单，不取消回答通道，也不替用户选择。
+        tracing::info!(
+            parent_connection_id,
+            question_id,
+            "提问重提已耗尽，保留表单继续等待用户回答"
+        );
+        result = tokio::select! {
+            biased;
+            outcome = &mut answer_rx => question_answer_result(outcome),
+            _ = &mut peer_closed => AskWaitResult::PeerClosed,
+        };
+    }
 
     if matches!(result, AskWaitResult::TimedOut) {
         // 超时已经就绪时再无阻塞地取一次答案，覆盖 select 与取消之间的最短窗口。
@@ -3519,23 +3530,42 @@ mod tests {
     fn ask_msg(token: &str) -> BrokerMessage {
         BrokerMessage::Ask(BrokerAskRequest {
             token: token.into(),
-            questions: vec![crate::acp::question::QuestionSpec {
-                id: "qq-1".into(),
-                question: "Which approach?".into(),
-                header: "Approach".into(),
-                multi_select: false,
-                options: vec![
-                    crate::acp::question::QuestionOption {
-                        label: "Incremental".into(),
-                        description: String::new(),
-                    },
-                    crate::acp::question::QuestionOption {
-                        label: "Rewrite".into(),
-                        description: String::new(),
-                    },
-                ],
-                is_secret: false,
-            }],
+            questions: vec![
+                crate::acp::question::QuestionSpec {
+                    id: "qq-1".into(),
+                    question: "Which approach?".into(),
+                    header: "Approach".into(),
+                    multi_select: false,
+                    options: vec![
+                        crate::acp::question::QuestionOption {
+                            label: "Incremental".into(),
+                            description: String::new(),
+                        },
+                        crate::acp::question::QuestionOption {
+                            label: "Rewrite".into(),
+                            description: String::new(),
+                        },
+                    ],
+                    is_secret: false,
+                },
+                crate::acp::question::QuestionSpec {
+                    id: "qq-2".into(),
+                    question: "选择需要修改的模块？".into(),
+                    header: "范围".into(),
+                    multi_select: true,
+                    options: vec![
+                        crate::acp::question::QuestionOption {
+                            label: "前端".into(),
+                            description: "保留完整选择表单".into(),
+                        },
+                        crate::acp::question::QuestionOption {
+                            label: "后端".into(),
+                            description: "独立计时与重提".into(),
+                        },
+                    ],
+                    is_secret: false,
+                },
+            ],
         })
     }
 
@@ -3825,29 +3855,96 @@ mod tests {
     async fn ask_without_auto_select_waits_until_user_answers() {
         tokio::time::pause();
         let (listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            retry_count: 1,
             auto_select_first_on_timeout: false,
             ..default_config()
         })
         .await;
         wait_for_question_registration(&questions, 1).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(599)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            questions.registered.lock().await.len(),
+            1,
+            "10 分钟前不得重提"
+        );
+        assert!(questions.canceled.lock().await.is_empty());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        // Tokio 将定时器截止时间向上取整到毫秒，需越过该边界。
+        tokio::time::advance(Duration::from_millis(1)).await;
+        wait_for_question_registration(&questions, 2).await;
         {
-            let early = tokio::time::timeout(
-                Duration::from_millis(20),
-                read_frame::<_, BrokerResponse>(&mut client),
+            let registered = questions.registered.lock().await;
+            assert_eq!(
+                registered[0].1, registered[1].1,
+                "重提必须保留全部题目和选项"
             );
-            tokio::pin!(early);
-            tokio::select! {
-                biased;
-                result = &mut early => panic!("提问在用户回答前提前返回: {result:?}"),
-                _ = tokio::task::yield_now() => {}
-            }
-            tokio::time::advance(Duration::from_secs(60 * 60 + 20)).await;
-            assert!(early.await.is_err());
+            assert_eq!(registered[1].1.len(), 2);
+            assert!(registered[1].1[1].multi_select);
         }
+        assert!(!questions.pending.lock().await.contains_key("q-1"));
+        // 旧 ID 的迟到答案不能覆盖新表单。
         questions.answer("q-1", incremental_outcome()).await;
+        tokio::time::advance(Duration::from_secs(600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(questions.registered.lock().await.len(), 2);
+        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
+        assert!(
+            questions.pending.lock().await.contains_key("q-2"),
+            "耗尽后必须保留最后的等待者"
+        );
+        questions.answer("q-2", user_answer_outcome()).await;
         let response = read_paused_response(&mut client).await;
         drop(listener);
-        assert_eq!(response.outcome["answers"][0]["selected"][0], "Incremental");
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+    }
+
+    #[tokio::test]
+    async fn ask_peer_close_at_timeout_does_not_retry_or_auto_answer() {
+        tokio::time::pause();
+        for auto_select in [false, true] {
+            let (_listener, questions, client) = start_ask_round_trip(QuestionConfig {
+                wait_timeout_minutes: 10,
+                auto_select_first_on_timeout: auto_select,
+                ..default_config()
+            })
+            .await;
+            wait_for_question_registration(&questions, 1).await;
+            tokio::task::yield_now().await;
+            drop(client);
+            tokio::time::advance(Duration::from_secs(600)).await;
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(questions.registered.lock().await.len(), 1);
+            assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
+            assert!(questions.pending.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_final_manual_wait_cleans_up_on_disconnect() {
+        tokio::time::pause();
+        let (_listener, questions, client) = start_ask_round_trip(QuestionConfig {
+            retry_count: 0,
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(600)).await;
+        tokio::task::yield_now().await;
+        assert!(questions.pending.lock().await.contains_key("q-1"));
+        drop(client);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(questions.pending.lock().await.is_empty());
+        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
     }
 
     // -- browser tools ------------------------------------------------------

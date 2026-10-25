@@ -104,6 +104,7 @@ import {
   type ToolApprovalMap,
 } from "@/lib/activity/approval"
 import { contentBlocksFromUserMessage } from "@/lib/user-message-blocks"
+import { parseAskQuestionInput } from "@/lib/ask-question"
 import { presentSessionNotice, splitHeadline } from "@/lib/session-notices"
 import { presentPluginLoadFailures } from "@/lib/plugin-load-failures"
 import {
@@ -213,6 +214,8 @@ export interface PendingUserMessage {
 export interface PendingQuestion {
   tool_call_id: string
   question: string
+  /** 原 MCP 调用已结束；完整表单的回答通过新提示发送，不调用后端旧等待者。 */
+  questions?: PendingQuestionState["questions"]
 }
 
 export interface ClaudeApiRetryState {
@@ -1383,13 +1386,56 @@ function extractPermissionToolKind(toolCall: unknown): string | null {
 /**
  * 从工具调用输入中提取纯文本提问。
  *
- * 可视化提问只有在 MCP 超时后才允许回退到首个 `questions[]` 条目，正常
- * 完成时不能再弹出一遍旧的文本输入框。
+ * 结构化提问始终保留完整表单，不能降级到只剩第一道题的文本框。
  */
 const MCP_QUESTION_TIMEOUT_RE = /MCP error\s+-32001\s*:\s*Request timed out/i
 
-function isMcpQuestionTimeout(rawOutput: string | null): boolean {
-  return MCP_QUESTION_TIMEOUT_RE.test(rawOutput ?? "")
+function isMcpQuestionTimeout(
+  rawOutput: string | null,
+  failed = false
+): boolean {
+  if (!rawOutput) return false
+  const inspect = (value: unknown, isFailure: boolean): boolean => {
+    if (typeof value === "string") {
+      const wrapper = value.match(
+        /^Wall time:[^\n]*\r?\nOutput:\r?\n([\s\S]*)$/
+      )
+      if (wrapper) return inspect(wrapper[1], isFailure)
+      try {
+        return inspect(JSON.parse(value), isFailure)
+      } catch {
+        // 成功答案可以引用错误原文；纯文本只认明确的错误前缀或失败状态。
+        return (
+          MCP_QUESTION_TIMEOUT_RE.test(value) &&
+          (isFailure ||
+            /^\s*(?:Error\b|McpError\b|MCP error\s+-32001\s*:)/i.test(value))
+        )
+      }
+    }
+    const record = asRecord(value)
+    if (!record) return false
+    // 先识别成功封装，不能把答案或选项中的错误原文当成工具失败。
+    if (record.answers != null || typeof record.declined === "boolean") {
+      return false
+    }
+    if (record.isError === false || record.is_error === false) return false
+    const failedResult =
+      isFailure || record.isError === true || record.is_error === true
+    const error = record.error ?? record.Err ?? record.err
+    if (error != null) return inspect(error, true)
+    const nested =
+      record.structuredContent ?? record.result ?? record.Ok ?? record.ok
+    if (nested != null) return inspect(nested, failedResult)
+    if (Array.isArray(record.content)) {
+      return record.content.some((item) =>
+        inspect(asRecord(item)?.text, failedResult)
+      )
+    }
+    return failedResult
+      ? MCP_QUESTION_TIMEOUT_RE.test(JSON.stringify(record))
+      : inspect(record.message ?? record.content, false)
+  }
+  return inspect(rawOutput, failed)
 }
 
 export function extractQuestionText(
@@ -1397,6 +1443,12 @@ export function extractQuestionText(
   rawOutput: string | null = null
 ): string | null {
   if (!rawInput) return null
+  if (
+    isMcpQuestionTimeout(rawOutput) &&
+    parseAskQuestionInput(rawInput).length
+  ) {
+    return null
+  }
   try {
     const parsed = JSON.parse(rawInput)
     if (
@@ -1406,24 +1458,27 @@ export function extractQuestionText(
     ) {
       return parsed.question
     }
-    if (
-      isMcpQuestionTimeout(rawOutput) &&
-      parsed &&
-      typeof parsed === "object" &&
-      Array.isArray(parsed.questions)
-    ) {
-      const firstQuestion = parsed.questions.find(
-        (item: unknown) =>
-          item &&
-          typeof item === "object" &&
-          typeof (item as { question?: unknown }).question === "string"
-      ) as { question: string } | undefined
-      return firstQuestion?.question ?? null
-    }
   } catch {
     // 输入不是 JSON 时保留旧路径，不猜测问题内容。
   }
   return null
+}
+
+export function extractTimedOutQuestions(
+  rawInput: string | null,
+  rawOutput: string | null,
+  failed = false
+): PendingQuestionState["questions"] {
+  if (!isMcpQuestionTimeout(rawOutput, failed)) return []
+  return parseAskQuestionInput(rawInput).map((question, index) => ({
+    // 恢复卡使用本地关联 ID，绝不冒充已取消的后端问题 ID。
+    id: `recovered-${index}`,
+    question: question.question,
+    header: question.header,
+    multi_select: question.multiSelect,
+    options: question.options,
+    is_secret: question.isSecret,
+  }))
 }
 
 function sameModes(
@@ -5908,18 +5963,26 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 meta: block.info.meta,
               })
               if (normalized === "question") {
-                const rawOutput = [
-                  block.info.content ?? "",
-                  ...block.info.raw_output_chunks,
-                ].join("\n")
+                // 原始结果优先；仅失败工具可回退到展示文本，避免误读成功答案。
+                const rawOutput =
+                  block.info.raw_output_chunks.join("") ||
+                  (block.info.status === "failed" ? block.info.content : null)
                 const questionText = extractQuestionText(
                   block.info.raw_input,
                   rawOutput
                 )
-                if (questionText) {
-                  if (isMcpQuestionTimeout(rawOutput)) {
+                const questions = extractTimedOutQuestions(
+                  block.info.raw_input,
+                  rawOutput,
+                  block.info.status === "failed"
+                )
+                if (
+                  (questionText || questions.length) &&
+                  !turnConn.pendingAskQuestion
+                ) {
+                  if (questions.length) {
                     console.warn(
-                      "[AcpConnections] 可视化提问 MCP 超时，恢复为纯文本提问",
+                      "[AcpConnections] 可视化提问 MCP 超时，恢复完整表单，回答将作为新消息发送",
                       { contextKey, toolCallId: block.info.tool_call_id }
                     )
                   }
@@ -5928,7 +5991,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                     contextKey,
                     pendingQuestion: {
                       tool_call_id: block.info.tool_call_id,
-                      question: questionText,
+                      question: questionText ?? questions[0].question,
+                      ...(questions.length ? { questions } : {}),
                     },
                   })
                 }
@@ -8010,7 +8074,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       }
     ) => {
       const conn = storeRef.current.connections.get(contextKey)
-      if (!conn) return
+      if (!conn) throw new Error("发送失败：连接已断开")
       lastActivityRef.current.set(contextKey, Date.now())
       try {
         await acpPrompt(

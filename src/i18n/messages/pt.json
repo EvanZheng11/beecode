@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "Quantas vezes uma pergunta expirada é feita de novo (0-10). 0 desliga as tentativas.",
     "questionMcpAutoSelect": "Selecionar a primeira opção após o tempo limite",
     "questionMcpAutoSelectHint": "Quando a espera e as tentativas acabam, responde-se com a primeira opção para o agente continuar.",
-    "questionMcpInfiniteWait": "A seleção automática está desligada: uma pergunta sem resposta espera indefinidamente, e o tempo de espera e as tentativas acima não têm efeito.",
+    "questionMcpInfiniteWait": "Sem seleção automática, os prazos e as novas tentativas continuam ativos. Ao esgotá-los, o último formulário aguarda a resposta até expirar o pedido do host ou a conexão fechar.",
     "questionMcpSaveFailed": "Falha ao salvar as configurações das perguntas: {message}",
     "loadFailed": "Falha ao carregar: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "Salvo permanentemente"
       },
       "questionDialog": {
+        "recoveredHint": "A chamada original terminou. Sua resposta será enviada ao agente como uma nova mensagem.",
         "title": "O agente está fazendo uma pergunta",
         "placeholder": "Digite sua resposta...",
         "send": "Enviar"

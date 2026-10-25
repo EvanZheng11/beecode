@@ -83,7 +83,7 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
-  ) => void
+  ) => Promise<boolean>
   handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
@@ -487,7 +487,7 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      void (async () => {
+      return (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -496,6 +496,7 @@ export function useConnectionLifecycle({
           modeIdRef.current = modeId
         }
         await sendPrompt(draft.blocks, opts)
+        return true
       })().catch((e: unknown) => {
         if (e instanceof TurnBusyError) {
           // A turn was already in flight on the connection (another
@@ -503,7 +504,7 @@ export function useConnectionLifecycle({
           // observed yet). Not an error — the draft is re-queued by the caller
           // so it auto-sends when the current turn finishes.
           onTurnInProgress?.()
-          return
+          return false
         }
         console.error("[ConnLifecycle] sendPrompt:", e)
         // The composer already cleared itself (sends are fire-and-forget), so
@@ -525,6 +526,7 @@ export function useConnectionLifecycle({
         // flushing). Runs after the toast so the state rollback can't hide
         // the failure.
         onSendFailed?.(e)
+        return false
       })
     },
     [connSetMode, sendPrompt, contextKey, touchActivity, t]

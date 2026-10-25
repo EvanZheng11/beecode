@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { extractQuestionText } from "@/contexts/acp-connections-context"
+import {
+  extractQuestionText,
+  extractTimedOutQuestions,
+} from "@/contexts/acp-connections-context"
 import { inferLiveToolName } from "@/lib/tool-call-normalization"
 
 /**
@@ -38,6 +41,25 @@ describe("ask_user_question does not trigger the legacy QuestionDialog", () => {
       ],
     })
     expect(extractQuestionText(rawInput)).toBeNull()
+    const timeout = "MCP error -32001: Request timed out"
+    expect(extractQuestionText(rawInput, timeout)).toBeNull()
+    expect(extractTimedOutQuestions(rawInput, timeout)).toMatchObject([
+      {
+        header: "Approach",
+        multi_select: false,
+        options: [
+          { label: "A", description: "" },
+          { label: "B", description: "" },
+        ],
+      },
+    ])
+    expect(extractTimedOutQuestions(rawInput, "answered")).toEqual([])
+    expect(
+      extractTimedOutQuestions(
+        JSON.stringify({ arguments: JSON.parse(rawInput) }),
+        timeout
+      )
+    ).toHaveLength(1)
   })
 
   it("still extracts a singular `question` string (legacy tools unaffected)", () => {

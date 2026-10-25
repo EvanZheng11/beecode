@@ -146,7 +146,9 @@ describe("useConnectionLifecycle send-failure surfacing", () => {
 
     const { result } = renderLifecycle()
     await act(async () => {
-      result.current.handleSend(draft(), null, { onSendFailed })
+      expect(
+        await result.current.handleSend(draft(), null, { onSendFailed })
+      ).toBe(false)
       await flush()
     })
 
@@ -165,10 +167,12 @@ describe("useConnectionLifecycle send-failure surfacing", () => {
 
     const { result } = renderLifecycle()
     await act(async () => {
-      result.current.handleSend(draft(), null, {
-        onTurnInProgress,
-        onSendFailed,
-      })
+      expect(
+        await result.current.handleSend(draft(), null, {
+          onTurnInProgress,
+          onSendFailed,
+        })
+      ).toBe(false)
       await flush()
     })
 
@@ -182,7 +186,7 @@ describe("useConnectionLifecycle send-failure surfacing", () => {
 
     const { result } = renderLifecycle()
     await act(async () => {
-      result.current.handleSend(draft())
+      expect(await result.current.handleSend(draft())).toBe(true)
       await flush()
     })
 

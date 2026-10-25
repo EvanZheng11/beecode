@@ -1582,7 +1582,7 @@ const ConversationTabView = memo(function ConversationTabView({
 
   const handleAnswerQuestion = useCallback(
     (answer: string) => {
-      if (connStatus !== "connected") return
+      if (connStatus !== "connected") return false
       const optimisticTurn: MessageTurn = {
         id: `optimistic-${randomUUID()}`,
         role: "user",
@@ -1600,7 +1600,7 @@ const ConversationTabView = memo(function ConversationTabView({
       )
       setSendSignal((prev) => prev + 1)
       setSyncState(effectiveConversationId, "awaiting_persist")
-      lifecycleSend(draft, null, {
+      return lifecycleSend(draft, null, {
         clientMessageId: optimisticTurn.id,
         // Rejected because a turn was already in flight — roll back the
         // optimistic turn and re-queue so it isn't stranded or lost.
@@ -1611,7 +1611,8 @@ const ConversationTabView = memo(function ConversationTabView({
           // TAIL — it was sent after any already-queued items, so FIFO keeps it
           // behind them. (Only the auto-flush path, whose draft WAS the head,
           // re-queues at the front.)
-          mqEnqueue(draft, null)
+          // 恢复表单自行保留选择重试，避免同时排队造成重复发送。
+          if (!conn.pendingQuestion?.questions?.length) mqEnqueue(draft, null)
         },
         // Any other failure: settle the optimistic state (the lifecycle hook
         // already toasted). No re-queue — deterministic failures would loop.
@@ -1625,6 +1626,7 @@ const ConversationTabView = memo(function ConversationTabView({
       removeOptimisticTurn,
       mqEnqueue,
       connStatus,
+      conn.pendingQuestion,
       effectiveConversationId,
       lifecycleSend,
       setSyncState,

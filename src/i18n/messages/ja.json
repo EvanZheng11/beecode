@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "タイムアウトした質問を再び尋ねる回数（0〜10 回）。0 で再質問しません。",
     "questionMcpAutoSelect": "タイムアウト後に最初の選択肢を自動選択",
     "questionMcpAutoSelectHint": "待ち時間と再質問を使い切ったら、最初の選択肢で答えてエージェントに続けさせます。",
-    "questionMcpInfiniteWait": "自動選択がオフのため、回答のない質問は無期限に待ち続けます。上の待ち時間と再質問回数は効きません。",
+    "questionMcpInfiniteWait": "自動選択がオフでも設定どおり再質問します。回数を使い切ると最後のフォームで回答を待ちます。ホストの期限切れや切断で待機は終了します。",
     "questionMcpSaveFailed": "質問設定を保存できませんでした：{message}",
     "loadFailed": "読み込みに失敗しました: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "永続的に保存"
       },
       "questionDialog": {
+        "recoveredHint": "元の質問の呼び出しは終了しました。回答は新しいメッセージとして送信されます。",
         "title": "エージェントが質問しています",
         "placeholder": "回答を入力...",
         "send": "送信"

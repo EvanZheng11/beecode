@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "Cuántas veces se repite una pregunta agotada (0-10). 0 desactiva los reintentos.",
     "questionMcpAutoSelect": "Seleccionar la primera opción al agotarse",
     "questionMcpAutoSelectHint": "Cuando se agotan la espera y los reintentos, se responde con la primera opción para que el agente continúe.",
-    "questionMcpInfiniteWait": "La selección automática está desactivada: una pregunta sin respuesta espera indefinidamente y el tiempo de espera y los reintentos de arriba no tienen efecto.",
+    "questionMcpInfiniteWait": "Sin selección automática se mantienen los reintentos programados. Al agotarlos, el último formulario espera tu respuesta hasta que caduque la solicitud del host o se cierre la conexión.",
     "questionMcpSaveFailed": "No se pudo guardar la configuración de las preguntas: {message}",
     "loadFailed": "Error al cargar: {message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "Guardado permanentemente"
       },
       "questionDialog": {
+        "recoveredHint": "La llamada original ha terminado. Tu respuesta se enviará al agente como un mensaje nuevo.",
         "title": "El agente está haciendo una pregunta",
         "placeholder": "Escribe tu respuesta...",
         "send": "Enviar"

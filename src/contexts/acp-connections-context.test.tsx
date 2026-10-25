@@ -42,18 +42,18 @@ import type {
   UserMessageBlock,
 } from "@/lib/types"
 
-describe("可视化提问超时后的文本兜底", () => {
+describe("可视化提问超时后不降级为文本", () => {
   const visualQuestion = JSON.stringify({
     questions: [{ question: "应该选择哪种实现方式？" }],
   })
 
-  it("MCP 超时后恢复首个问题为纯文本提问", () => {
+  it("MCP 超时后不能只提取首题并丢弃选择表单", () => {
     expect(
       extractQuestionText(
         visualQuestion,
         "Error: MCP error -32001: Request timed out"
       )
-    ).toBe("应该选择哪种实现方式？")
+    ).toBeNull()
   })
 
   it("可视化提问正常完成时不重复恢复纯文本提问", () => {
@@ -64,7 +64,171 @@ describe("可视化提问超时后的文本兜底", () => {
 })
 
 describe("AcpConnectionsProvider 可视化提问超时事件", () => {
-  it("回收选择卡后保留一个可提交的纯文本问题", async () => {
+  const timeout = "MCP error -32001: Request timed out"
+  const success = {
+    answers: [{ question: "修复方式？", selected: [`请调查 ${timeout}`] }],
+    declined: false,
+  }
+  it.each([
+    ["成功答案", "completed", JSON.stringify(success), null, false],
+    [
+      "嵌套成功答案",
+      "completed",
+      JSON.stringify({ result: { Ok: { structuredContent: success } } }),
+      null,
+      false,
+    ],
+    ["成功文本答案", "completed", `请调查 ${timeout}`, null, false],
+    [
+      "Codex 成功答案",
+      "completed",
+      `Wall time: 0.1s\nOutput:\n${JSON.stringify(success)}`,
+      null,
+      false,
+    ],
+    [
+      "Codex 超时",
+      "completed",
+      `Wall time: 0.1s\nOutput:\nError: ${timeout}`,
+      null,
+      true,
+    ],
+    [
+      "MCP 文本答案封装",
+      "completed",
+      JSON.stringify({
+        content: [{ type: "text", text: JSON.stringify(success) }],
+      }),
+      null,
+      false,
+    ],
+    [
+      "成功 MCP 内容",
+      "completed",
+      JSON.stringify({
+        isError: false,
+        content: [{ type: "text", text: timeout }],
+      }),
+      null,
+      false,
+    ],
+    ["空原始结果的成功展示文本", "completed", null, `请调查 ${timeout}`, false],
+    ["成功展示文本以错误原文开头", "completed", null, timeout, false],
+    [
+      "成功原始结果优先于展示文本",
+      "completed",
+      JSON.stringify(success),
+      `Error: ${timeout}`,
+      false,
+    ],
+    [
+      "失败状态仍优先识别答案封装",
+      "failed",
+      JSON.stringify(success),
+      null,
+      false,
+    ],
+    ["纯文本超时", "completed", `Error: ${timeout}`, null, true],
+    [
+      "带调用上下文的错误",
+      "completed",
+      `Error calling tool ask_user_question: ${timeout}`,
+      null,
+      true,
+    ],
+    ["失败展示文本", "failed", null, `Error: ${timeout}`, true],
+    [
+      "错误对象",
+      "failed",
+      JSON.stringify({ error: { code: -32001, message: timeout } }),
+      null,
+      true,
+    ],
+    [
+      "MCP 错误内容",
+      "completed",
+      JSON.stringify({
+        result: { isError: true, content: [{ type: "text", text: timeout }] },
+      }),
+      null,
+      true,
+    ],
+    [
+      "Err 封装",
+      "completed",
+      JSON.stringify({ result: { Err: { message: timeout } } }),
+      null,
+      true,
+    ],
+  ] as const)(
+    "%s按真实结果决定是否恢复",
+    async (_name, status, rawOutput, content, recover) => {
+      h.acpFindConnectionForConversation.mockResolvedValue(null)
+      await mountProvider()
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+      })
+      const handlers = latestAttachHandlers()
+      emitAcpEvent(handlers, {
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "prompting",
+      })
+      emitAcpEvent(handlers, {
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "tool_call",
+        tool_call_id: "ask-result",
+        title: "mcp__codeg-mcp__ask_user_question",
+        kind: "other",
+        status,
+        content,
+        raw_input: JSON.stringify({
+          questions: [
+            {
+              question: "修复方式？",
+              header: "方式",
+              options: [{ label: "增量", description: "保留代码" }],
+              multiSelect: true,
+            },
+          ],
+        }),
+        raw_output: rawOutput,
+      })
+      emitAcpEvent(handlers, {
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "turn_complete",
+        session_id: "sess-1",
+        stop_reason: "end_turn",
+      })
+      const pending = h.store!.getConnection(TAB)?.pendingQuestion
+      if (recover) {
+        expect(pending?.questions).toEqual([
+          {
+            id: "recovered-0",
+            question: "修复方式？",
+            header: "方式",
+            multi_select: true,
+            options: [{ label: "增量", description: "保留代码" }],
+            is_secret: false,
+          },
+        ])
+      } else expect(pending).toBeNull()
+    }
+  )
+
+  it("连接已被移除时发送明确失败，不把未发送当作接收成功", async () => {
+    await mountProvider()
+    await expect(
+      h.actions!.sendPrompt("missing-connection", [
+        { type: "text", text: "恢复答案" },
+      ])
+    ).rejects.toThrow("连接已断开")
+  })
+
+  it("回收选择卡后保留完整表单供新消息回答", async () => {
     h.acpFindConnectionForConversation.mockResolvedValue(null)
     await mountProvider()
     await act(async () => {
@@ -73,7 +237,22 @@ describe("AcpConnectionsProvider 可视化提问超时事件", () => {
 
     const handlers = latestAttachHandlers()
     const rawInput = JSON.stringify({
-      questions: [{ question: "应该选择哪种实现方式？" }],
+      questions: [
+        {
+          question: "应该选择哪种实现方式？",
+          header: "方式",
+          multiSelect: true,
+          options: [
+            { label: "增量", description: "保留原实现" },
+            { label: "重写", description: "重新实现" },
+          ],
+        },
+        {
+          question: "何时开始？",
+          header: "时间",
+          options: [{ label: "现在", description: "立即处理" }],
+        },
+      ],
     })
     emitAcpEvent(handlers, {
       seq: 1,
@@ -106,6 +285,25 @@ describe("AcpConnectionsProvider 可视化提问超时事件", () => {
       pendingQuestion: {
         tool_call_id: "ask-1",
         question: "应该选择哪种实现方式？",
+        questions: [
+          {
+            id: "recovered-0",
+            question: "应该选择哪种实现方式？",
+            header: "方式",
+            multi_select: true,
+            options: [
+              { label: "增量", description: "保留原实现" },
+              { label: "重写", description: "重新实现" },
+            ],
+          },
+          {
+            id: "recovered-1",
+            question: "何时开始？",
+            header: "时间",
+            multi_select: false,
+            options: [{ label: "现在", description: "立即处理" }],
+          },
+        ],
       },
     })
   })

@@ -8,10 +8,11 @@ import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import type { PendingQuestion } from "@/contexts/acp-connections-context"
+import { AskQuestionCard } from "@/components/chat/ask-question-card"
 
 interface QuestionDialogProps {
   question: PendingQuestion | null
-  onAnswer: (answer: string) => void
+  onAnswer: (answer: string) => void | boolean | Promise<void | boolean>
 }
 
 export function QuestionDialog({ question, onAnswer }: QuestionDialogProps) {
@@ -56,6 +57,35 @@ export function QuestionDialog({ question, onAnswer }: QuestionDialogProps) {
   )
 
   if (!question) return null
+
+  if (question.questions?.length) {
+    return (
+      <AskQuestionCard
+        key={question.tool_call_id}
+        question={{
+          question_id: question.tool_call_id,
+          questions: question.questions,
+          created_at: "",
+        }}
+        subtitle={t("recoveredHint")}
+        onAnswer={async (_questionId, answer) => {
+          const accepted = await onAnswer(
+            `${t("recoveredHint")}\n${JSON.stringify({
+              questions: question.questions,
+              answers: answer.answers,
+              declined: answer.declined,
+            })}`
+          )
+          if (accepted === false) {
+            console.warn(
+              "[QuestionDialog] 恢复提问的回答未发送，保留选择供重试"
+            )
+            throw new Error("恢复提问的回答未发送")
+          }
+        }}
+      />
+    )
+  }
 
   return (
     <div className="mx-4 mb-3 rounded-xl border border-blue-500/30 bg-card/95 p-3 shadow-sm">

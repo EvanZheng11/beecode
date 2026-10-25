@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub use agent_env::{AgentEnv, AgentEnvs};
+pub(crate) use opencode_context_window::parse_jsonc as parse_opencode_config_jsonc;
 
 /// A root of external agent-CLI transcript data, archived under
 /// `external/<agent>/` by the optional "include conversation content" toggle.

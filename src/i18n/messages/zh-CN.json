@@ -1934,7 +1934,7 @@
     "questionMcpRetryHint": "超时的提问重新问几次（0-10 次），0 表示不重提。",
     "questionMcpAutoSelect": "超时后自动选第一个选项",
     "questionMcpAutoSelectHint": "等待时长和重提次数都用尽后，直接选第一个选项，让智能体继续往下做。",
-    "questionMcpInfiniteWait": "已关闭自动选择：没人回答的提问会一直等下去，上面的等待时长和重提次数不再起作用。",
+    "questionMcpInfiniteWait": "已关闭自动选择：仍按配置计时并完整重提；次数耗尽后保留最后一张表单等待回答，直到宿主请求到期或连接关闭。",
     "questionMcpSaveFailed": "保存提问配置失败：{message}",
     "loadFailed": "加载失败：{message}"
   },
@@ -3655,6 +3655,7 @@
         "changeScopePersistent": "永久保存"
       },
       "questionDialog": {
+        "recoveredHint": "原提问调用已结束，提交后将作为新消息发送给智能体。",
         "title": "代理正在提问",
         "placeholder": "输入你的回答...",
         "send": "发送"

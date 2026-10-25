@@ -454,6 +454,30 @@ describe("GeneralSettings", () => {
     )
   })
 
+  it("关闭自动选择后仍可编辑并保存等待时长和重提次数", async () => {
+    vi.mocked(getQuestionSettings).mockResolvedValue({
+      enabled: true,
+      wait_timeout_minutes: 10,
+      retry_count: 3,
+      auto_select_first_on_timeout: false,
+    })
+    renderSettings()
+    const timeout = await screen.findByLabelText("Question MCP wait time")
+    const retries = screen.getByLabelText("Question MCP retries")
+    expect(timeout).toBeEnabled()
+    expect(retries).toBeEnabled()
+    fireEvent.change(timeout, { target: { value: "12" } })
+    fireEvent.change(retries, { target: { value: "2" } })
+    fireEvent.blur(retries)
+    await waitFor(() =>
+      expect(updateQuestionPolicy).toHaveBeenCalledWith({
+        wait_timeout_minutes: 12,
+        retry_count: 2,
+        auto_select_first_on_timeout: false,
+      })
+    )
+  })
+
   /**
    * 这条记录有两个编辑者：本页写等待策略三项，开关（`enabled`）的编辑器是
    * agent-tools 面板。另一窗口把开关关掉后，本页保存等待时长必须跟着广播走 ——
@@ -533,10 +557,8 @@ describe("GeneralSettings", () => {
     ).toBeChecked()
   })
 
-  /** 关闭自动选择就是无限等待：MCP 侧一直等到有人回答为止。此时等待时长和
-   *  重提次数不再起作用，两个输入框停用，并在区块里说明原因；值留在原处，
-   *  重新打开开关时原样恢复，不必重填。 */
-  it("关闭自动选择时显示提问 MCP（Question MCP）无限等待说明", async () => {
+  /** 自动选择仅控制最后是否代答，计时和重提始终可配置。 */
+  it("关闭自动选择时仍启用计时和重提，并说明宿主期限", async () => {
     renderSettings()
 
     const timeout = await screen.findByLabelText("Question MCP wait time")
@@ -547,9 +569,11 @@ describe("GeneralSettings", () => {
       screen.getByLabelText("Auto-select the first option after timeout")
     )
 
-    expect(await screen.findByText(/wait indefinitely/i)).toBeInTheDocument()
-    expect(timeout).toBeDisabled()
-    expect(retries).toBeDisabled()
+    expect(
+      await screen.findByText(/timed retries still apply/i)
+    ).toBeInTheDocument()
+    await waitFor(() => expect(timeout).toBeEnabled())
+    expect(retries).toBeEnabled()
     // 值没有被清掉：再次打开自动选择时，屏幕上还是用户填的那个数。
     expect(timeout).toHaveValue(20)
   })
