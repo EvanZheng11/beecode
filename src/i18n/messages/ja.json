@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "サブエージェントの記録を読み込んでいます…",
         "agentSessionEmpty": "サブエージェントはまだ何も書き込んでいません。",
         "agentFallbackTitle": "サブエージェント起動中…",
+        "agentBatchParallel": "{count} 個のサブエージェントを並列実行",
+        "agentBatchChain": "{count} ステップのチェーン実行",
         "agentCodexLaunchOnly": "起動しました。Codex はこのサブエージェントの結末をまだ報告していません。セッションを開くと作業を追えます。",
         "goal": {
           "title": "目標：",

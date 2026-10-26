@@ -24,6 +24,12 @@ import {
   isAsyncLaunchAckText,
   parseBackgroundTaskMarker,
 } from "@/lib/background-agent"
+import {
+  parseSubagentDetails,
+  piSubagentInvocation,
+  subagentLastText,
+  subagentParts,
+} from "@/lib/pi-subagent"
 import { useSessionViewerHost } from "./session-viewer-host-context"
 
 /** Convert AgentToolCall[] to tool-call parts: the sub-agent's own steps, as
@@ -207,6 +213,34 @@ export function useAgentCallModel(
     [part.input]
   )
 
+  // pi 原生 subagent 扩展派发的子任务。子任务跑在 `--no-session` 的一次性进程
+  // 里，磁盘上没有可以打开的会话，它的对话只在工具结果的 `details` 中，所以详情
+  // 是看见第二层及更深层执行的唯一来源：实时那一份挂在 `_meta.piSubagent`，历史
+  // 那一份在 `agent_stats.subagent`，本卡片自己折出来的下级卡片则直接带上
+  // `subagent`（递归用）。三条都是同一种形状，认不出就当作没有详情。
+  const piSubagent = useMemo(
+    () =>
+      parseSubagentDetails(part.subagent) ??
+      parseSubagentDetails(part.meta?.piSubagent) ??
+      parseSubagentDetails(part.agentStats?.subagent),
+    [part.subagent, part.meta, part.agentStats?.subagent]
+  )
+  // 详情还没到（或永远不到）时，标题与提示词只能从工具的输入里读。只在 pi 的
+  // `subagent` 工具上这么做：别的智能体也可能有叫 `agent`/`task` 的字段。
+  const piInvocation = useMemo(
+    () =>
+      part.toolName.trim().toLowerCase() === "subagent"
+        ? piSubagentInvocation(parsed ?? null)
+        : null,
+    [part.toolName, parsed]
+  )
+  // 单条派发时，详情里的那一条就是这个卡片所指的子任务。
+  const piRun =
+    piSubagent && piSubagent.runs.length === 1 ? piSubagent.runs[0]! : null
+  const piCount = piSubagent
+    ? piSubagent.runs.length
+    : (piInvocation?.count ?? 1)
+
   // Background sub-agent lifecycle. Historical/refetched turns carry the
   // parser's structured marker (settled state + summary + result folded from
   // the transcript's task-notification); a live turn still holds the raw wire
@@ -268,22 +302,40 @@ export function useAgentCallModel(
       asText(parsed?.subagentType) ??
       asText((parsed?.subagentType as { case?: unknown } | undefined)?.case) ??
       (part.input ? extractJsonField(part.input, "subagent_type") : null) ??
-      (part.input ? extractJsonField(part.input, "agent_type") : null),
-    [parsed, part.input]
+      (part.input ? extractJsonField(part.input, "agent_type") : null) ??
+      // pi 原生 subagent：一次派发只有一个子任务时，标题就用它的 agent。
+      // 多条派发（parallel / chain）不挑第一条充数 —— 那会让标题只代表其中
+      // 一个，所以留给下面的汇总描述。
+      piRun?.agent ??
+      (piCount > 1 ? null : piInvocation?.agent) ??
+      null,
+    [parsed, part.input, piRun, piCount, piInvocation]
   )
 
   const description = useMemo(
     () =>
       asText(parsed?.description) ??
-      (part.input ? extractJsonField(part.input, "description") : null),
-    [parsed, part.input]
+      (part.input ? extractJsonField(part.input, "description") : null) ??
+      // 多条派发：标题说清这一行派发了几条子任务（各自的 agent 与任务在卡片
+      // 正文里，每条一张卡片）。单条派发不加后缀 —— 它的任务就显示在标题行的
+      // 灰色提示词里，再说一遍是同一句话。
+      (piCount > 1
+        ? piSubagent?.mode === "chain" || piInvocation?.mode === "chain"
+          ? t("agentBatchChain", { count: piCount })
+          : t("agentBatchParallel", { count: piCount })
+        : null),
+    [parsed, part.input, piCount, piSubagent?.mode, piInvocation?.mode, t]
   )
 
   const prompt = useMemo(
     () =>
       asText(parsed?.prompt) ??
-      (part.input ? extractJsonField(part.input, "prompt") : null),
-    [parsed, part.input]
+      (part.input ? extractJsonField(part.input, "prompt") : null) ??
+      // 多条派发的提示词不是「一条任务」，每条子任务的任务显示在它自己的卡片
+      // 里；合成一段反而会误导。
+      (piCount > 1 ? null : (piRun?.task ?? piInvocation?.task)) ??
+      null,
+    [parsed, part.input, piCount, piInvocation, piRun]
   )
 
   // A Claude Code fork (`subagent_type: "fork"`) inherits the parent's
@@ -412,6 +464,18 @@ export function useAgentCallModel(
       ),
     [part.meta, agentStats?.child_session_id, isCodexSubagent, agentId]
   )
+  // 正文：子任务自己的正文/思考/工具调用，按到达顺序。single 派发会把唯一的
+  // 那一条直接铺开，parallel / chain 每条各一张 Agent 卡片（见 lib/pi-subagent）。
+  const piSubagentParts = useMemo(
+    () => (piSubagent ? subagentParts(piSubagent, part.toolCallId) : []),
+    [piSubagent, part.toolCallId]
+  )
+  // 折叠状态下的一行摘要：子任务自己最后说的那句话。详情在时结果已经画在时间线
+  // 里，外层不再重复渲染同一段文本。
+  const piSummary = useMemo(
+    () => (piSubagent ? subagentLastText(piSubagent) : null),
+    [piSubagent]
+  )
   const viewerHost = useSessionViewerHost()
   const [sessionOpen, setSessionOpen] = useState(false)
   const grokProgressLine = useMemo(() => {
@@ -499,6 +563,9 @@ export function useAgentCallModel(
     statusLabel,
     agentStats,
     adaptedToolCalls,
+    piSubagent,
+    piSubagentParts,
+    piSummary,
     grokProgress,
     childSession,
     viewerHost,

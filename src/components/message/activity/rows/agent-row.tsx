@@ -80,6 +80,15 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
   // The sub-agent's own steps, as a timeline: its transcript in arrival order
   // when there is prose to interleave, else its tool calls alone.
   const childModel = useMemo(() => {
+    // pi 原生 subagent：正文就是它的子任务记录（single 派发直接铺开，parallel /
+    // chain 每条一张卡片）。和 transcript 一样交给 `buildActivity` 画，嵌套的
+    // 下级 subagent 调用自己又带着记录，于是可以一直递归下去。
+    if (m.piSubagentParts.length > 0) {
+      return buildActivity(m.piSubagentParts, {
+        isStreaming: m.isRunning,
+        keepAnswer: true,
+      })
+    }
     const parts: AdaptedContentPart[] = []
     if (m.hasTimeline) {
       m.transcript.forEach((entry, at) => {
@@ -104,7 +113,13 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
     return parts.length > 0
       ? buildActivity(parts, { isStreaming: m.isRunning, keepAnswer: true })
       : null
-  }, [m.hasTimeline, m.transcript, m.adaptedToolCalls, m.isRunning])
+  }, [
+    m.piSubagentParts,
+    m.hasTimeline,
+    m.transcript,
+    m.adaptedToolCalls,
+    m.isRunning,
+  ])
 
   // Its finished steps, one segment each, from the calls it recorded.
   const progress = useMemo(
@@ -129,10 +144,14 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
     [m.adaptedToolCalls]
   )
 
-  const output =
-    m.backgroundLifecycle?.result ??
-    (m.taskOutcome || m.isLiveBackgroundLaunch ? null : step.part.output) ??
-    null
+  // pi 原生 subagent 的最终答复已经在它自己的时间线里（最后一条消息就是要看的
+  // 结果；parallel / chain 的外层文本还只是各子任务的汇总）。有详情时不再在底部
+  // 重复渲染一份，折叠状态的摘要行改读子任务最后说的那句话。
+  const output = m.piSubagent
+    ? null
+    : (m.backgroundLifecycle?.result ??
+      (m.taskOutcome || m.isLiveBackgroundLaunch ? null : step.part.output) ??
+      null)
   const latest = live
     ? (m.grokProgressLine ??
       (m.hasTimeline
@@ -148,7 +167,7 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
     : failed
       ? null
       : previewLine(
-          output ?? m.backgroundLifecycle?.summary,
+          m.piSummary ?? output ?? m.backgroundLifecycle?.summary,
           RESULT_PREVIEW_CHARS
         )
   const prompt = m.prompt?.trim() || null

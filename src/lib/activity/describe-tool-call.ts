@@ -96,6 +96,12 @@ export function toolStepKind(part: AdaptedToolCallPart): ToolStepKind {
   switch (name) {
     case "agent":
       return "agent"
+    // pi 原生 subagent 扩展的工具就叫 `subagent`，输入是 `{agent, task}` /
+    // `{tasks}` / `{chain}`，结果里带着子任务自己的对话（见 lib/pi-subagent）。
+    // 它和 `agent` 是同一类东西，画成同一张卡片。OpenCode 2.x 的同名工具也落在
+    // 这里 —— 它的历史解析本来就把这次调用改写成 Agent。
+    case "subagent":
+      return "agent"
     case "create_goal":
     case "update_goal":
       return "goal"

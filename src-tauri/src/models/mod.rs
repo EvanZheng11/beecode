@@ -40,7 +40,7 @@ pub use folder::{
 };
 pub use message::{
     AgentExecutionStats, AgentTimelineEntry, AgentToolCall, ContentBlock, ImageData, MessageRole,
-    MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
+    MessageTurn, SubagentBlock, SubagentDetails, SubagentRun, TurnRole, TurnUsage, UnifiedMessage,
 };
 pub use quick_message::QuickMessageInfo;
 pub use remote_workspace_connection::{

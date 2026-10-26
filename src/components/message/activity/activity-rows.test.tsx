@@ -28,7 +28,13 @@ import {
   toolUse,
 } from "@/lib/activity/__fixtures__/mockup-turn"
 import type { ToolApprovalMap } from "@/lib/activity/approval"
-import type { ContentBlock, MessageTurn } from "@/lib/types"
+import type {
+  AgentExecutionStats,
+  ContentBlock,
+  MessageTurn,
+  SubagentBlock,
+  SubagentDetails,
+} from "@/lib/types"
 import { CompletedTurnContent } from "../completed-turn-content"
 import { ActivityLiveProvider } from "./activity-live-context"
 import { resetDisclosureStore } from "./disclosure-store"
@@ -866,5 +872,116 @@ describe("command row", () => {
     expect(screen.getByText("Run the tests")).toHaveClass(
       "text-muted-foreground"
     )
+  })
+})
+
+describe("pi's native subagent", () => {
+  /** 扩展返回的记录，形状同 Rust `parsers::pi::subagent_details` 归一化后的样子。 */
+  const piDetails = (blocks: SubagentBlock[]): SubagentDetails => ({
+    mode: "single",
+    runs: [
+      {
+        agent: "general-executor",
+        task: "Find the parser tests",
+        model: "myhome/deepseek-v4.1-flash",
+        is_error: false,
+        running: false,
+        blocks,
+      },
+    ],
+  })
+
+  const nestedDetails: SubagentDetails = {
+    mode: "single",
+    runs: [
+      {
+        agent: "reviewer",
+        task: "Review the parser change",
+        is_error: false,
+        running: false,
+        blocks: [{ type: "text", text: "PI_GRANDCHILD_PROSE" }],
+      },
+    ],
+  }
+
+  const withDetailsStats = (blocks: SubagentBlock[]): AgentExecutionStats => ({
+    subagent: piDetails(blocks),
+  })
+
+  const blocks = (withDetails: boolean): ContentBlock[] => [
+    toolUse("pi_1", "subagent", {
+      agent: "general-executor",
+      task: "Find the parser tests",
+    }),
+    {
+      type: "tool_result",
+      tool_use_id: "pi_1",
+      output_preview: "Found it.",
+      is_error: false,
+      ...(withDetails
+        ? {
+            agent_stats: withDetailsStats([
+              { type: "thinking", text: "PI_CHILD_THINKING" },
+              { type: "text", text: "PI_CHILD_PROSE" },
+              {
+                type: "tool_use",
+                tool_name: "bash",
+                input: JSON.stringify({ command: "rg -n PI_CHILD_COMMAND" }),
+                output: "src/parsers/pi.rs",
+                is_error: false,
+                settled: true,
+              },
+              {
+                type: "tool_use",
+                tool_name: "subagent",
+                input: JSON.stringify({
+                  agent: "reviewer",
+                  task: "Review the parser change",
+                }),
+                output: "LGTM",
+                is_error: false,
+                settled: true,
+                subagent: nestedDetails,
+              },
+            ]),
+          }
+        : {}),
+    },
+  ]
+
+  it("shows the child's own steps, and the grandchild under a nested dispatch", () => {
+    renderUi(<Round parts={parts(turn(blocks(true)))} />)
+
+    // 标题按子任务实际的 agent 来（pi 的输入里没有 subagent_type），任务跟在
+    // 后面的灰色提示词里。
+    const row = rowOf("general-executor")
+    expect(within(row).getByText("Find the parser tests")).toBeTruthy()
+
+    fireEvent.click(within(row).getAllByRole("button")[0]!)
+    // 第二层：子任务自己的思考、正文与工具调用。（正文同时出现在折叠状态的摘要
+    // 行与展开后的时间线里，所以按包含关系断言。）
+    expect(row.textContent).toContain("PI_CHILD_PROSE")
+    expect(row.textContent).toContain("PI_CHILD_THINKING")
+    expect(row.textContent).toContain("PI_CHILD_COMMAND")
+
+    // 第三层：子任务里再派发 subagent，那次调用自己带着记录，画成又一张卡片。
+    const nested = within(row)
+      .getAllByText("reviewer")
+      .map((node) => node.closest("li"))
+      .find((node) => node !== null)
+    if (!nested) throw new Error("no nested subagent row")
+    fireEvent.click(within(nested).getAllByRole("button")[0]!)
+    expect(nested.textContent).toContain("PI_GRANDCHILD_PROSE")
+  })
+
+  it("falls back to the dispatch input and the result text when no details came", () => {
+    renderUi(<Round parts={parts(turn(blocks(false)))} />)
+
+    const row = rowOf("general-executor")
+    expect(within(row).getByText("Find the parser tests")).toBeTruthy()
+    fireEvent.click(within(row).getAllByRole("button")[0]!)
+    // 没有详情就没有内部时间线，但结果不能因此消失，也不许编造一层空的。
+    expect(row.textContent).toContain("Found it.")
+    expect(within(row).queryByText("reviewer")).toBeNull()
   })
 })

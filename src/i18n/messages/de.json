@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "Protokoll des Subagenten wird geladen…",
         "agentSessionEmpty": "Der Subagent hat noch nichts geschrieben.",
         "agentFallbackTitle": "Sub-Agent wird gestartet…",
+        "agentBatchParallel": "{count} Sub-Agenten parallel",
+        "agentBatchChain": "{count}-stufige Kette",
         "agentCodexLaunchOnly": "Gestartet. Codex hat noch nicht gemeldet, wie dieser Sub-Agent geendet ist – öffne seine Sitzung, um die Arbeit zu verfolgen.",
         "goal": {
           "title": "Ziel:",

@@ -9,8 +9,9 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AgentType, ContentBlock, ConversationDetail, ConversationSummary, ImageData, MessageRole,
-    MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
+    AgentExecutionStats, AgentType, ContentBlock, ConversationDetail, ConversationSummary,
+    ImageData, MessageRole, MessageTurn, SubagentBlock, SubagentDetails, SubagentRun, TurnRole,
+    TurnUsage, UnifiedMessage,
 };
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
@@ -851,6 +852,25 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                 .get("isError")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // pi 原生 `subagent` 工具：扩展把每个子任务的对话整体放在
+            // `details` 里（子任务用 `--no-session` 跑，磁盘上没有自己的会话
+            // 可开），这里把它带上，卡片才能画出第二层及更深的执行详情。
+            // 没有 `details` / 形状不认时保持 `None`，卡片退回只显示结果摘要。
+            //
+            // 这份完整树是重连快照超预算之后的恢复来源，不能按 2MiB 快照预算裁。
+            // 裁掉这里就没有别的地方可恢复：子任务没有独立会话文件。快照只裁内存里
+            // 已完成调用的线上副本（`session_state::snapshot_tool_calls`）。
+            let subagent = if message.get("toolName").and_then(Value::as_str) == Some("subagent") {
+                message
+                    .get("details")
+                    .and_then(subagent_details)
+                    .map(|subagent| AgentExecutionStats {
+                        subagent: Some(subagent),
+                        ..Default::default()
+                    })
+            } else {
+                None
+            };
             sp.content_events += 1;
             sp.messages.push(text_message(
                 format!("pi-toolresult-{idx}"),
@@ -859,7 +879,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                     tool_use_id: tool_call_id,
                     output_preview,
                     is_error,
-                    agent_stats: None,
+                    agent_stats: subagent,
                     images: content_images(message.get("content")),
                     exit_code: None,
                 }],
@@ -1253,6 +1273,175 @@ pub(crate) fn tool_result_content_text(content: &Value) -> Option<String> {
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// pi 原生 `subagent` 扩展的结果详情 → 可递归渲染的执行记录。
+///
+/// 形态由扩展自己固定（`extensions/subagent/index.ts` 的 `SubagentDetails`）：
+/// `{mode, agentScope, projectAgentsDir, results: [{agent, task, exitCode,
+/// messages, stderr, usage, model, stopReason, errorMessage, step}]}`。只有
+/// `mode` 合法**且** `results` 非空时才算数：扩展在参数非法 / 用户取消派生时
+/// 也会回一份 `details`，但 `results` 是空的 —— 那种情况必须退回「没有详情」，
+/// 不能在卡片里画出一张空壳。
+///
+/// 同一个函数给两条链路共用：历史（`parse_message_record` 的 `toolResult`）
+/// 与实时（`connection.rs::stamp_pi_subagent_meta` 从 ACP `rawOutput` 里取同一
+/// 份 `details`），所以前端只需认一种形状。
+pub(crate) fn subagent_details(details: &Value) -> Option<SubagentDetails> {
+    let mode = details.get("mode").and_then(Value::as_str)?;
+    if !matches!(mode, "single" | "parallel" | "chain") {
+        return None;
+    }
+    let results = details.get("results").and_then(Value::as_array)?;
+    let runs: Vec<SubagentRun> = results.iter().map(subagent_run).collect();
+    (!runs.is_empty()).then(|| SubagentDetails {
+        mode: mode.to_string(),
+        runs,
+    })
+}
+
+/// 一条 `results[]` 记录 → 一个子任务。
+fn subagent_run(result: &Value) -> SubagentRun {
+    let exit_code = result.get("exitCode").and_then(Value::as_i64);
+    let stop_reason = string_field(result, "stopReason");
+    // 扩展自己判定失败的规则（`isFailedResult`）：进程非零退出，或这一轮以
+    // error / aborted 收尾。`-1` 是「还在跑」的占位，不算失败。
+    let is_error = exit_code.is_some_and(|code| code != 0 && code != -1)
+        || matches!(stop_reason.as_deref(), Some("error" | "aborted"));
+    let error = string_field(result, "errorMessage").or_else(|| {
+        // 子进程直接死掉时扩展只拿到 stderr；没有 errorMessage 就拿它顶上，
+        // 否则失败卡片里什么原因都看不到。
+        if is_error {
+            string_field(result, "stderr")
+        } else {
+            None
+        }
+    });
+    SubagentRun {
+        agent: string_field(result, "agent").unwrap_or_else(|| "agent".to_string()),
+        task: string_field(result, "task").unwrap_or_default(),
+        model: string_field(result, "model"),
+        step: result
+            .get("step")
+            .and_then(Value::as_u64)
+            .map(|step| step as u32),
+        stop_reason,
+        error,
+        is_error,
+        running: exit_code == Some(-1),
+        blocks: subagent_blocks(result.get("messages")),
+    }
+}
+
+/// 一个子任务自己的消息数组 → 按到达顺序排好的正文 / 思考 / 工具调用。
+///
+/// 只读 assistant 的正文与工具调用：任务提示词（`role: "user"`）单独由
+/// `SubagentRun.task` 承载，重复成一段会在卡片里把同一段话画两遍。
+/// pi 的 `toolResult` 是独立消息，靠 `toolCallId` 找回它对应的那次调用；认不出
+/// 归属的结果直接丢掉（宁可少一段结果，也不把它挂到别的工具上）。
+fn subagent_blocks(messages: Option<&Value>) -> Vec<SubagentBlock> {
+    let Some(messages) = messages.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut blocks: Vec<SubagentBlock> = Vec::new();
+    let mut call_slots: HashMap<String, usize> = HashMap::new();
+    for message in messages {
+        match message.get("role").and_then(Value::as_str).unwrap_or("") {
+            "assistant" => {
+                let Some(items) = message.get("content").and_then(Value::as_array) else {
+                    continue;
+                };
+                for item in items {
+                    match item.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(text) = item
+                                .get("text")
+                                .and_then(Value::as_str)
+                                .filter(|text| !text.is_empty())
+                            {
+                                blocks.push(SubagentBlock::Text {
+                                    text: text.to_string(),
+                                });
+                            }
+                        }
+                        // 与 `assistant_content_blocks` 同一条规则：pi 的思考块
+                        // 把正文写在 `thinking` 上（`text` 只作为将来改名的兜底）。
+                        "thinking" => {
+                            let text = item
+                                .get("thinking")
+                                .and_then(Value::as_str)
+                                .or_else(|| item.get("text").and_then(Value::as_str));
+                            if let Some(text) = text.filter(|text| !text.is_empty()) {
+                                blocks.push(SubagentBlock::Thinking {
+                                    text: text.to_string(),
+                                });
+                            }
+                        }
+                        "toolCall" => {
+                            let slot = blocks.len();
+                            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                                call_slots.insert(id.to_string(), slot);
+                            }
+                            blocks.push(SubagentBlock::ToolUse {
+                                tool_name: item
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                input: tool_arguments_preview(item.get("arguments")),
+                                output: None,
+                                is_error: false,
+                                settled: false,
+                                subagent: None,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "toolResult" => {
+                let Some(slot) = message
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .and_then(|id| call_slots.get(id).copied())
+                else {
+                    continue;
+                };
+                let is_error = message
+                    .get("isError")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                // 与顶层历史同一段文本（`tool_result_output_text`），并且和
+                // 其它工具的结果预览一样截到 4000 字：一次子任务可能有几十次
+                // 工具调用，整段原文塞进实时 `_meta` 会把事件撑爆。
+                let output = tool_result_output_text(message).map(|text| truncate_str(&text, 4000));
+                // 子任务自己再派发 subagent 时，它的记录就在这一次结果的
+                // `details` 里（与顶层同一种形状）——递归挂上去。
+                let is_subagent =
+                    message.get("toolName").and_then(Value::as_str) == Some("subagent");
+                let nested = if is_subagent {
+                    message.get("details").and_then(subagent_details)
+                } else {
+                    None
+                };
+                if let Some(SubagentBlock::ToolUse {
+                    output: slot_output,
+                    is_error: slot_error,
+                    settled,
+                    subagent,
+                    ..
+                }) = blocks.get_mut(slot)
+                {
+                    *slot_output = output;
+                    *slot_error = is_error;
+                    *settled = true;
+                    *subagent = nested;
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks
 }
 
 /// The text to show for a `toolResult` record.
@@ -2874,6 +3063,244 @@ mod tests {
                 "contents: {contents}"
             );
         }
+    }
+
+    /// pi 原生 `subagent` 扩展返回的详情（`extensions/subagent/index.ts` 的
+    /// `SubagentDetails`）：子任务自己的消息数组就在 `results[].messages` 里，
+    /// 子任务再派发 subagent 时，它的 `toolResult` 里又是一份同样的详情。
+    fn subagent_details_record() -> Value {
+        json!({
+            "mode": "single",
+            "agentScope": "user",
+            "projectAgentsDir": null,
+            "results": [{
+                "agent": "general-executor",
+                "agentSource": "user",
+                "task": "Find the parser tests",
+                "exitCode": 0,
+                "model": "myhome/deepseek-v4.1-flash",
+                "stopReason": "end_turn",
+                "usage": {"input": 10, "output": 20, "cost": 0.01, "turns": 2},
+                "messages": [
+                    // 任务提示词单独由 `task` 承载，不进时间线。
+                    {"role":"user","content":[{"type":"text","text":"Find the parser tests"}]},
+                    {"role":"assistant","content":[
+                        {"type":"thinking","thinking":"look for pi.rs"},
+                        {"type":"text","text":"Searching now."},
+                        {"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"rg -n pi.rs"}}
+                    ]},
+                    {"role":"toolResult","toolCallId":"c1","toolName":"bash",
+                     "content":[{"type":"text","text":"src/parsers/pi.rs"}],"isError":false},
+                    {"role":"assistant","content":[
+                        {"type":"text","text":"Found it."},
+                        {"type":"toolCall","id":"c2","name":"subagent",
+                         "arguments":{"agent":"reviewer","task":"Review the change"}}
+                    ]},
+                    // 第二层：子任务自己又派发了一次 subagent。
+                    {"role":"toolResult","toolCallId":"c2","toolName":"subagent",
+                     "content":[{"type":"text","text":"LGTM"}],"isError":false,
+                     "details": {
+                        "mode": "single",
+                        "results": [{
+                            "agent": "reviewer",
+                            "task": "Review the change",
+                            "exitCode": 0,
+                            "messages": [
+                                {"role":"user","content":[{"type":"text","text":"Review the change"}]},
+                                {"role":"assistant","content":[
+                                    {"type":"text","text":"Reviewed."},
+                                    {"type":"toolCall","id":"c3","name":"read","arguments":{"path":"/a"}}
+                                ]},
+                                {"role":"toolResult","toolCallId":"c3","toolName":"read",
+                                 "content":[{"type":"text","text":"file body"}],"isError":false}
+                            ]
+                        }]
+                     }}
+                ]
+            }]
+        })
+    }
+
+    #[test]
+    fn subagent_details_keep_the_child_conversation_and_recurse() {
+        let details = subagent_details(&subagent_details_record()).expect("recognised");
+        assert_eq!(details.mode, "single");
+        assert_eq!(details.runs.len(), 1);
+        let run = &details.runs[0];
+        assert_eq!(run.agent, "general-executor");
+        assert_eq!(run.task, "Find the parser tests");
+        assert_eq!(run.model.as_deref(), Some("myhome/deepseek-v4.1-flash"));
+        assert!(!run.running && !run.is_error);
+
+        // 到达顺序与 pi 自己写的一致：思考 → 正文 → 工具调用 → 正文 → 工具调用。
+        let shape: Vec<&str> = run
+            .blocks
+            .iter()
+            .map(|block| match block {
+                SubagentBlock::Text { .. } => "text",
+                SubagentBlock::Thinking { .. } => "thinking",
+                SubagentBlock::ToolUse { .. } => "tool",
+            })
+            .collect();
+        assert_eq!(shape, ["thinking", "text", "tool", "text", "tool"]);
+
+        // 工具结果按 toolCallId 回到发起它的那次调用上。
+        let SubagentBlock::ToolUse {
+            tool_name,
+            input,
+            output,
+            settled,
+            is_error,
+            subagent,
+        } = &run.blocks[2]
+        else {
+            panic!("expected the bash call");
+        };
+        assert_eq!(tool_name, "bash");
+        assert_eq!(input.as_deref(), Some(r#"{"command":"rg -n pi.rs"}"#));
+        assert_eq!(output.as_deref(), Some("src/parsers/pi.rs"));
+        assert!(*settled && !*is_error);
+        assert!(subagent.is_none(), "a plain tool call has no children");
+
+        // 第二层：嵌套 subagent 自己的记录跟着那次调用一起带住。
+        let SubagentBlock::ToolUse {
+            tool_name,
+            output,
+            subagent,
+            settled,
+            ..
+        } = &run.blocks[4]
+        else {
+            panic!("expected the nested subagent call");
+        };
+        assert_eq!(tool_name, "subagent");
+        assert_eq!(output.as_deref(), Some("LGTM"));
+        assert!(*settled);
+        let nested = subagent.as_ref().expect("nested details");
+        assert_eq!(nested.runs.len(), 1);
+        assert_eq!(nested.runs[0].agent, "reviewer");
+        assert_eq!(
+            nested.runs[0].blocks.len(),
+            2,
+            "the reviewer's text and its read call"
+        );
+        let SubagentBlock::ToolUse {
+            output, settled, ..
+        } = &nested.runs[0].blocks[1]
+        else {
+            panic!("expected the reviewer's read call");
+        };
+        assert_eq!(output.as_deref(), Some("file body"));
+        assert!(*settled);
+    }
+
+    /// 派发失败 / 还在跑 / 形状不认识：前两种要如实画出来，第三种必须退回
+    /// 「没有详情」，否则卡片会画出一张空壳或把摘要当成完整记录。
+    #[test]
+    fn subagent_details_mark_failures_and_running_children_and_reject_unknown_shapes() {
+        let running = json!({
+            "mode": "parallel",
+            "results": [
+                // 并行派发的占位记录：`exitCode: -1` 表示还没跑完。
+                {"agent":"a","task":"first","exitCode":-1,"messages":[]},
+                {"agent":"b","task":"second","exitCode":2,"stderr":"boom","messages":[]}
+            ]
+        });
+        let details = subagent_details(&running).expect("running children are still worth drawing");
+        assert_eq!(details.mode, "parallel");
+        assert!(details.runs[0].running && !details.runs[0].is_error);
+        assert!(details.runs[0].blocks.is_empty());
+        assert!(!details.runs[1].running && details.runs[1].is_error);
+        assert_eq!(
+            details.runs[1].error.as_deref(),
+            Some("boom"),
+            "a failed child falls back to its stderr when it has no errorMessage"
+        );
+
+        // chain：每一步都是一条独立记录，扩展给的 `step` 序号原样保留。
+        let chain = subagent_details(&json!({
+            "mode": "chain",
+            "results": [
+                {"agent":"a","task":"first","exitCode":0,"step":1,"messages":[]},
+                {"agent":"b","task":"then {previous}","exitCode":0,"step":2,"messages":[]}
+            ]
+        }))
+        .expect("chain is a dispatch mode");
+        assert_eq!(chain.mode, "chain");
+        assert_eq!(chain.runs[0].step, Some(1));
+        assert_eq!(chain.runs[1].step, Some(2));
+        assert_eq!(chain.runs[1].task, "then {previous}");
+
+        // 扩展在参数非法 / 用户取消派生时也回一份 details，但 results 是空的。
+        assert!(subagent_details(&json!({"mode":"single","results":[]})).is_none());
+        // 不认识的 mode（将来的派发方式）不猜。
+        assert!(subagent_details(&json!({"mode":"swarm","results":[{"agent":"a"}]})).is_none());
+        // 根本不是扩展的详情（例如 edit 工具的 {diff, patch}）。
+        assert!(subagent_details(&json!({"patch":"@@ -1 +1 @@"})).is_none());
+    }
+
+    #[test]
+    fn a_subagent_tool_result_carries_its_children_conversations() {
+        let dir = tempdir().expect("tempdir");
+        let id = "0f3c1d2e-7777-8888-9999-000011112222";
+        let mut details = subagent_details_record();
+        // 顶层会话里，扩展返回的 details 一字不改地落在 toolResult 上。
+        let records = vec![
+            json!({"type":"session","version":3,"id":id,"timestamp":"2026-10-26T10:00:00.000Z","cwd":"/home/demo/app"}),
+            json!({"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-26T10:00:01.000Z",
+                   "message":{"role":"user","content":"delegate the review"}}),
+            json!({"type":"message","id":"m2","parentId":"m1","timestamp":"2026-10-26T10:00:02.000Z",
+                   "message":{"role":"assistant","provider":"myhome","model":"deepseek-v4.1-flash",
+                     "content":[{"type":"toolCall","id":"call_1","name":"subagent",
+                                 "arguments":{"agent":"general-executor","task":"Find the parser tests"}}]}}),
+            json!({"type":"message","id":"m3","parentId":"m2","timestamp":"2026-10-26T10:00:09.000Z",
+                   "message":{"role":"toolResult","toolCallId":"call_1","toolName":"subagent",
+                     "content":[{"type":"text","text":"Found it."}],"isError":false,
+                     "details": details.take()}}),
+            // 普通工具的结果没有子任务记录。
+            json!({"type":"message","id":"m4","parentId":"m3","timestamp":"2026-10-26T10:00:10.000Z",
+                   "message":{"role":"assistant","provider":"myhome","model":"deepseek-v4.1-flash",
+                     "content":[{"type":"toolCall","id":"call_2","name":"bash",
+                                 "arguments":{"command":"ls"}}]}}),
+            json!({"type":"message","id":"m5","parentId":"m4","timestamp":"2026-10-26T10:00:11.000Z",
+                   "message":{"role":"toolResult","toolCallId":"call_2","toolName":"bash",
+                     "content":[{"type":"text","text":"src"}],"isError":false}}),
+        ];
+        write_session(
+            dir.path(),
+            "--home-demo-app--",
+            "ts_subagent.jsonl",
+            &records,
+        );
+        let parser = PiParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation(id).expect("detail");
+
+        let stats_of = |tool_use_id: &str| {
+            detail
+                .turns
+                .iter()
+                .flat_map(|turn| turn.blocks.iter())
+                .find_map(|block| match block {
+                    ContentBlock::ToolResult {
+                        tool_use_id: Some(found),
+                        agent_stats,
+                        ..
+                    } if found == tool_use_id => Some(agent_stats.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no tool result {tool_use_id}"))
+        };
+
+        let subagent = stats_of("call_1")
+            .and_then(|stats| stats.subagent)
+            .expect("the subagent result carries its children");
+        assert_eq!(subagent.mode, "single");
+        assert_eq!(subagent.runs[0].agent, "general-executor");
+        assert_eq!(subagent.runs[0].blocks.len(), 5);
+        assert!(
+            stats_of("call_2").is_none(),
+            "a plain bash result has no subagent record"
+        );
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT

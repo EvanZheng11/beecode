@@ -2223,8 +2223,9 @@ impl SessionState {
     /// missing, so an entry left out is a tool card missing from the middle of
     /// the in-flight turn.
     ///
-    /// What the budget bounds is `input` / `output` / `content` / `locations`,
-    /// and only on calls that already reached a terminal status:
+    /// What the budget bounds is `input` / `output` / `content` / `locations`
+    /// plus the bulky `meta.piSubagent` tree, and only on calls that already
+    /// reached a terminal status:
     ///
     /// * Pending / InProgress calls are never trimmed, at any size. They are
     ///   the ones the attaching client has to keep rendering and revising from
@@ -2233,7 +2234,11 @@ impl SessionState {
     /// * Terminal calls keep everything, newest first, until the budget is
     ///   spent; the older ones then ship without those fields. A finished
     ///   call's result is durable in the agent's own transcript, which is what
-    ///   the conversation reloads from.
+    ///   the conversation reloads from. Pi's native subagent has no child
+    ///   session file; the durable copy is `agent_stats.subagent` in the
+    ///   parent transcript. This function never rewrites the live
+    ///   `active_tool_calls` entry, so a client that stayed connected keeps
+    ///   the tree it already rendered.
     ///
     /// `images` is NOT bounded, and deliberately: dropping the bytes does not
     /// degrade the card, it inverts it. The frontend reads an image-generation
@@ -2273,6 +2278,20 @@ impl SessionState {
     /// (`isCodexCollabInput`) and Kimi `TodoList` writes
     /// (`kimiTodoWriteEntries`). Cosmetic and self-healing — the conversation
     /// renders from the transcript on reload.
+    ///
+    /// pi 原生 subagent 超预算时（仅已完成调用的快照副本）：
+    /// * 仍在看的客户端：实时事件和内存状态仍是完整树，不会因为快照裁剪丢掉下层。
+    /// * 进行中的调用：即使单棵树超过 2MiB 也整棵随快照走。进行中的详情只存在这里。
+    /// * 预算内的最近已完成调用：完整树，含任意层级的 blocks。
+    /// * 被裁掉的已完成调用：卡片仍在（id / kind / label / status，以及
+    ///   `codeg.delegation` 等其它 meta）。`piSubagent` 只留身份桩（mode、能塞进
+    ///   512 字节的若干 run 的 agent / 任务首行 / 状态标志），不含 blocks、嵌套树和 error 正文。
+    ///   并行派发若子任务很多，靠后的 run 身份也可能不在这份快照里。
+    /// * 单棵已完成的树若本身就超过 2MiB，也换成身份桩，不再享「最后一条可以超一点」
+    ///   整棵上船。工具 output 有 64KiB 单事件上限，这棵树没有。
+    /// * 恢复：该工具结果写进父会话转录后，重新加载对话即可从 `agent_stats.subagent`
+    ///   看到完整下层。历史这一份不走快照预算，也不能裁——裁掉就没有别的恢复来源。
+    ///   回合还没写盘时，中途重连看不到被裁调用的下层详情；没有按需拉回详情的接口。
     fn snapshot_tool_calls(&self) -> Vec<ToolCallState> {
         // Arrival order comes from the live message: `push_tool_call_ref_if_absent`
         // anchors exactly one `ToolCallRef` per call, in the order the agent
@@ -2319,6 +2338,9 @@ impl SessionState {
 
         ordered.sort_unstable();
         let mut trimmed: BTreeSet<&str> = BTreeSet::new();
+        // 已完成且单棵 `piSubagent` 就超过整份预算的调用。只换掉树，不清空
+        // input/output（那些字段本身有单事件上限）。
+        let mut shed_tree: BTreeSet<&str> = BTreeSet::new();
         let mut spent = 0usize;
         for (_, id, bytes) in ordered.iter().rev() {
             let tc = &self.active_tool_calls[*id];
@@ -2330,18 +2352,47 @@ impl SessionState {
                 tc.status,
                 ToolCallStatus::Completed | ToolCallStatus::Failed
             );
+            let pi_bytes = pi_subagent_payload_bytes(&tc.meta);
+            // 单棵已完成的树大过整份预算时，不能再走「最后一条可以超一点」。先按身份桩记账。
+            let force_shed = terminal && pi_bytes > MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES;
+            let counted = if force_shed {
+                (*bytes)
+                    .saturating_sub(pi_bytes)
+                    .saturating_add(PI_SUBAGENT_IDENTITY_STUB_MAX_BYTES)
+            } else {
+                *bytes
+            };
+            if force_shed {
+                shed_tree.insert(*id);
+            }
             if terminal && spent >= MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES {
                 trimmed.insert(*id);
                 spent = spent.saturating_add(kept);
                 continue;
             }
-            spent = spent.saturating_add(*bytes).saturating_add(kept);
+            spent = spent.saturating_add(counted).saturating_add(kept);
+        }
+
+        let shed_count = self
+            .active_tool_calls
+            .keys()
+            .filter(|id| {
+                (trimmed.contains(id.as_str()) || shed_tree.contains(id.as_str()))
+                    && pi_subagent_value(&self.active_tool_calls[id.as_str()].meta).is_some()
+            })
+            .count();
+        if shed_count > 0 {
+            tracing::debug!(
+                "[ACP][snapshot] 已完成调用的 pi 子任务树超出 2MiB 快照预算，重连副本只保留身份字段（shed={shed_count}）；实时状态未裁剪，下层详情在会话转录的 agent_stats.subagent 中恢复"
+            );
         }
 
         self.active_tool_calls
             .values()
             .map(|tc| {
-                if !trimmed.contains(tc.id.as_str()) {
+                let id = tc.id.as_str();
+                let shed_pi = trimmed.contains(id) || shed_tree.contains(id);
+                if !shed_pi {
                     return tc.clone();
                 }
                 // Listed field by field (no `..tc.clone()`) so a field added to
@@ -2353,15 +2404,33 @@ impl SessionState {
                     kind: tc.kind.clone(),
                     label: tc.label.clone(),
                     status: tc.status.clone(),
-                    input: None,
-                    output: None,
-                    content: None,
-                    locations: None,
-                    // Kept: the delegation broker writes the parent↔child
-                    // binding here (`meta["codeg.delegation"]`), which is what
-                    // re-anchors an inline sub-thread on a mid-turn attach.
-                    // Bounded by contract — a small status object, not output.
-                    meta: tc.meta.clone(),
+                    input: if trimmed.contains(id) {
+                        None
+                    } else {
+                        tc.input.clone()
+                    },
+                    output: if trimmed.contains(id) {
+                        None
+                    } else {
+                        tc.output.clone()
+                    },
+                    content: if trimmed.contains(id) {
+                        None
+                    } else {
+                        tc.content.clone()
+                    },
+                    locations: if trimmed.contains(id) {
+                        None
+                    } else {
+                        tc.locations.clone()
+                    },
+                    // `codeg.delegation` 等身份键原样保留。`piSubagent` 的完整树是载荷，
+                    // 裁剪时换成有上限的身份桩，不把子任务对话带上重连快照。
+                    meta: if shed_pi {
+                        snapshot_meta_keeping_identity(&tc.meta)
+                    } else {
+                        tc.meta.clone()
+                    },
                     // Kept: an image-generation block whose `image` is null and
                     // whose status is terminal renders as a FAILED generation,
                     // so dropping these would report a success as a failure.
@@ -2619,10 +2688,20 @@ const MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 /// only bounds the snapshot of a very long-lived connection.
 const MAX_TOOL_APPROVALS: usize = 256;
 
+/// 线上键，须与 `connection.rs` 的 `PI_SUBAGENT_META_KEY`、前端 `meta.piSubagent` 一致。
+const PI_SUBAGENT_META_KEY: &str = "piSubagent";
+
+/// 裁剪后每个调用最多留这么多字节的身份桩。2000 个已完成调用× 512B 约 1MiB，
+/// 不会把重连快照再撑回几十兆。
+const PI_SUBAGENT_IDENTITY_STUB_MAX_BYTES: usize = 512;
+
 /// The part of a `ToolCallState` a trim actually removes: the RESULT payload,
 /// which grows with what the tool did. Excludes the identity fields (id / kind /
-/// label / status / meta) and `images`, which every entry keeps whatever the
+/// label / status / small meta) and `images`, which every entry keeps whatever the
 /// budget says — see [`SessionState::snapshot_tool_calls`] for why.
+///
+/// `meta.piSubagent` 不是身份：它是整棵子任务树。不计入这里的话，已完成调用被裁掉
+/// input/output 之后树仍会整棵留在 meta 里，重连快照就绕过了 2MiB 预算。
 ///
 /// Sized with the same escape-aware, allocation-free accounting the per-event
 /// cap uses (`event_stream`), so "this call's payload" means the same number of
@@ -2638,6 +2717,143 @@ fn tool_call_trimmable_bytes(tc: &ToolCallState) -> usize {
         .saturating_add(output)
         .saturating_add(opt_str_size(&tc.content))
         .saturating_add(opt_json_size(&tc.locations))
+        .saturating_add(pi_subagent_payload_bytes(&tc.meta))
+}
+
+fn pi_subagent_value(meta: &Option<serde_json::Value>) -> Option<&serde_json::Value> {
+    meta.as_ref()
+        .and_then(|value| value.get(PI_SUBAGENT_META_KEY))
+}
+
+/// `"piSubagent"` 键加上整棵树的估算字节。没有这个键时为 0，其它 meta 仍按身份不计入预算。
+fn pi_subagent_payload_bytes(meta: &Option<serde_json::Value>) -> usize {
+    pi_subagent_value(meta)
+        .map(|value| json_str_len(PI_SUBAGENT_META_KEY).saturating_add(json_value_size(value)))
+        .unwrap_or(0)
+}
+
+/// 裁剪副本用的身份桩：保留前端认卡片要的 mode / agent / 任务首行 / 状态，
+/// 丢掉 blocks、嵌套 `subagent` 和 error 正文。认不出形状时返回 `None`（调用方删掉该键）。
+fn pi_subagent_identity_stub(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let obj = value.as_object()?;
+    let mode = obj
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .filter(|mode| !mode.is_empty())?;
+    let mode = truncate_one_line(mode, 32);
+    let runs = obj.get("runs").and_then(serde_json::Value::as_array)?;
+    let mut kept_runs: Vec<serde_json::Value> = Vec::new();
+    for run in runs {
+        let Some(run_obj) = run.as_object() else {
+            continue;
+        };
+        let Some(agent) = run_obj
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .filter(|agent| !agent.is_empty())
+        else {
+            continue;
+        };
+        let mut stub_run = serde_json::Map::new();
+        stub_run.insert(
+            "agent".to_string(),
+            serde_json::Value::String(truncate_one_line(agent, 64)),
+        );
+        let task = run_obj
+            .get("task")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let task_line = task
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("");
+        stub_run.insert(
+            "task".to_string(),
+            serde_json::Value::String(truncate_one_line(task_line, 120)),
+        );
+        if let Some(model) = run_obj
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty())
+        {
+            stub_run.insert(
+                "model".to_string(),
+                serde_json::Value::String(truncate_one_line(model, 64)),
+            );
+        }
+        if let Some(step) = run_obj.get("step").filter(|step| step.is_number()) {
+            stub_run.insert("step".to_string(), step.clone());
+        }
+        if let Some(stop) = run_obj
+            .get("stop_reason")
+            .and_then(serde_json::Value::as_str)
+            .filter(|stop| !stop.is_empty())
+        {
+            stub_run.insert(
+                "stop_reason".to_string(),
+                serde_json::Value::String(truncate_one_line(stop, 32)),
+            );
+        }
+        stub_run.insert(
+            "is_error".to_string(),
+            serde_json::Value::Bool(
+                run_obj
+                    .get("is_error")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            ),
+        );
+        stub_run.insert(
+            "running".to_string(),
+            serde_json::Value::Bool(
+                run_obj
+                    .get("running")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            ),
+        );
+        kept_runs.push(serde_json::Value::Object(stub_run));
+        let candidate = serde_json::json!({ "mode": mode.clone(), "runs": kept_runs.clone() });
+        if json_value_size(&candidate) > PI_SUBAGENT_IDENTITY_STUB_MAX_BYTES && kept_runs.len() > 1
+        {
+            kept_runs.pop();
+            break;
+        }
+    }
+    if kept_runs.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "mode": mode, "runs": kept_runs }))
+}
+
+/// 快照副本的 meta：其它键原样复制，`piSubagent` 换成身份桩。不克隆整棵树。
+fn snapshot_meta_keeping_identity(meta: &Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let value = meta.as_ref()?;
+    let Some(obj) = value.as_object() else {
+        return Some(value.clone());
+    };
+    if !obj.contains_key(PI_SUBAGENT_META_KEY) {
+        return Some(value.clone());
+    }
+    let mut kept = serde_json::Map::new();
+    for (key, item) in obj {
+        if key == PI_SUBAGENT_META_KEY {
+            continue;
+        }
+        kept.insert(key.clone(), item.clone());
+    }
+    if let Some(stub) = obj
+        .get(PI_SUBAGENT_META_KEY)
+        .and_then(pi_subagent_identity_stub)
+    {
+        kept.insert(PI_SUBAGENT_META_KEY.to_string(), stub);
+    }
+    if kept.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(kept))
+    }
 }
 
 /// Last non-empty line of `s`, trimmed. `None` if every line is blank.
@@ -4546,6 +4762,253 @@ mod tests {
             .expect("running call present");
         assert_eq!(huge.status, ToolCallStatus::InProgress);
         assert!(huge.output.is_some(), "a running call is never trimmed");
+    }
+
+    /// 一棵已完成的 pi 子任务树。`block_bytes` 是正文，嵌套 `subagent` 用来证明
+    /// 裁剪时下层不会跟着身份桩走。
+    fn pi_subagent_tree(id: &str, block_bytes: usize, is_error: bool) -> serde_json::Value {
+        serde_json::json!({
+            "mode": "parallel",
+            "runs": [{
+                "agent": format!("worker-{id}"),
+                "task": format!("dig into {id}\nand the rest of the prompt"),
+                "model": "grok",
+                "step": 2,
+                "stop_reason": "end_turn",
+                "error": "e".repeat(8_000),
+                "is_error": is_error,
+                "running": false,
+                "blocks": [{
+                    "type": "text",
+                    "text": "y".repeat(block_bytes)
+                }, {
+                    "type": "tool_use",
+                    "tool_name": "bash",
+                    "input": "echo hi",
+                    "output": "ok",
+                    "is_error": false,
+                    "settled": true,
+                    "subagent": {
+                        "mode": "single",
+                        "runs": [{
+                            "agent": "nested",
+                            "task": "inner",
+                            "is_error": false,
+                            "running": false,
+                            "blocks": [{"type": "text", "text": "nested-body"}]
+                        }]
+                    }
+                }]
+            }, {
+                "agent": "second",
+                "task": "other lane",
+                "is_error": false,
+                "running": false,
+                "blocks": [{"type": "thinking", "text": "hmm"}]
+            }]
+        })
+    }
+
+    fn push_pi_subagent_call(s: &mut SessionState, id: &str, block_bytes: usize, status: &str) {
+        s.apply_event(&AcpEvent::ToolCall {
+            tool_call_id: id.into(),
+            title: format!("subagent {id}"),
+            kind: "other".into(),
+            status: status.into(),
+            content: Some("summary".into()),
+            raw_input: Some(r#"{"agent":"worker","task":"dig"}"#.into()),
+            raw_output: Some("done".into()),
+            locations: Some(serde_json::json!([{ "path": "src/lib.rs" }])),
+            meta: Some(serde_json::json!({
+                "codeg.delegation": {
+                    "status": "completed",
+                    "child_connection_id": "child-1"
+                },
+                "piSubagent": pi_subagent_tree(id, block_bytes, status == "failed")
+            })),
+            images: None,
+        });
+    }
+
+    /// 预算内的树必须原样上船，不能因为加了裁剪就把正常回合的下层详情弄丢。
+    #[test]
+    fn snapshot_keeps_pi_subagent_trees_while_the_turn_fits() {
+        let mut s = fresh_state();
+        push_pi_subagent_call(&mut s, "tc-small", 1024, "completed");
+
+        let snap = s.to_snapshot();
+        let live = &s.active_tool_calls["tc-small"];
+        let wire = snap
+            .active_tool_calls
+            .iter()
+            .find(|tc| tc.id == "tc-small")
+            .expect("call ships");
+        assert_eq!(
+            serde_json::to_value(&wire.meta).unwrap(),
+            serde_json::to_value(&live.meta).unwrap(),
+            "a tree that fits the budget must ship exactly as held"
+        );
+        assert_eq!(
+            wire.meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][1]["subagent"]["runs"]
+                [0]["blocks"][0]["text"],
+            "nested-body"
+        );
+    }
+
+    /// 多棵已完成的子任务树加起来超过 2MiB 时，重连快照不能把它们整棵带走。
+    /// 实时状态仍留完整树；被裁掉的调用只留身份，最近的已完成调用和进行中的调用仍有下层。
+    #[test]
+    fn snapshot_bounds_accumulated_pi_subagent_trees() {
+        const CALLS: usize = 70;
+        const BLOCK_BYTES: usize = 64 * 1024;
+        let mut s = fresh_state();
+        // 最旧、且仍在跑：即使后面的已完成调用把预算花光，这棵树也不能裁。
+        push_pi_subagent_call(&mut s, "tc-running", BLOCK_BYTES, "in_progress");
+        for i in 0..CALLS {
+            let status = if i == 0 { "failed" } else { "completed" };
+            push_pi_subagent_call(&mut s, &format!("tc-{i:04}"), BLOCK_BYTES, status);
+        }
+
+        let held: usize = s
+            .active_tool_calls
+            .values()
+            .map(tool_call_trimmable_bytes)
+            .sum();
+        assert!(
+            held > 2 * MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES,
+            "累计树必须明显超过预算，held={held}"
+        );
+
+        let snap = s.to_snapshot();
+        // 快照不得改写内存里的完整树，否则已经连着的客户端会永远看不到下层。
+        let live_oldest = &s.active_tool_calls["tc-0000"];
+        assert_eq!(
+            live_oldest.meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][0]["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            BLOCK_BYTES,
+            "live state must keep the full tree"
+        );
+        assert_eq!(
+            live_oldest.meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][1]["subagent"]
+                ["runs"][0]["blocks"][0]["text"],
+            "nested-body"
+        );
+
+        let wire = serde_json::to_string(&snap).expect("serialize snapshot");
+        assert!(
+            wire.len() < MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES * 3 / 2,
+            "重连快照必须停在预算附近，got {} bytes for {held} bytes held",
+            wire.len()
+        );
+
+        let by_id: std::collections::BTreeMap<&str, &ToolCallState> = snap
+            .active_tool_calls
+            .iter()
+            .map(|tc| (tc.id.as_str(), tc))
+            .collect();
+        assert_eq!(by_id.len(), CALLS + 1);
+
+        let oldest = by_id["tc-0000"];
+        assert_eq!(oldest.status, ToolCallStatus::Failed);
+        assert!(oldest.output.is_none(), "oldest finished call sheds output");
+        assert!(oldest.input.is_none());
+        assert_eq!(oldest.label, "subagent tc-0000");
+        let oldest_meta = oldest.meta.as_ref().expect("identity meta remains");
+        assert_eq!(
+            oldest_meta["codeg.delegation"]["child_connection_id"], "child-1",
+            "delegation identity must survive the trim"
+        );
+        let stub = &oldest_meta["piSubagent"];
+        assert_eq!(stub["mode"], "parallel");
+        assert_eq!(stub["runs"][0]["agent"], "worker-tc-0000");
+        assert_eq!(stub["runs"][0]["task"], "dig into tc-0000");
+        assert_eq!(stub["runs"][0]["model"], "grok");
+        assert_eq!(stub["runs"][0]["step"], 2);
+        assert_eq!(stub["runs"][0]["is_error"], true);
+        assert!(
+            stub["runs"][0].get("blocks").is_none(),
+            "blocks are the tree"
+        );
+        assert!(
+            stub["runs"][0].get("error").is_none(),
+            "error body is payload"
+        );
+        assert_eq!(stub["runs"][1]["agent"], "second");
+        let stub_wire = serde_json::to_string(stub).unwrap();
+        assert!(
+            stub_wire.len() <= PI_SUBAGENT_IDENTITY_STUB_MAX_BYTES,
+            "identity stub must stay bounded, got {}",
+            stub_wire.len()
+        );
+        assert!(
+            !stub_wire.contains("nested-body"),
+            "trimmed snapshot must not carry the nested tree"
+        );
+
+        let newest = &format!("tc-{:04}", CALLS - 1);
+        assert!(
+            by_id[newest.as_str()].meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][1]
+                ["subagent"]["runs"][0]["blocks"][0]["text"]
+                == "nested-body",
+            "the newest finished call still fits and keeps its lower levels"
+        );
+        assert!(
+            by_id["tc-running"].meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][0]
+                ["text"]
+                .as_str()
+                .unwrap()
+                .len()
+                == BLOCK_BYTES,
+            "a running call is never trimmed, even when it is the oldest"
+        );
+    }
+
+    /// 单棵已完成的树大于整份预算时，不能靠「最后一条可以超一点」整棵上船。
+    /// 进行中的同样大的树仍然整棵走，因为别处没有这份进行中的详情。
+    #[test]
+    fn snapshot_sheds_one_finished_pi_subagent_tree_over_the_budget() {
+        let mut s = fresh_state();
+        let over = MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 2048;
+        push_pi_subagent_call(&mut s, "tc-running", over, "in_progress");
+        push_pi_subagent_call(&mut s, "tc-huge", over, "completed");
+
+        let snap = s.to_snapshot();
+        assert_eq!(
+            s.active_tool_calls["tc-huge"].meta.as_ref().unwrap()["piSubagent"]["runs"][0]
+                ["blocks"][0]["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            over,
+            "shedding is snapshot-only"
+        );
+
+        let by_id: std::collections::BTreeMap<&str, &ToolCallState> = snap
+            .active_tool_calls
+            .iter()
+            .map(|tc| (tc.id.as_str(), tc))
+            .collect();
+        let finished = serde_json::to_string(by_id["tc-huge"].meta.as_ref().unwrap()).unwrap();
+        assert!(
+            finished.len() < 4_096,
+            "one finished tree over the budget must not ship, got {} bytes",
+            finished.len()
+        );
+        assert_eq!(
+            by_id["tc-huge"].meta.as_ref().unwrap()["piSubagent"]["runs"][0]["agent"],
+            "worker-tc-huge"
+        );
+        assert!(by_id["tc-huge"].output.is_some(), "only the tree is shed");
+        assert_eq!(
+            by_id["tc-running"].meta.as_ref().unwrap()["piSubagent"]["runs"][0]["blocks"][0]
+                ["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            over
+        );
     }
 
     /// A generated image survives the trim, however old the call is.

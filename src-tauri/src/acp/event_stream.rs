@@ -585,6 +585,48 @@ fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usiz
             .iter()
             .map(|e| 64 + json_str_len(&e.entry_type) + opt_str_size(&e.text))
             .sum::<usize>()
+        + stats.subagent.as_ref().map_or(0, subagent_size)
+}
+
+/// 递归估算 pi 原生 subagent 记录的大小。
+///
+/// 子任务可以再派发 subagent（层级不限），所以这里必须跟着递归：估小了会让
+/// 超大的实时 `_meta` 逃过单事件上限进入重连回放缓冲区。
+fn subagent_size(details: &crate::models::message::SubagentDetails) -> usize {
+    // 外层 `{"mode":…,"runs":[…]}` 的键、引号与逗号。
+    48 + json_str_len(&details.mode) + details.runs.iter().map(subagent_run_size).sum::<usize>()
+}
+
+fn subagent_run_size(run: &crate::models::message::SubagentRun) -> usize {
+    // 固定键（agent / task / is_error / running / model / step / stop_reason /
+    // error / blocks）加上元素分隔符；字符串一律走 escape-aware 的长度。
+    128 + json_str_len(&run.agent)
+        + json_str_len(&run.task)
+        + opt_str_size(&run.model)
+        + opt_str_size(&run.stop_reason)
+        + opt_str_size(&run.error)
+        + run.blocks.iter().map(subagent_block_size).sum::<usize>()
+}
+
+fn subagent_block_size(block: &crate::models::message::SubagentBlock) -> usize {
+    use crate::models::message::SubagentBlock;
+    match block {
+        SubagentBlock::Text { text } | SubagentBlock::Thinking { text } => 32 + json_str_len(text),
+        SubagentBlock::ToolUse {
+            tool_name,
+            input,
+            output,
+            subagent,
+            ..
+        } => {
+            // `{"type":"tool_use","tool_name":…,"is_error":…,"settled":…}`
+            // 的键与标量加元素分隔符。
+            96 + json_str_len(tool_name)
+                + opt_str_size(input)
+                + opt_str_size(output)
+                + subagent.as_ref().map_or(0, subagent_size)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1069,6 +1111,8 @@ mod tests {
                             .collect(),
                         recovered_result: Some("The \"full\" report\n\t".repeat(400)),
                         child_session_id: Some("019fe6bf-0bcb-70c2-a02d-e5c006dfc32a".into()),
+                        // 这个用例测的是其它字段的估算，不带 pi 子任务树。
+                        subagent: None,
                     }),
                     images: vec![image],
                     exit_code: Some(i64::MIN),
@@ -1174,6 +1218,52 @@ mod tests {
                 "child_session_id",
                 AgentExecutionStats {
                     child_session_id: Some(big.clone()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "subagent",
+                AgentExecutionStats {
+                    subagent: Some(crate::models::message::SubagentDetails {
+                        mode: big.clone(),
+                        runs: vec![crate::models::message::SubagentRun {
+                            agent: big.clone(),
+                            task: big.clone(),
+                            model: Some(big.clone()),
+                            step: Some(1),
+                            stop_reason: Some(big.clone()),
+                            error: Some(big.clone()),
+                            is_error: true,
+                            running: false,
+                            blocks: vec![
+                                crate::models::message::SubagentBlock::Thinking {
+                                    text: big.clone(),
+                                },
+                                crate::models::message::SubagentBlock::ToolUse {
+                                    tool_name: big.clone(),
+                                    input: Some(big.clone()),
+                                    output: Some(big.clone()),
+                                    is_error: false,
+                                    settled: true,
+                                    // 再深一层：子任务自己派发的 subagent。
+                                    subagent: Some(crate::models::message::SubagentDetails {
+                                        mode: "single".into(),
+                                        runs: vec![crate::models::message::SubagentRun {
+                                            agent: big.clone(),
+                                            task: big.clone(),
+                                            model: None,
+                                            step: None,
+                                            stop_reason: None,
+                                            error: None,
+                                            is_error: false,
+                                            running: true,
+                                            blocks: vec![],
+                                        }],
+                                    }),
+                                },
+                            ],
+                        }],
+                    }),
                     ..Default::default()
                 },
             ),

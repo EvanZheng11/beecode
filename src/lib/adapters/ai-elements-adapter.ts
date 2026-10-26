@@ -8,6 +8,7 @@ import type {
   ToolCallStatus,
   PlanEntryInfo,
   ImageData,
+  SubagentDetails,
 } from "@/lib/types"
 import {
   isAgentLikeToolName,
@@ -104,6 +105,10 @@ export type AdaptedToolCallPart = {
   /** The command's exit code, when the transcript keeps it as a field
    *  (`ContentBlock.tool_result.exit_code`). */
   exitCode?: number | null
+  /** pi 原生 `subagent` 派发的子任务记录（由 `lib/pi-subagent` 折出来的卡片
+   *  自带，递归用）。顶层卡片的记录不在这里：实时走 `meta.piSubagent`、历史走
+   *  `agentStats.subagent`，两者在 `useAgentCallModel` 里汇到一处。 */
+  subagent?: SubagentDetails | null
 }
 
 /**

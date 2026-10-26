@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "Cargando la transcripción del subagente…",
         "agentSessionEmpty": "El subagente aún no ha escrito nada.",
         "agentFallbackTitle": "Iniciando subagente…",
+        "agentBatchParallel": "{count} subagentes en paralelo",
+        "agentBatchChain": "cadena de {count} pasos",
         "agentCodexLaunchOnly": "Lanzado. Codex aún no ha informado del desenlace de este subagente: abre su sesión para seguir el trabajo.",
         "goal": {
           "title": "Objetivo:",

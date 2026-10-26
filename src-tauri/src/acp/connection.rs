@@ -15419,6 +15419,52 @@ fn pi_live_tool_output(
         .map(|text| structurize_live_output(&text))
 }
 
+/// `_meta` 键：pi 原生 `subagent` 工具的子任务执行记录。
+///
+/// 与其它智能体把自述标记挂在 `_meta` 下的做法一致（`grokSubagentProgress`），
+/// 键名带命名空间前缀，不会和适配器自己发布的载荷撞车。
+const PI_SUBAGENT_META_KEY: &str = "piSubagent";
+
+/// 把 pi 原生 `subagent` 扩展的派发记录挂到 `_meta.piSubagent` 上。
+///
+/// pi-acp 把工具结果原样放进 ACP 的 `rawOutput`（`{content, details}`），而
+/// `details` 就是扩展返回的 `SubagentDetails` —— 每个子任务自己的消息流水都在
+/// 里面（`parsers::pi::subagent_details` 解析它）。历史里同一条记录走
+/// `agent_stats.subagent`，两条链路交给前端的形状一模一样。
+///
+/// 只对 pi 生效，并且要求 `details` 的形状真能被识别；其余情况原样返回 `meta`，
+/// 卡片退回只显示结果文本（不伪造空详情）。逐帧从本帧的 `rawOutput` 取：pi 每次
+/// 消息结束都会重发整份结果，不做跨帧缓存也就不会与真实进度脱节。
+///
+/// 这里必须盖完整树。实时事件和 `SessionState` 是已经连着的客户端看下层的唯一来源；
+/// 若在这里裁掉，用户会永远看不到。重连快照另有 2MiB 预算，超预算时由
+/// `session_state::snapshot_tool_calls` 只把身份字段留在线上，块级详情等会话转录里的
+/// `agent_stats.subagent`。
+fn stamp_pi_subagent_meta(
+    agent_type: AgentType,
+    raw_output: Option<&serde_json::Value>,
+    meta: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if !matches!(agent_type, AgentType::Pi) {
+        return meta;
+    }
+    let Some(subagent) = raw_output
+        .and_then(|raw| raw.get("details"))
+        .and_then(crate::parsers::pi::subagent_details)
+    else {
+        return meta;
+    };
+    let Ok(payload) = serde_json::to_value(subagent) else {
+        return meta;
+    };
+    let mut map = match meta {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    map.insert(PI_SUBAGENT_META_KEY.to_string(), payload);
+    Some(serde_json::Value::Object(map))
+}
+
 /// Is this `rawOutput` pi's "I have started, and have nothing yet" announcement —
 /// literally `{"content": []}`?
 ///
@@ -21425,6 +21471,9 @@ async fn emit_conversation_update(
                     .remember_stamps(&tool_call_id, meta);
             }
             let meta = meta.map(serde_json::Value::Object);
+            // pi 的 subagent 结果里带着子任务的对话，挂在 `_meta` 上交给前端
+            // （历史走 `agent_stats.subagent`，见 `stamp_pi_subagent_meta`）。
+            let meta = stamp_pi_subagent_meta(agent_type, tc.raw_output.as_ref(), meta);
             raw_output_cache.remove_if_final(&tool_call_id, Some(status.as_str()));
             // Track Grok's spawn_subagent lifecycle for the subagent-notification
             // pairing (progress meta + finished settle). No-op for other agents.
@@ -21823,6 +21872,9 @@ async fn emit_conversation_update(
                 .then(|| tcu.meta.clone())
                 .flatten()
                 .map(serde_json::Value::Object);
+            // 与 `ToolCall` 分支对称：pi 的 subagent 结果在 update 帧上（
+            // `tool_execution_end` 带整份 `details`），见 `stamp_pi_subagent_meta`。
+            let meta = stamp_pi_subagent_meta(agent_type, tcu.fields.raw_output.as_ref(), meta);
             let status = tcu.fields.status.map(|s| format!("{:?}", s).to_lowercase());
             raw_output_cache.remove_if_final(&tool_call_id, status.as_deref());
             // Same lifetime as the output cache — and deliberately NOT mirrored in
@@ -34180,6 +34232,133 @@ mod tests {
             Some("$ next build\n✓ Compiled\n"),
             "the clean content channel carries the command output"
         );
+    }
+
+    /// The tool-call event's `_meta`, whatever the arm emitted.
+    async fn pi_meta_of(
+        agent_type: AgentType,
+        wire: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let st = SessionState::new(
+            "conn-pi".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        );
+        let state = Arc::new(RwLock::new(st));
+        let emitter = EventEmitter::Noop;
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        let update: SessionUpdate =
+            serde_json::from_value(wire).expect("valid tool-call wire shape");
+
+        emit_conversation_update(
+            &state, &emitter, agent_type, update, None, &mut cache, &mut cb,
+        )
+        .await;
+
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        events
+            .iter()
+            .find_map(|event| match &event.payload {
+                AcpEvent::ToolCall { meta, .. } | AcpEvent::ToolCallUpdate { meta, .. } => {
+                    Some(meta.clone())
+                }
+                _ => None,
+            })
+            .flatten()
+    }
+
+    /// pi 原生 `subagent` 工具：pi-acp 把扩展返回的 `{content, details}` 原样放进
+    /// `rawOutput`，`details.results[].messages` 就是每个子任务自己的对话。历史那
+    /// 条路把同一条记录放在 `agent_stats.subagent`（`parsers::pi`），实时这条路
+    /// 把它挂在 `_meta.piSubagent` 上 —— 前端只认这一种形状就能画出第二层及更深
+    /// 的执行详情。形状不认（或不是 pi）时 `_meta` 保持原样，不造空卡片。
+    #[tokio::test]
+    async fn pi_subagent_result_lands_in_meta_for_the_card_to_recurse() {
+        let raw = serde_json::json!({
+            "content": [{"type": "text", "text": "Found it."}],
+            "details": {
+                "mode": "single",
+                "agentScope": "user",
+                "projectAgentsDir": null,
+                "results": [{
+                    "agent": "general-executor",
+                    "agentSource": "user",
+                    "task": "Find the parser tests",
+                    "exitCode": 0,
+                    "messages": [
+                        {"role": "user", "content": [{"type": "text", "text": "Find the parser tests"}]},
+                        {"role": "assistant", "content": [
+                            {"type": "text", "text": "Searching now."},
+                            {"type": "toolCall", "id": "c1", "name": "bash",
+                             "arguments": {"command": "rg -n pi.rs"}}
+                        ]},
+                        {"role": "toolResult", "toolCallId": "c1", "toolName": "bash",
+                         "content": [{"type": "text", "text": "src/parsers/pi.rs"}], "isError": false}
+                    ]
+                }]
+            }
+        });
+        let wire = |raw_output: serde_json::Value| {
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_pi_sub",
+                "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "Found it."}}],
+                "rawOutput": raw_output,
+            })
+        };
+
+        let meta = pi_meta_of(AgentType::Pi, wire(raw.clone()))
+            .await
+            .expect("the stamp creates the call's `_meta`");
+        let subagent = &meta["piSubagent"];
+        assert_eq!(subagent["mode"], "single");
+        assert_eq!(subagent["runs"][0]["agent"], "general-executor");
+        assert_eq!(subagent["runs"][0]["task"], "Find the parser tests");
+        // 子任务里的工具调用带着结果，前端才能画成「已完成」而不是一直转圈。
+        assert_eq!(subagent["runs"][0]["blocks"][1]["type"], "tool_use");
+        assert_eq!(subagent["runs"][0]["blocks"][1]["tool_name"], "bash");
+        assert_eq!(
+            subagent["runs"][0]["blocks"][1]["output"],
+            "src/parsers/pi.rs"
+        );
+        assert_eq!(
+            subagent["runs"][0]["blocks"][1]["settled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            subagent["runs"][0]["blocks"][0],
+            serde_json::json!({"type": "text", "text": "Searching now."}),
+            "the child's own prose stays in arrival order: {subagent}"
+        );
+
+        // 其它智能体的 `rawOutput` 里即使出现同名字段也不归 pi 管。
+        let other = pi_meta_of(AgentType::Codex, wire(raw.clone())).await;
+        assert!(
+            other
+                .as_ref()
+                .and_then(|meta| meta.get("piSubagent"))
+                .is_none(),
+            "only pi stamps this: {other:?}"
+        );
+
+        // 认不出的 details（空 results / 未知 mode）不造空卡片。
+        for unrecognised in [
+            serde_json::json!({"content": [], "details": {"mode": "single", "results": []}}),
+            serde_json::json!({"content": [], "details": {"mode": "swarm", "results": [{"agent": "a"}]}}),
+        ] {
+            let meta = pi_meta_of(AgentType::Pi, wire(unrecognised)).await;
+            assert!(
+                meta.as_ref()
+                    .and_then(|meta| meta.get("piSubagent"))
+                    .is_none(),
+                "unrecognised details must not stamp: {meta:?}"
+            );
+        }
     }
 
     /// Sequence guard for the whole command, not one frame in isolation.

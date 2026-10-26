@@ -36,6 +36,74 @@ pub struct AgentTimelineEntry {
     pub child_index: Option<usize>,
 }
 
+/// pi 原生 `subagent` 扩展一次派发的完整记录，逐层带住每个子任务自己的消息流水。
+///
+/// 扩展（`extensions/subagent/index.ts` 的 `SubagentDetails`）把每个子任务的
+/// 消息数组原样放进工具结果的 `details.results[].messages`；一个子任务自己再
+/// 派发 `subagent` 时，那次调用的 `toolResult` 里又是同样的一份 `details`。所以
+/// 这里按同样的层次递归：子任务里的 `subagent` 调用把自己的记录挂在
+/// `SubagentBlock::ToolUse` 的 `subagent` 字段上。`mode` 是扩展说的派发方式
+/// （`single` / `parallel` / `chain`），前端据此决定是把唯一一条铺开，还是每条
+/// 各画一张卡片。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentDetails {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<SubagentRun>,
+}
+
+/// 一个子任务（扩展里的一次 `runSingleAgent`），只留渲染要用的字段。
+///
+/// 扩展的 `results[]` 还带 `agentSource` / `usage` / `agentScope` 等记账字段，
+/// 卡片刻意不读：它们不解释子任务做了什么，带上只会把实时 `_meta` 撑大。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentRun {
+    pub agent: String,
+    pub task: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub model: Option<String>,
+    /// chain 派发里这是第几步（从 1 开始）；single / parallel 为 `None`。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub step: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<String>,
+    pub is_error: bool,
+    /// 扩展用 `exitCode == -1` 标记并行派发里还没跑完的占位记录。
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<SubagentBlock>,
+}
+
+/// 子任务自己的消息流水里的一段，按到达顺序排列（只有 assistant 的正文/思考/
+/// 工具调用，以及配对到工具调用上的结果——任务提示词单独由 `SubagentRun.task`
+/// 承载，不重复成一段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SubagentBlock {
+    Text {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolUse {
+        tool_name: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        input: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        output: Option<String>,
+        is_error: bool,
+        /// 这一次工具调用是否已经拿到结果 —— 用来区分「还没有结果」与「结果
+        /// 就是空的」，否则一个还在跑的工具在卡片里会被画成已完成。
+        settled: bool,
+        /// 这条工具调用自己再派发的子任务（递归）。
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent: Option<SubagentDetails>,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentExecutionStats {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +159,12 @@ pub struct AgentExecutionStats {
     /// Absent for agents whose sub-agents have no separate session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<String>,
+    /// pi 原生 `subagent` 工具的派发记录（见 [`SubagentDetails`]）。其它智能体
+    /// 的子任务记录是扁平的 `tool_calls` + `timeline`（子任务自己的对话只留在
+    /// 磁盘上的那份转录里）；pi 的子任务跑在 `--no-session` 的一次性进程里，
+    /// 它的对话只存在于工具结果的 `details` 中，因此由这里递归带住。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub subagent: Option<SubagentDetails>,
 }
 
 /// Image payload shared by content blocks and ACP wire events.

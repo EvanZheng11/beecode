@@ -46,6 +46,8 @@ describe("toolStepKind", () => {
     ["Skill", { skill: "pdf" }, "skill"],
     ["TodoWrite", { todos: [] }, "todo"],
     ["Agent", { prompt: "p", subagent_type: "Explore" }, "agent"],
+    // pi 原生 subagent 扩展：与 `Agent` 是同一类东西，输入是 `{agent, task}`。
+    ["subagent", { agent: "general-executor", task: "p" }, "agent"],
     ["Task", { prompt: "p", subagent_type: "Explore" }, "generic"],
     ["ExitPlanMode", { plan: "# P" }, "plan-mode"],
     ["AskUserQuestion", { questions: [] }, "question"],

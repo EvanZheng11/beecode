@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "正在加载子智能体的会话记录…",
         "agentSessionEmpty": "子智能体还没有写入任何内容。",
         "agentFallbackTitle": "子智能体启动中…",
+        "agentBatchParallel": "并行执行 {count} 个子智能体",
+        "agentBatchChain": "链式执行 {count} 步",
         "agentCodexLaunchOnly": "已启动。Codex 尚未报告这个子智能体的结局——打开它的会话可以跟进进展。",
         "goal": {
           "title": "目标：",

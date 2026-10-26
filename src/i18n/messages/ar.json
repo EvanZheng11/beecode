@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "جارٍ تحميل سجل الوكيل الفرعي…",
         "agentSessionEmpty": "لم يكتب الوكيل الفرعي أي شيء بعد.",
         "agentFallbackTitle": "جارٍ تشغيل الوكيل الفرعي…",
+        "agentBatchParallel": "{count} وكلاء فرعيون بالتوازي",
+        "agentBatchChain": "سلسلة من {count} خطوات",
         "agentCodexLaunchOnly": "تم التشغيل. لم يبلّغ Codex بعد عن نتيجة هذا الوكيل الفرعي — افتح جلسته لمتابعة العمل.",
         "goal": {
           "title": "الهدف:",

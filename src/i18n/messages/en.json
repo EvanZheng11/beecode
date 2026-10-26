@@ -3848,6 +3848,8 @@
         "agentSessionLoading": "Loading the sub-agent's transcript…",
         "agentSessionEmpty": "The sub-agent hasn't written anything yet.",
         "agentFallbackTitle": "Sub-agent starting…",
+        "agentBatchParallel": "{count} sub-agents in parallel",
+        "agentBatchChain": "{count}-step chain",
         "agentCodexLaunchOnly": "Launched. Codex hasn't reported how this sub-agent ended — open its session to follow the work.",
         "goal": {
           "title": "Goal:",

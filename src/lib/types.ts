@@ -156,7 +156,59 @@ export interface AgentExecutionStats {
    *  session" action — `getConversation` resolves it even though the session is
    *  hidden from the sidebar. Absent for every other agent. */
   child_session_id?: string | null
+  /** pi 原生 `subagent` 工具的派发记录（见 `SubagentDetails`）。其它智能体的
+   *  子任务只能给出扁平的 `tool_calls` + `timeline`（子任务自己的对话留在它的
+   *  转录文件里）；pi 的子任务跑在 `--no-session` 的一次性进程里，对话只存在于
+   *  工具结果的 `details` 中，所以从这一项递归带住。 */
+  subagent?: SubagentDetails | null
 }
+
+/**
+ * pi 原生 `subagent` 扩展一次派发的完整记录（Rust mirror：
+ * `models::message::SubagentDetails`）。
+ *
+ * 扩展（`~/.pi/<agent>/extensions/subagent/index.ts`）把每个子任务的消息数组原样放
+ * 进工具结果的 `details.results[].messages`；子任务自己再派发 `subagent` 时，那次
+ * 调用的结果里又是一份同样的 `details` —— 所以 `SubagentBlock` 的 `subagent` 字段
+ * 让整个结构可以一直递归下去。`mode` 是扩展说的派发方式，卡片据此决定是把唯一
+ * 一条铺开，还是每条各画一张卡片。
+ */
+export interface SubagentDetails {
+  /** `single` | `parallel` | `chain`（未知值只会出现在将来的扩展版本里）。 */
+  mode: string
+  runs: SubagentRun[]
+}
+
+/** 一个子任务（扩展里的一次 `runSingleAgent`）。 */
+export interface SubagentRun {
+  agent: string
+  task: string
+  model?: string | null
+  /** chain 派发里这是第几步（从 1 开始）；single / parallel 没有。 */
+  step?: number | null
+  stop_reason?: string | null
+  error?: string | null
+  is_error: boolean
+  /** 扩展用 `exitCode: -1` 标记并行派发里还没跑完的子任务。 */
+  running: boolean
+  blocks: SubagentBlock[]
+}
+
+/** 子任务自己的消息流水里的一段，按到达顺序排列。 */
+export type SubagentBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | {
+      type: "tool_use"
+      tool_name: string
+      input?: string | null
+      output?: string | null
+      is_error: boolean
+      /** 这一次调用是否已拿到结果 —— 区分「还没有结果」与「结果为空」。 */
+      settled: boolean
+      /** 这条工具调用自己再派发的子任务（递归）。 */
+      subagent?: SubagentDetails | null
+    }
 
 /**
  * One entry of a subagent transcript. Two data sources share this shape: the
