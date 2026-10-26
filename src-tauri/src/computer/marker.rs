@@ -170,7 +170,7 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Wanted>) {
 /// The marker window, made hidden the first time it is wanted.
 fn window(app: &AppHandle) -> Option<WebviewWindow> {
     if let Some(window) = app.get_webview_window(MARKER_LABEL) {
-        return Some(window);
+        return click_through(window);
     }
     let built =
         WebviewWindowBuilder::new(app, MARKER_LABEL, WebviewUrl::App("computer-marker".into()))
@@ -188,15 +188,99 @@ fn window(app: &AppHandle) -> Option<WebviewWindow> {
             .visible(false)
             .build();
     match built {
-        Ok(window) => {
-            // Clicks pass through to whatever is under the mark.
-            let _ = window.set_ignore_cursor_events(true);
-            Some(window)
-        }
+        Ok(window) => click_through(window),
         Err(e) => {
             tracing::warn!("[computer] could not open the action marker: {e}");
             None
         }
+    }
+}
+
+/// 穿透成功才把窗口交给调用方。失败则保持隐藏，避免标记挡住点击。
+fn click_through(window: WebviewWindow) -> Option<WebviewWindow> {
+    #[cfg(target_os = "linux")]
+    {
+        // tao 0.37.1 的 CursorIgnoreEvents 在主线程里对 GdkWindow unwrap。
+        // 隐藏窗口此时尚未 realize，unwrap 会 panic 并越过 FFI abort。
+        // 先在主线程 realize，确认有 GdkWindow，再走 Tauri 自己的穿透请求。
+        if !linux_gdk_window_ready(&window) {
+            overlay::hide(&window);
+            return None;
+        }
+        if window.set_ignore_cursor_events(true).is_err() {
+            tracing::warn!(
+                "[computer] 动作标记窗口未能设置输入穿透，已保持隐藏，避免挡住点击"
+            );
+            overlay::hide(&window);
+            return None;
+        }
+        return Some(window);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window.set_ignore_cursor_events(true);
+        Some(window)
+    }
+}
+
+/// 在主线程完成隐藏窗口的 realize，并确认 GdkWindow 已存在。
+///
+/// 不 show、不 present：暂时显示未穿透的窗口会吞掉点击。拿不到
+/// GdkWindow 时只记一条中文警告，调用方不得显示标记。
+#[cfg(target_os = "linux")]
+fn linux_gdk_window_ready(window: &WebviewWindow) -> bool {
+    let target = window.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    if window
+        .run_on_main_thread(move || {
+            let _ = tx.send(realize_hidden_marker(&target));
+        })
+        .is_err()
+    {
+        tracing::warn!(
+            "[computer] 动作标记窗口无法排入主线程完成 realize，已保持隐藏，避免挡住点击"
+        );
+        return false;
+    }
+    match rx.recv() {
+        Ok(ready) => ready,
+        Err(_) => {
+            tracing::warn!(
+                "[computer] 动作标记窗口在主线程准备输入穿透时中断，已保持隐藏，避免挡住点击"
+            );
+            false
+        }
+    }
+}
+
+/// 只在 GTK 主线程调用。`realize` 创建 GdkWindow，但不会映射窗口。
+#[cfg(target_os = "linux")]
+fn realize_hidden_marker(window: &WebviewWindow) -> bool {
+    use gtk::prelude::WidgetExt;
+
+    let gtk_window = match window.gtk_window() {
+        Ok(gtk_window) => gtk_window,
+        Err(e) => {
+            tracing::warn!(
+                "[computer] 动作标记窗口无法取得 GTK 窗口，已保持隐藏，避免挡住点击: {e}"
+            );
+            return false;
+        }
+    };
+    if !gtk_window.is_realized() {
+        gtk_window.realize();
+    }
+    if gtk_window.is_visible() {
+        tracing::warn!("[computer] 动作标记窗口在 realize 后处于可见状态，已重新隐藏");
+        gtk_window.hide();
+    }
+    if gtk_window.window().is_some() {
+        true
+    } else {
+        tracing::warn!(
+            "[computer] 动作标记窗口未能获得 GdkWindow，已保持隐藏，避免挡住点击"
+        );
+        false
     }
 }
 
