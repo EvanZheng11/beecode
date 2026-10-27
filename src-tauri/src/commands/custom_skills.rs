@@ -43,6 +43,23 @@ use crate::commands::experts::{
 };
 use crate::models::agent::AgentType;
 
+#[path = "custom_skills_import.rs"]
+mod skills_import;
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn custom_import_directory(
+    source_path: String,
+) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
+    skills_import::import_directory(source_path).await
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn custom_import_remote(
+    url: String,
+) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
+    skills_import::import_remote(url).await
+}
+
 // ─── Error type ─────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]

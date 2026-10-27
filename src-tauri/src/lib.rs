@@ -2239,6 +2239,8 @@ mod tauri_app {
                 custom_skills_commands::custom_save_skill,
                 custom_skills_commands::custom_duplicate_skill,
                 custom_skills_commands::custom_import_skill,
+                custom_skills_commands::custom_import_directory,
+                custom_skills_commands::custom_import_remote,
                 custom_skills_commands::custom_import_from_agent,
                 custom_skills_commands::custom_delete_skills,
                 office_tools_commands::officecli_detect,

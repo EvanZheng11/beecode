@@ -123,6 +123,35 @@ pub async fn custom_import_skill(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomDirectoryImportParams {
+    pub source_path: String,
+}
+
+#[derive(Deserialize)]
+pub struct CustomRemoteImportParams {
+    pub url: String,
+}
+
+pub async fn custom_import_directory(
+    Json(params): Json<CustomDirectoryImportParams>,
+) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {
+    custom_skills_commands::custom_import_directory(params.source_path)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn custom_import_remote(
+    Json(params): Json<CustomRemoteImportParams>,
+) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {
+    custom_skills_commands::custom_import_remote(params.url)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
 pub async fn custom_import_from_agent(
     Json(params): Json<CustomImportFromAgentParams>,
 ) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {

@@ -1731,6 +1731,28 @@ export async function customDuplicateSkill(params: {
   })
 }
 
+/** 递归扫描目录，逐项返回导入、跳过和失败结果。 */
+export async function customImportDirectory(
+  sourcePath: string
+): Promise<CustomImportResult[]> {
+  return getTransport().call(
+    "custom_import_directory",
+    { sourcePath },
+    { timeoutMs: 300_000 }
+  )
+}
+
+/** 远程下载、解包后复用目录扫描导入。 */
+export async function customImportRemote(
+  url: string
+): Promise<CustomImportResult[]> {
+  return getTransport().call(
+    "custom_import_remote",
+    { url },
+    { timeoutMs: 90_000 }
+  )
+}
+
 export async function customImportSkill(params: {
   sourcePath: string
   id?: string | null
