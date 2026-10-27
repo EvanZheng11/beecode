@@ -24,11 +24,18 @@ vi.mock("@/contexts/tasks-view-context", () => ({
 }))
 vi.mock("@/stores/app-workspace-store", () => {
   const state = {
+    conversations: [] as unknown[],
     folders: [
+      { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
+    ],
+    allFolders: [
       { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
     ],
   }
   const useStore = (selector: (s: typeof state) => unknown) => selector(state)
+  // tab-store reads a fresh snapshot at module load and subscribes to it.
+  useStore.getState = () => state
+  useStore.subscribe = () => () => {}
   return { useAppWorkspaceStore: useStore }
 })
 const workTaskArchive = vi.fn(async () => {})
