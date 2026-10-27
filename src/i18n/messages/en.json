@@ -2131,6 +2131,9 @@
       "cancelled": "Cancelled"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Open remote workspace",
+      "manageRemoteWorkspace": "Manage remote workspace",
+      "noRemoteConnections": "No remote connections",
       "title": "Conversations",
       "locateActiveConversation": "Locate Active Conversation",
       "expandAllGroups": "Expand All Groups",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Failed to load directory",
     "permissionDenied": "Permission denied",
     "newFolder": {
+      "pathPlaceholder": "Folder name or multi-level path (e.g. a/b/c or /home/me/project)",
+      "pathHint": "Multi-level relative paths and absolute paths are supported; missing folders are created level by level, and an existing final folder is an error. `..` is not allowed.",
       "button": "New folder",
       "placeholder": "Folder name",
       "create": "Create folder",

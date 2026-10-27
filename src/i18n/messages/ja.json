@@ -2131,6 +2131,9 @@
       "cancelled": "キャンセル済み"
     },
     "sidebar": {
+      "openRemoteWorkspace": "リモートワークスペースを開く",
+      "manageRemoteWorkspace": "リモートワークスペースを管理",
+      "noRemoteConnections": "リモート接続がありません",
       "title": "会話",
       "locateActiveConversation": "アクティブな会話を表示",
       "expandAllGroups": "すべてのグループを展開",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "ディレクトリの読み込みに失敗しました",
     "permissionDenied": "アクセス権がありません",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "新しいフォルダ",
       "placeholder": "フォルダ名",
       "create": "フォルダを作成",

@@ -2131,6 +2131,9 @@
       "cancelled": "Annulé"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Ouvrir l’espace de travail distant",
+      "manageRemoteWorkspace": "Gérer l’espace de travail distant",
+      "noRemoteConnections": "Aucune connexion distante",
       "title": "Discussions",
       "locateActiveConversation": "Localiser la conversation active",
       "expandAllGroups": "Développer tous les groupes",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Échec du chargement du répertoire",
     "permissionDenied": "Permission refusée",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "Nouveau dossier",
       "placeholder": "Nom du dossier",
       "create": "Créer le dossier",

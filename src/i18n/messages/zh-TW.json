@@ -2131,6 +2131,9 @@
       "cancelled": "已取消"
     },
     "sidebar": {
+      "openRemoteWorkspace": "開啟遠端工作區",
+      "manageRemoteWorkspace": "管理遠端工作區",
+      "noRemoteConnections": "暫無遠端連線",
       "title": "會話",
       "locateActiveConversation": "定位目前會話",
       "expandAllGroups": "展開全部分組",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "載入目錄失敗",
     "permissionDenied": "權限不足",
     "newFolder": {
+      "pathPlaceholder": "資料夾名稱或多層路徑（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支援多層相對路徑和絕對路徑，缺少的目錄會逐層建立；最末層已存在會報錯，不能使用 .. 。",
       "button": "新增資料夾",
       "placeholder": "資料夾名稱",
       "create": "建立資料夾",

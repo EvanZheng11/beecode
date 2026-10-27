@@ -2131,6 +2131,9 @@
       "cancelled": "취소됨"
     },
     "sidebar": {
+      "openRemoteWorkspace": "원격 워크스페이스 열기",
+      "manageRemoteWorkspace": "원격 워크스페이스 관리",
+      "noRemoteConnections": "원격 연결 없음",
       "title": "대화",
       "locateActiveConversation": "활성 대화 찾기",
       "expandAllGroups": "모든 그룹 펼치기",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "디렉토리 로딩 실패",
     "permissionDenied": "권한이 없습니다",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "새 폴더",
       "placeholder": "폴더 이름",
       "create": "폴더 만들기",

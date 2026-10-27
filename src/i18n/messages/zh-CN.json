@@ -2131,6 +2131,9 @@
       "cancelled": "已取消"
     },
     "sidebar": {
+      "openRemoteWorkspace": "打开远程工作区",
+      "manageRemoteWorkspace": "管理远程工作区",
+      "noRemoteConnections": "暂无远程连接",
       "title": "会话",
       "locateActiveConversation": "定位当前会话",
       "expandAllGroups": "展开全部分组",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "加载目录失败",
     "permissionDenied": "权限不足",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "新建文件夹",
       "placeholder": "文件夹名称",
       "create": "创建文件夹",

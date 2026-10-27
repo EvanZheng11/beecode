@@ -25,21 +25,6 @@ const dir = (
   hasChildren = false
 ): DirectoryEntry => ({ name, path, hasChildren })
 
-// `newFolder.pathPlaceholder` / `newFolder.pathHint` 由集成人员合并进 10 个
-// locale；测试先在本文件补齐，否则 next-intl 会回退成 key。
-const enWithPathHint = {
-  ...enMessages,
-  DirectoryBrowser: {
-    ...enMessages.DirectoryBrowser,
-    newFolder: {
-      ...enMessages.DirectoryBrowser.newFolder,
-      pathPlaceholder: "Folder name or path",
-      pathHint:
-        "Relative paths like a/b/c and absolute paths are created level by level; `..` is not allowed.",
-    },
-  },
-}
-
 // What the transport rejects with: the backend's serialized AppCommandError.
 const appError = (
   code: string,
@@ -79,7 +64,7 @@ function Harness({
   return (
     <NextIntlClientProvider
       locale={locale}
-      messages={locale === "ar" ? arMessages : enWithPathHint}
+      messages={locale === "ar" ? arMessages : enMessages}
     >
       <Dialog
         open={open}
@@ -252,8 +237,14 @@ describe("DirectoryBrowser — new folder", () => {
     render(<Harness />)
     const input = await openNewFolderRow()
 
-    expect(input).toHaveAttribute("placeholder", "Folder name or path")
-    expect(screen.getByText(/Relative paths like a\/b\/c/)).toBeInTheDocument()
+    // 可见占位符说明可以填名称或路径，下方一行提示支持的路径形式。
+    expect(input).toHaveAttribute(
+      "placeholder",
+      "Folder name or multi-level path (e.g. a/b/c or /home/me/project)"
+    )
+    expect(
+      screen.getByText(/Multi-level relative paths and absolute paths/)
+    ).toBeInTheDocument()
   })
 
   it("cancels on Escape without closing the dialog or creating anything", async () => {
