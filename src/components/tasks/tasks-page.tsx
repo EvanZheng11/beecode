@@ -24,13 +24,15 @@ import {
 import { clearTasksFocus, peekTasksFocus } from "@/lib/workbench-focus"
 import {
   DEFAULT_TASKS_BOARD_FILTER,
-  loadTasksBoardFilter,
+  getTasksBoardFilter,
   loadTasksStatusFilter,
   saveTasksBoardFilter,
   saveTasksStatusFilter,
+  useTasksBoardFilter,
 } from "@/lib/tasks-board-filter-storage"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
+import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -60,12 +62,15 @@ import {
   type BoardColumnId,
 } from "./board-columns"
 import { isDeferred, mergeQueueRanks } from "./task-acceptance"
+import { ConversationBoardCard } from "./conversation-board-card"
+import { projectBoardConversations } from "./folder-board-conversations"
 import { StatusChip, TaskCard } from "./task-card"
 import { TaskList } from "./task-list"
 import { searchTerms, taskMatchesSearch } from "./task-search"
 import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
+import { useOpenConversation } from "./use-open-conversation"
 import { useTaskDialogs } from "./use-task-dialogs"
 import type { WorkTask } from "@/lib/types"
 
@@ -117,6 +122,9 @@ export function TasksPage() {
   const t = useTranslations("Tasks")
   const { tasks, loading, refetch, viewMode } = useTasksView()
   const folders = useAppWorkspaceStore((s) => s.folders)
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
+  const activeFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
+  const activeProjectFolderId = useActiveProjectFolderId()
   const projectFolders = useMemo(
     () => folders.filter((f) => f.parent_id == null && f.kind === "regular"),
     [folders]
@@ -146,13 +154,14 @@ export function TasksPage() {
     !projectFolders.some((f) => f.id === selectedFolderFilter)
       ? null
       : selectedFolderFilter
-  // Restored synchronously from localStorage: this page mounts only after a
-  // client-side route switch (never prerendered), so there is no SSR markup to
-  // mismatch — and the board paints with the remembered filter right away.
-  const [boardFilter, setBoardFilter] = useState(loadTasksBoardFilter)
-  useEffect(() => {
-    saveTasksBoardFilter(boardFilter)
-  }, [boardFilter])
+  // 与右侧面板共用同一份实时开关：任何一侧切换归档/已取消，另一侧立刻跟上。
+  const boardFilter = useTasksBoardFilter()
+  const setBoardFilter = useCallback(
+    (update: (filter: typeof boardFilter) => typeof boardFilter) => {
+      saveTasksBoardFilter(update(getTasksBoardFilter()))
+    },
+    []
+  )
   // The list's own status selection — one board COLUMN, or `null` for every
   // status. Restored synchronously for the same reason as the filter above.
   // `viewMode` itself lives in TasksViewProvider — its switch renders in the
@@ -226,6 +235,7 @@ export function TasksPage() {
       defaultFolderId: folderFilter,
     }
   )
+  const openConversation = useOpenConversation()
 
   // "Task from message" hand-off: consume the parked draft on mount (this page
   // is unmounted while other routes are active) and on the live event.
@@ -272,6 +282,33 @@ export function TasksPage() {
         boardFilter.showArchived
       ),
     [visibleTasks, boardFilter]
+  )
+  // 当前目录里未关联任务的普通会话：与右侧面板同一套投影，打开完整页后看到
+  // 的是同一批卡片。当前活动目录属于被筛选的项目时（右侧面板正是这样打开的），
+  // 会话仍严格按活动目录取，worktree 标签页不会混入别的 worktree；手动切到别的
+  // 项目时退回按筛选项取；「全部文件夹」没有单一当前目录，不投影会话。
+  const conversationFolderId =
+    activeProjectFolderId != null && folderFilter === activeProjectFolderId
+      ? activeFolderId
+      : folderFilter
+  const conversationColumns = useMemo(
+    () =>
+      projectBoardConversations({
+        conversations,
+        tasks,
+        folderId: conversationFolderId,
+        showCanceled: boardFilter.showCanceled,
+        terms,
+        folderNames,
+      }),
+    [
+      conversations,
+      tasks,
+      conversationFolderId,
+      boardFilter.showCanceled,
+      terms,
+      folderNames,
+    ]
   )
   // The list view's rows: one flat, freshest-first sequence, narrowed to a
   // single board column. The visibility toggles apply here exactly as they do
@@ -491,7 +528,12 @@ export function TasksPage() {
     (boardFilter.showArchived === DEFAULT_TASKS_BOARD_FILTER.showArchived
       ? 0
       : 1)
-  const hasAnyTask = tasks.length > 0
+  // 本页会同时投影普通会话：只有会话、没有任务时也要画出看板。
+  const projectedConversations = BOARD_COLUMN_IDS.reduce(
+    (total, col) => total + conversationColumns[col].length,
+    0
+  )
+  const hasAnyTask = tasks.length > 0 || projectedConversations > 0
   // Nothing has arrived yet: draw the page's own shape instead of flashing the
   // "no tasks yet" empty state at someone who has plenty.
   const showSkeleton = loading && !hasAnyTask
@@ -717,6 +759,19 @@ export function TasksPage() {
           <div className="grid h-full min-w-[56rem] grid-cols-4 gap-4 px-4 pb-4 pt-2">
             {BOARD_COLUMN_IDS.map((col) => {
               const colTasks = col === "todo" ? todoTasks : columns[col]
+              const colConversations = conversationColumns[col]
+              const columnCount = colTasks.length + colConversations.length
+              const conversationCardFor = (
+                conversation: (typeof colConversations)[number]
+              ) => (
+                <ConversationBoardCard
+                  key={`conversation-${conversation.id}`}
+                  conversation={conversation}
+                  folderName={folderNames.get(conversation.folder_id) ?? null}
+                  now={now}
+                  onOpen={() => openConversation(conversation)}
+                />
+              )
               const cardFor = (task: WorkTask) => (
                 <TaskCard
                   key={task.id}
@@ -758,13 +813,13 @@ export function TasksPage() {
                     </h2>
                     {/* The count is a pill in the toolbar's muted-pill
                         language, so the two header rows read as one block. */}
-                    {col === "attention" && colTasks.length > 0 ? (
+                    {col === "attention" && columnCount > 0 ? (
                       <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-amber-600 tabular-nums dark:text-amber-400">
-                        {colTasks.length}
+                        {columnCount}
                       </span>
                     ) : (
                       <span className="rounded-full bg-muted/70 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-muted-foreground tabular-nums">
-                        {colTasks.length}
+                        {columnCount}
                       </span>
                     )}
                     <div className="flex-1" />
@@ -780,7 +835,7 @@ export function TasksPage() {
                       </Button>
                     ) : null}
                   </div>
-                  {colTasks.length === 0 ? (
+                  {columnCount === 0 ? (
                     <div
                       className={cn(
                         // border-border is near-invisible on the plain canvas —
@@ -859,8 +914,14 @@ export function TasksPage() {
                       ) : (
                         <div className={CARD_LIST_CLASS}>
                           {colTasks.map(cardFor)}
+                          {colConversations.map(conversationCardFor)}
                         </div>
                       )}
+                      {col === "todo" && colConversations.length > 0 ? (
+                        <div className={cn(CARD_LIST_CLASS, "mt-4")}>
+                          {colConversations.map(conversationCardFor)}
+                        </div>
+                      ) : null}
                     </ScrollArea>
                   )}
                 </div>
