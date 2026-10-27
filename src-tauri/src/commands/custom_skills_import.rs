@@ -95,12 +95,24 @@ fn copy_package(src: &Path, dst: &Path) -> Result<(), CustomSkillsError> {
     Ok(())
 }
 
+fn package_id(name: &str) -> String {
+    let prefix = derive_id_from_name(name);
+    if name.is_ascii() {
+        return prefix;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(name.as_bytes()));
+    // 非 ASCII 名称保留可读前缀，用稳定摘要区分被过滤掉的字符。
+    let prefix = if prefix.is_empty() { "skill" } else { &prefix };
+    format!("{}-{}", prefix.replace('.', "-"), &digest[..16])
+}
+
 fn import_package(src: &Path, store: &Path) -> CustomImportResult {
     let name = match validated_name(&src.join("SKILL.md")) {
         Ok(name) => name,
         Err(error) => return failed(src, error),
     };
-    let id = derive_id_from_name(&name);
+    let id = package_id(&name);
     let mut result = CustomImportResult {
         id: id.clone(),
         name,
@@ -212,7 +224,10 @@ fn remote_source(input: &str) -> Result<RemoteSource, CustomSkillsError> {
     }
     url.set_fragment(None);
     let path = url.path().to_string();
-    if url.host_str() == Some("github.com") && !path.ends_with(".zip") && !path.ends_with(".tar.gz")
+    if url.host_str() == Some("github.com")
+        && !path.ends_with(".zip")
+        && !path.ends_with(".tar.gz")
+        && !path.ends_with(".tgz")
     {
         let parts: Vec<_> = path.trim_matches('/').split('/').collect();
         if parts.len() < 2
@@ -557,14 +572,51 @@ mod tests {
             fs::write(temp.path().join("SKILL.md"), content).unwrap();
             assert!(validated_name(&temp.path().join("SKILL.md")).is_err());
         }
-        package(temp.path(), "中文名称");
-        let store = tempfile::tempdir().unwrap();
-        let invalid_id = import_package(temp.path(), store.path());
-        assert!(invalid_id.error.is_some() && !invalid_id.skipped);
         package(temp.path(), "contained");
         assert!(import_package(temp.path(), &temp.path().join("store"))
             .error
             .is_some());
+    }
+
+    #[test]
+    fn unicode_names_keep_display_names_and_distinct_stable_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        let store = temp.path().join("store");
+        for (index, name) in ["中文名称", "PDF整理", "PDF翻译", "already-ok"]
+            .iter()
+            .enumerate()
+        {
+            package(&root.join(index.to_string()), name);
+        }
+        let results = scan_import(&root, &store).unwrap();
+        assert_eq!(results.len(), 4);
+        for result in &results {
+            assert!(result.ok, "{:?}", result.error);
+            assert!(validate_skill_id(&result.id).is_ok());
+            assert_eq!(result.id, package_id(&result.name));
+            assert_eq!(
+                validated_name(&store.join(&result.id).join("SKILL.md")).unwrap(),
+                result.name
+            );
+        }
+        assert!(results[0].id.starts_with("skill-"));
+        assert!(results[1].id.starts_with("pdf-"));
+        assert!(results[2].id.starts_with("pdf-"));
+        assert_ne!(results[1].id, results[2].id);
+        assert_eq!(results[3].id, "already-ok");
+        assert!(scan_import(&root, &store)
+            .unwrap()
+            .iter()
+            .all(|r| r.skipped && r.error.is_none()));
+        for name in [
+            "My Cool Skill!",
+            "already-ok",
+            "  --Trim.Me--  ",
+            "snake_case_1",
+        ] {
+            assert_eq!(package_id(name), derive_id_from_name(name));
+        }
     }
 
     #[cfg(unix)]
@@ -707,6 +759,11 @@ mod tests {
                 .kind,
             RemoteKind::Markdown
         );
+        let release_url = "https://github.com/owner/repo/releases/download/v1/skills.tgz";
+        let release = remote_source(release_url).unwrap();
+        assert_eq!(release.kind, RemoteKind::TarGz);
+        assert_eq!(release.url.as_str(), release_url);
+        assert!(release.subdir.is_none());
         for url in [
             "https://example.test/p.zip",
             "http://example.test/p.tar.gz",
@@ -772,14 +829,15 @@ mod tests {
     #[tokio::test]
     async fn remote_pipeline_cleans_up_on_success_and_unpack_failure() {
         let parent = tempfile::tempdir().unwrap();
+        let unicode = VALID.replace("deep-skill", "PDF整理");
         for (body, kind, success) in [
             (
-                zip_bytes("repo/skills/SKILL.md", VALID.as_bytes(), false),
+                zip_bytes("repo/skills/SKILL.md", unicode.as_bytes(), false),
                 RemoteKind::Zip,
                 true,
             ),
             (tar_bytes(false), RemoteKind::TarGz, true),
-            (VALID.as_bytes().to_vec(), RemoteKind::Markdown, true),
+            (unicode.as_bytes().to_vec(), RemoteKind::Markdown, true),
             (
                 zip_bytes("../escape", b"bad", false),
                 RemoteKind::Zip,
@@ -796,6 +854,7 @@ mod tests {
             if source.kind == RemoteKind::Zip && success {
                 source.subdir = Some(PathBuf::from("skills"));
             }
+            let source_is_markdown = source.kind == RemoteKind::Markdown;
             let temp = tempfile::tempdir_in(parent.path()).unwrap();
             let temp_path = temp.path().to_path_buf();
             let prepared = prepare_remote(source, temp).await;
@@ -804,6 +863,10 @@ mod tests {
                 let results = scan_import(&root, &parent.path().join("store")).unwrap();
                 assert_eq!(results.len(), 1);
                 assert!(results.iter().all(|r| r.ok || r.skipped));
+                if results[0].name == "PDF整理" {
+                    assert_eq!(results[0].id, package_id("PDF整理"));
+                    assert_eq!(results[0].skipped, source_is_markdown);
+                }
                 drop(temp);
             }
             assert!(!temp_path.exists());
