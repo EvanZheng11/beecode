@@ -4828,9 +4828,7 @@
       "syncSuccess": "{synced} habilidades sincronizadas",
       "syncPartial": "{synced} sincronizadas, {errors} fallidas",
       "syncFailed": "Error al sincronizar habilidades"
-    },
-    "autoPreviewLabel": "Abrir vista previa automáticamente",
-    "autoPreviewHint": "Cuando un agente crea o edita un archivo de Word, Excel o PowerPoint, abre su vista previa en vivo automáticamente."
+    }
   },
   "SkillPacksSettings": {
     "title": "Paquetes de habilidades",

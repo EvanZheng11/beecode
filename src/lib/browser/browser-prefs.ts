@@ -1,9 +1,9 @@
 // Built-in browser preferences. Persisted per key in localStorage (one key per
 // setting rather than one JSON blob, so the settings window and the workspace
 // window never clobber each other's writes); read through a cached snapshot so
-// `useSyncExternalStore` gets a stable object between changes. Same shape as
-// `office-preview-prefs.ts`: a same-window custom event plus the native
-// cross-window `storage` event keep every reader live.
+// `useSyncExternalStore` gets a stable object between changes. A same-window
+// custom event plus the native cross-window `storage` event keep every reader
+// live.
 
 import { useSyncExternalStore } from "react"
 

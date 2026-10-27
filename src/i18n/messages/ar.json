@@ -4828,9 +4828,7 @@
       "syncSuccess": "تمت مزامنة {synced} مهارة",
       "syncPartial": "تمت مزامنة {synced}، فشلت {errors}",
       "syncFailed": "فشل مزامنة المهارات"
-    },
-    "autoPreviewLabel": "فتح المعاينة تلقائيًا",
-    "autoPreviewHint": "عندما ينشئ وكيل ملف Word أو Excel أو PowerPoint أو يعدّله، افتح معاينته المباشرة تلقائيًا."
+    }
   },
   "SkillPacksSettings": {
     "title": "حزم المهارات",

@@ -4828,9 +4828,7 @@
       "syncSuccess": "{synced} compétences synchronisées",
       "syncPartial": "{synced} synchronisées, {errors} échouées",
       "syncFailed": "Échec de la synchronisation des compétences"
-    },
-    "autoPreviewLabel": "Ouvrir l'aperçu automatiquement",
-    "autoPreviewHint": "Lorsqu'un agent crée ou modifie un fichier Word, Excel ou PowerPoint, ouvrir automatiquement son aperçu en direct."
+    }
   },
   "SkillPacksSettings": {
     "title": "Packs de compétences",

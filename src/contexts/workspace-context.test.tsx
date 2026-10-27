@@ -2296,10 +2296,18 @@ describe("applyExternalReload git base does not stale-write after close+reopen",
 // 回归：任务执行过程中生成的文件不能被自动打开占用标签。
 // 旧实现（provider 监听 changed_paths → openFilePreview）已整体移除，而不是
 // 把偏好改成默认关闭 —— localStorage 里残留的 "true" 也不能把它复活。
+
+// 本机测试环境（jsdom + Node 26）默认没有可用的 localStorage，而真实浏览器
+// 里该键一定存在；下面的回归要验证的正是“残留 true 也不生效”，所以注入最小
+// 内存实现。stub 只在自身 describe 内生效，afterEach 必须还原原描述符（原本
+// 不存在时就删除），否则会泄漏到后续 describe 的用例里。
+const ORIGINAL_LOCAL_STORAGE_DESCRIPTOR = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "localStorage"
+)
+
 describe("生成的文件不自动打开预览标签", () => {
   const LEGACY_KEY = "workspace:office-auto-preview"
-  // 本机测试环境（jsdom）没有实现 localStorage，而真实浏览器里该键一定存在；
-  // 这条回归要验证的正是“残留 true 也不生效”，所以注入最小内存实现。
   function installLocalStorageStub(): void {
     const data = new Map<string, string>()
     Object.defineProperty(globalThis, "localStorage", {
@@ -2330,6 +2338,17 @@ describe("生成的文件不自动打开预览标签", () => {
 
   afterEach(() => {
     localStorage.removeItem(LEGACY_KEY)
+    // 还原全局 localStorage：有原实现（Node 26 的 --localstorage-file）就装回
+    // 原描述符，没有就删掉，确保 stub 不外泄。
+    if (ORIGINAL_LOCAL_STORAGE_DESCRIPTOR) {
+      Object.defineProperty(
+        globalThis,
+        "localStorage",
+        ORIGINAL_LOCAL_STORAGE_DESCRIPTOR
+      )
+    } else {
+      delete (globalThis as { localStorage?: unknown }).localStorage
+    }
   })
 
   it("文件变更流不建标签也不切栏，localStorage 残留 true 同样不生效", async () => {
@@ -2398,6 +2417,15 @@ describe("生成的文件不自动打开预览标签", () => {
       fileTabId("/repo/report.docx")
     )
     expect(screen.getByTestId("active-pane")).toHaveTextContent("files")
+  })
+})
+
+// 守住上面的 stub 不外泄：本 describe 拿到的必须是没被替换过的全局实现。
+describe("localStorage stub 不外泄", () => {
+  it("前一个 describe 结束后恢复原实现", () => {
+    expect(Object.getOwnPropertyDescriptor(globalThis, "localStorage")).toEqual(
+      ORIGINAL_LOCAL_STORAGE_DESCRIPTOR
+    )
   })
 })
 

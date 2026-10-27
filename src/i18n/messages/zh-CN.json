@@ -4848,9 +4848,7 @@
       "syncSuccess": "已成功同步 {synced} 个技能",
       "syncPartial": "已同步 {synced} 个技能，{errors} 个失败",
       "syncFailed": "同步技能失败"
-    },
-    "autoPreviewLabel": "自动打开预览",
-    "autoPreviewHint": "当智能体创建或编辑 Word、Excel、PowerPoint 文件时，自动打开其实时预览。"
+    }
   },
   "SkillPacksSettings": {
     "title": "技能包",

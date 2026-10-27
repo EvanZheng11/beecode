@@ -4828,9 +4828,7 @@
       "syncSuccess": "{synced} Skills erfolgreich synchronisiert",
       "syncPartial": "{synced} synchronisiert, {errors} fehlgeschlagen",
       "syncFailed": "Skills konnten nicht synchronisiert werden"
-    },
-    "autoPreviewLabel": "Vorschau automatisch öffnen",
-    "autoPreviewHint": "Wenn ein Agent eine Word-, Excel- oder PowerPoint-Datei erstellt oder bearbeitet, wird die Live-Vorschau automatisch geöffnet."
+    }
   },
   "SkillPacksSettings": {
     "title": "Skill-Pakete",
