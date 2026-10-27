@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "マージリクエストに push しました"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "ディレクトリを一括取り込み",
+      "remote": "リモート URL から取り込む",
+      "description": "GitHub リポジトリまたはサブディレクトリ、ZIP、tar.gz、raw SKILL.md の URL に対応します。",
+      "urlLabel": "リモートスキル URL",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "取り込む",
+      "results": "スキルの取り込み結果",
+      "empty": "有効なスキルパッケージが見つかりません。SKILL.md には有効な YAML と、空でない name、description、本文が必要です。",
+      "success": "取り込み済み",
+      "skipped": "既に存在するためスキップ",
+      "failed": "取り込み失敗"
+    },
     "loading": "カスタムスキルを読み込み中…",
     "category": "カスタム",
     "searchPlaceholder": "名前・ID・説明でカスタムスキルを検索",

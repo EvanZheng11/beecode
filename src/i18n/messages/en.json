@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "Pushed to the merge request"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Import a directory",
+      "remote": "Import from a URL",
+      "description": "Supports GitHub repos or subfolders, ZIP, tar.gz, and raw SKILL.md URLs.",
+      "urlLabel": "Remote skill URL",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "Import",
+      "results": "Skill import results",
+      "empty": "No valid skill packages found. SKILL.md needs valid YAML plus a non-empty name, description, and body.",
+      "success": "Imported",
+      "skipped": "Already exists, skipped",
+      "failed": "Import failed"
+    },
     "loading": "Loading custom skills…",
     "category": "Custom",
     "searchPlaceholder": "Search custom skills by name, id, or description",

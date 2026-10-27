@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "已推回合并请求"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "批量导入目录",
+      "remote": "从远程地址导入",
+      "description": "支持 GitHub 仓库或子目录、ZIP、tar.gz 和 raw SKILL.md 地址。",
+      "urlLabel": "远程技能地址",
+      "urlPlaceholder": "https://github.com/所有者/仓库/tree/main/skills",
+      "confirm": "导入",
+      "results": "技能导入结果",
+      "empty": "未发现有效技能包。SKILL.md 需含有效 YAML、非空 name、description 和正文。",
+      "success": "已导入",
+      "skipped": "已存在，跳过",
+      "failed": "导入失败"
+    },
     "loading": "正在加载自定义技能…",
     "category": "自定义",
     "searchPlaceholder": "按名称、ID 或描述搜索自定义技能",

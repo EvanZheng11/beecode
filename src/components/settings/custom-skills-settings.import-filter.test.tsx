@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import zhCNMessages from "@/i18n/messages/zh-CN.json"
 import type { GenerativeUiSkillInfo } from "@/lib/api"
 import type { AcpAgentInfo, AgentSkillItem } from "@/lib/types"
 
@@ -135,7 +136,7 @@ async function renderImportSettings() {
     import("next-intl"),
   ])
   render(
-    <NextIntlClientProvider locale="zh-CN" messages={enMessages}>
+    <NextIntlClientProvider locale="zh-CN" messages={zhCNMessages}>
       <CustomSkillsBody />
     </NextIntlClientProvider>
   )

@@ -163,37 +163,6 @@ export function CustomSkillsBody({
   const [importResults, setImportResults] = useState<
     CustomImportResult[] | null
   >(null)
-  // 翻译由集成人员统一补齐，缺键时使用中文文案。
-  const batchText = useMemo(() => {
-    const defaults = {
-      directory: "批量导入目录",
-      remote: "从远程地址导入",
-      description:
-        "支持 GitHub 仓库或子目录、ZIP、tar.gz 和 raw SKILL.md 地址。",
-      urlLabel: "远程技能地址",
-      urlPlaceholder: "https://github.com/所有者/仓库/tree/main/skills",
-      confirm: "导入",
-      results: "技能导入结果",
-      empty:
-        "未发现有效技能包。SKILL.md 需含有效 YAML、非空 name、description 和正文。",
-      success: "已导入",
-      skipped: "已存在，跳过",
-      failed: "导入失败",
-    }
-    const translate = t as unknown as {
-      (key: string): string
-      has(key: string): boolean
-    }
-    return Object.fromEntries(
-      Object.entries(defaults).map(([key, fallback]) => [
-        key,
-        translate.has(`batchImport.${key}`)
-          ? translate(`batchImport.${key}`)
-          : fallback,
-      ])
-    ) as typeof defaults
-  }, [t])
-
   // Import-from-agent dialog (multi-select an agent's own global skills).
   const [agentImportOpen, setAgentImportOpen] = useState(false)
   const [agentImportAgent, setAgentImportAgent] = useState<AgentType | null>(
@@ -614,7 +583,7 @@ export function CustomSkillsBody({
         ) : (
           <FolderInput className="h-3.5 w-3.5" />
         )}
-        {batchText.directory}
+        {t("batchImport.directory")}
       </Button>
       <Button
         size="sm"
@@ -622,7 +591,7 @@ export function CustomSkillsBody({
         onClick={() => setRemoteImportOpen(true)}
         disabled={importing}
       >
-        {batchText.remote}
+        {t("batchImport.remote")}
       </Button>
     </>
   )
@@ -912,18 +881,20 @@ export function CustomSkillsBody({
       >
         <DialogContent className="sm:max-w-[35rem]">
           <DialogHeader>
-            <DialogTitle>{batchText.remote}</DialogTitle>
-            <DialogDescription>{batchText.description}</DialogDescription>
+            <DialogTitle>{t("batchImport.remote")}</DialogTitle>
+            <DialogDescription>
+              {t("batchImport.description")}
+            </DialogDescription>
           </DialogHeader>
           <label htmlFor="skill-import-url" className="text-sm">
-            {batchText.urlLabel}
+            {t("batchImport.urlLabel")}
           </label>
           <Input
             id="skill-import-url"
             type="url"
             value={remoteUrl}
             onChange={(event) => setRemoteUrl(event.target.value)}
-            placeholder={batchText.urlPlaceholder}
+            placeholder={t("batchImport.urlPlaceholder")}
             disabled={importing}
           />
           <DialogFooter>
@@ -941,7 +912,7 @@ export function CustomSkillsBody({
               }}
             >
               {importing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {batchText.confirm}
+              {t("batchImport.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -955,13 +926,13 @@ export function CustomSkillsBody({
       >
         <DialogContent className="sm:max-w-[35rem]">
           <DialogHeader>
-            <DialogTitle>{batchText.results}</DialogTitle>
+            <DialogTitle>{t("batchImport.results")}</DialogTitle>
             <DialogDescription>
-              {batchText.success}:{" "}
+              {t("batchImport.success")}:{" "}
               {importResults?.filter((r) => r.ok).length ?? 0} ·{" "}
-              {batchText.skipped}:{" "}
+              {t("batchImport.skipped")}:{" "}
               {importResults?.filter((r) => r.skipped).length ?? 0} ·{" "}
-              {batchText.failed}:{" "}
+              {t("batchImport.failed")}:{" "}
               {importResults?.filter((r) => r.error).length ?? 0}
             </DialogDescription>
           </DialogHeader>
@@ -969,7 +940,7 @@ export function CustomSkillsBody({
             {importResults &&
               !importResults.some((result) => result.ok || result.skipped) && (
                 <p className="text-sm text-muted-foreground">
-                  {batchText.empty}
+                  {t("batchImport.empty")}
                 </p>
               )}
             {importResults?.map((result, index) => (
@@ -980,10 +951,10 @@ export function CustomSkillsBody({
                 <div>
                   {result.name || result.id} ·{" "}
                   {result.ok
-                    ? batchText.success
+                    ? t("batchImport.success")
                     : result.skipped
-                      ? batchText.skipped
-                      : batchText.failed}
+                      ? t("batchImport.skipped")
+                      : t("batchImport.failed")}
                 </div>
                 {result.error && (
                   <p className="text-xs text-destructive break-words">

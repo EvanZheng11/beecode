@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "استيراد مجلد",
+      "remote": "الاستيراد من عنوان بعيد",
+      "description": "يدعم مستودعات GitHub أو المجلدات الفرعية وZIP وtar.gz وعناوين SKILL.md الخام.",
+      "urlLabel": "عنوان المهارة البعيد",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "استيراد",
+      "results": "نتيجة استيراد المهارات",
+      "empty": "لم يتم العثور على حزم مهارات صالحة. يجب أن يحتوي SKILL.md على YAML صالح وname وdescription ونص غير فارغة.",
+      "success": "تم الاستيراد",
+      "skipped": "موجودة مسبقًا، تم التخطي",
+      "failed": "فشل الاستيراد"
+    },
     "loading": "جارٍ تحميل المهارات المخصّصة…",
     "category": "مخصّصة",
     "searchPlaceholder": "ابحث عن المهارات المخصّصة بالاسم أو المعرّف أو الوصف",

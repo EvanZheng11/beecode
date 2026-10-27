@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "In den Merge Request gepusht"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Verzeichnis importieren",
+      "remote": "Von einer Remote-Adresse importieren",
+      "description": "Unterstützt GitHub-Repositories oder Unterordner, ZIP, tar.gz und Raw-SKILL.md-Adressen.",
+      "urlLabel": "Remote-Skill-Adresse",
+      "urlPlaceholder": "https://github.com/eigentuemer/repo/tree/main/skills",
+      "confirm": "Importieren",
+      "results": "Ergebnis des Skill-Imports",
+      "empty": "Keine gültigen Skill-Pakete gefunden. SKILL.md braucht gültiges YAML sowie einen nicht leeren name, description und Text.",
+      "success": "Importiert",
+      "skipped": "Bereits vorhanden, übersprungen",
+      "failed": "Import fehlgeschlagen"
+    },
     "loading": "Benutzerdefinierte Skills werden geladen…",
     "category": "Benutzerdefiniert",
     "searchPlaceholder": "Benutzerdefinierte Skills nach Name, ID oder Beschreibung suchen",

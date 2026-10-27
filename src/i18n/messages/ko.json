@@ -6405,6 +6405,19 @@
     "deliverPrBackDoneMr": "병합 요청에 푸시했습니다"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "디렉터리 일괄 가져오기",
+      "remote": "원격 주소에서 가져오기",
+      "description": "GitHub 저장소 또는 하위 디렉터리, ZIP, tar.gz, raw SKILL.md 주소를 지원합니다.",
+      "urlLabel": "원격 스킬 주소",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "가져오기",
+      "results": "스킬 가져오기 결과",
+      "empty": "유효한 스킬 패키지를 찾지 못했습니다. SKILL.md에는 유효한 YAML과 비어 있지 않은 name, description, 본문이 필요합니다.",
+      "success": "가져옴",
+      "skipped": "이미 있어 건너뜀",
+      "failed": "가져오기 실패"
+    },
     "loading": "사용자 지정 스킬 불러오는 중…",
     "category": "사용자 지정",
     "searchPlaceholder": "이름, ID 또는 설명으로 사용자 지정 스킬 검색",
