@@ -35,7 +35,6 @@ import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "./git-toolbar-controls"
-import { AuxPanelNoFolderEmpty } from "./aux-panel-no-folder-empty"
 
 /**
  * The board's four columns, stacked — in the order a glance down a sidebar
@@ -67,14 +66,15 @@ const SECTION_TONE: Record<BoardColumnId, string> = {
 }
 
 /**
- * The aux panel's task tab: the active project's board, as a column of
- * sections, with the board's own cards.
+ * 右侧面板的任务页签：列出所有项目未归档的任务，按分区纵向堆叠。
  *
- * Everything a card can do here it does on the board too — the editor, the
- * detail sheet and the acceptance / restart / follow-up dialogs come from the
- * same `useTaskDialogs` the Tasks page uses. What stays on the page is what
- * needs its room: dragging cards, the list view, the folder picker and the
- * board's settings (one click away, on this project).
+ * 卡片能力与看板一致：编辑器、详情抽屉，以及验收 / 重启 / 跟进对话框都来自
+ * Tasks 页面同一个 `useTaskDialogs`。留在完整页上的，是需要更大空间的那些操作：
+ * 拖拽卡片、列表视图、文件夹选择器，以及看板设置（点一下即可打开，不带过滤）。
+ *
+ * 分区按任务的真实状态划分：「以后处理」的 review / failed 仍归入等你处理分区；
+ * 完整看板则把它们归到已完成——那个覆盖规则属于看板，不改变状态本身，也不改变
+ * 右侧面板的分组。
  */
 export function TasksAuxTab() {
   const t = useTranslations("Tasks")
@@ -89,11 +89,9 @@ export function TasksAuxTab() {
     for (const f of allFolders) map.set(f.id, f.alias ?? f.name)
     return map
   }, [allFolders])
-  const projectName =
-    projectFolderId != null ? (folderNames.get(projectFolderId) ?? null) : null
 
-  // The board's canceled / archived toggles, followed live: one pair of
-  // visibility rules for both surfaces.
+  // 只跟随看板的「显示已取消」开关；「显示归档」只属于完整页——右侧面板
+  // 永远只列未归档任务。
   const boardFilter = useTasksBoardFilter()
   const [searchInput, setSearchInput] = useState("")
   const terms = useMemo(() => searchTerms(searchInput), [searchInput])
@@ -112,23 +110,25 @@ export function TasksAuxTab() {
     return () => window.clearInterval(id)
   }, [])
 
-  const projectTasks = useMemo(
-    () =>
-      projectFolderId == null
-        ? []
-        : tasks.filter((task) => task.folder_id === projectFolderId),
-    [tasks, projectFolderId]
-  )
+  // 全项目范围：面板列出所有项目的未归档任务，每张卡片按自己所属的项目名
+  // 参与搜索和展示。
   const columns = useMemo(
     () =>
       groupTasksByColumn(
-        projectTasks.filter((task) =>
-          taskMatchesSearch(task, terms, projectName)
+        tasks.filter((task) =>
+          taskMatchesSearch(
+            task,
+            terms,
+            folderNames.get(task.folder_id) ?? null
+          )
         ),
         boardFilter.showCanceled,
-        boardFilter.showArchived
+        // 归档任务只出现在完整页，这里固定隐藏（不看 boardFilter.showArchived）。
+        false,
+        // 按真实状态分区（以后处理的 review / failed 仍在等你处理）。
+        true
       ),
-    [projectTasks, terms, projectName, boardFilter]
+    [tasks, terms, folderNames, boardFilter]
   )
   // Over ALL tasks: the merge queue is the project's, and a narrowed view must
   // not renumber it (the board computes it the same way).
@@ -141,10 +141,11 @@ export function TasksAuxTab() {
     defaultFolderId: projectFolderId,
   })
 
+  // 完整页与这里同范围：不按项目过滤，打开就是全部文件夹。
   const openBoard = useCallback(() => {
-    requestTasksFocus({ folderId: projectFolderId })
+    requestTasksFocus({ folderId: null })
     setRoute("tasks")
-  }, [projectFolderId, setRoute])
+  }, [setRoute])
 
   const toggleSection = useCallback((column: BoardColumnId) => {
     setCollapsed((prev) => {
@@ -155,12 +156,10 @@ export function TasksAuxTab() {
     })
   }, [])
 
-  if (projectFolderId == null) return <AuxPanelNoFolderEmpty />
-
   const shownSections = SECTION_ORDER.filter(
     (column) => columns[column].length > 0
   )
-  const hasAnyTask = projectTasks.length > 0
+  const hasAnyTask = tasks.length > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -314,9 +313,8 @@ export function TasksAuxTab() {
                         <TaskCard
                           key={task.id}
                           task={task}
-                          // Every card here is this project's: naming it on
-                          // each would be the same word down the column.
-                          folderName={null}
+                          // 分区里混着多个项目，每张卡都要说明自己属于哪个项目。
+                          folderName={folderNames.get(task.folder_id) ?? null}
                           now={now}
                           mergeQueueRank={queueRanks.get(task.id)}
                           onOpen={() => openDetail(task.id)}

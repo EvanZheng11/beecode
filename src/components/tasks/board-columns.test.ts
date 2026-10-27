@@ -266,4 +266,24 @@ describe("handle later (以后处理)", () => {
       filterTasksForList(tasks, "done", false, false).map((t) => t.id)
     ).toEqual([2, 3])
   })
+
+  it("can group by real status only, for surfaces that ignore the overlay", () => {
+    const tasks = [
+      task(1, "review", { updated_at: "2026-08-01T01:00:00Z" }),
+      task(2, "review", {
+        deferred_at: at,
+        updated_at: "2026-08-01T03:00:00Z",
+      }),
+      task(3, "failed", { deferred_at: at }),
+      task(4, "done"),
+    ]
+    const real = groupTasksByColumn(tasks, false, false, true)
+    // 真实状态：以后处理的 review / failed 仍在等你处理，已完成只有 done。
+    expect(real.attention.map((t) => t.id)).toEqual([2, 1, 3])
+    expect(real.done.map((t) => t.id)).toEqual([4])
+    // 默认参数不变：完整页仍把它们归到已完成。
+    const board = groupTasksByColumn(tasks, false)
+    expect(board.attention.map((t) => t.id)).toEqual([1])
+    expect(board.done.map((t) => t.id)).toEqual([2, 3, 4])
+  })
 })

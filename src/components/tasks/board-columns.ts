@@ -90,7 +90,9 @@ export function columnForTask(task: WorkTask): BoardColumnId {
 export function groupTasksByColumn(
   tasks: WorkTask[],
   showCanceled: boolean,
-  showArchived = false
+  showArchived = false,
+  /** 分区只按真实状态，不用「以后处理」覆盖（右侧面板用；完整页保持默认）。 */
+  byRealStatus = false
 ): Record<BoardColumnId, WorkTask[]> {
   const grouped: Record<BoardColumnId, WorkTask[]> = {
     todo: [],
@@ -101,7 +103,10 @@ export function groupTasksByColumn(
   for (const task of tasks) {
     if (task.status === "canceled" && !showCanceled) continue
     if (task.archived_at != null && !showArchived) continue
-    grouped[columnForTask(task)].push(task)
+    const column = byRealStatus
+      ? columnForStatus(task.status)
+      : columnForTask(task)
+    grouped[column].push(task)
   }
   for (const column of BOARD_COLUMN_IDS) {
     grouped[column].sort(byFreshest)
