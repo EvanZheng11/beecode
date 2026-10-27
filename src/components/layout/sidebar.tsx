@@ -18,7 +18,10 @@ import {
   Map as MapIcon,
   Menu,
   MessagesSquare,
+  MonitorCloud,
+  MonitorSmartphone,
   Search,
+  Settings,
   SquarePen,
   Zap,
   type LucideIcon,
@@ -30,6 +33,7 @@ import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
@@ -40,6 +44,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -93,6 +98,7 @@ import {
   SidebarTagFilterBar,
   SidebarTagFilterButton,
 } from "@/components/conversations/sidebar-tag-filter"
+import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 
@@ -126,6 +132,15 @@ const RAIL_BADGE_FAILURE_CLASS = cn(
 const RAIL_BADGE_ATTENTION_CLASS = cn(
   RAIL_BADGE_BASE_CLASS,
   "bg-primary/10 text-primary"
+)
+
+// 45px 图标栏按钮的共用几何。路由按钮与弹出菜单触发器必须长得一样，
+// 否则「操作」和「导航」在视觉上会莫名其妙地错位。
+const RAIL_BUTTON_CLASS = cn(
+  "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none",
+  "text-muted-foreground transition-colors duration-150",
+  "hover:bg-sidebar-accent hover:text-sidebar-foreground",
+  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
 )
 
 // Which sections the order editor should render as switched-off. Module
@@ -208,10 +223,7 @@ function SidebarRailButton({
       aria-label={label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none",
-        "text-muted-foreground transition-colors duration-150",
-        "hover:bg-sidebar-accent hover:text-sidebar-foreground",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        RAIL_BUTTON_CLASS,
         active && "bg-sidebar-primary/15 text-sidebar-foreground"
       )}
     >
@@ -233,6 +245,13 @@ export function Sidebar() {
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
+  const {
+    desktop: remoteDesktop,
+    connections: remoteConnections,
+    refresh: refreshRemote,
+    open: handleOpenRemote,
+  } = useRemoteWorkspaceConnections()
+  const [remoteManageOpen, setRemoteManageOpen] = useState(false)
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
   const { zoomLevel } = useZoomLevel()
@@ -654,6 +673,71 @@ export function Sidebar() {
                 }}
               />
             )}
+            {remoteDesktop && (
+              <>
+                <div
+                  aria-hidden="true"
+                  className="my-1 h-px w-5 shrink-0 bg-sidebar-border"
+                />
+                <DropdownMenu
+                  onOpenChange={(open) => {
+                    if (open) void refreshRemote()
+                  }}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      title={t("openRemoteWorkspace")}
+                      aria-label={t("openRemoteWorkspace")}
+                      className={cn(
+                        RAIL_BUTTON_CLASS,
+                        "data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-foreground"
+                      )}
+                    >
+                      <MonitorSmartphone
+                        aria-hidden="true"
+                        className="h-[1.125rem] w-[1.125rem]"
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="right"
+                    align="start"
+                    className="w-72"
+                  >
+                    {remoteConnections.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-muted-foreground">
+                        {t("noRemoteConnections")}
+                      </div>
+                    ) : (
+                      remoteConnections.map((connection) => (
+                        <DropdownMenuItem
+                          key={connection.id}
+                          onSelect={() => handleOpenRemote(connection.id)}
+                        >
+                          <MonitorCloud />
+                          <span className="min-w-0">
+                            <span className="block truncate">
+                              {connection.name}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {connection.base_url}
+                            </span>
+                          </span>
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() => setRemoteManageOpen(true)}
+                    >
+                      <Settings />
+                      {t("manageRemoteWorkspace")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
           </nav>
         )}
 
@@ -735,6 +819,14 @@ export function Sidebar() {
           </div>
         </div>
       </div>
+
+      {remoteDesktop && (
+        <RemoteWorkspaceManageDialog
+          open={remoteManageOpen}
+          onOpenChange={setRemoteManageOpen}
+          onChanged={refreshRemote}
+        />
+      )}
     </aside>
   )
 }

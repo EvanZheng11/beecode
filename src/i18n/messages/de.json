@@ -2131,6 +2131,9 @@
       "cancelled": "Abgebrochen"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Remote-Arbeitsbereich öffnen",
+      "manageRemoteWorkspace": "Remote-Arbeitsbereich verwalten",
+      "noRemoteConnections": "Keine Remote-Verbindungen",
       "title": "Konversationen",
       "locateActiveConversation": "Aktive Konversation finden",
       "expandAllGroups": "Alle Gruppen erweitern",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Verzeichnis konnte nicht geladen werden",
     "permissionDenied": "Zugriff verweigert",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "Neuer Ordner",
       "placeholder": "Ordnername",
       "create": "Ordner erstellen",
@@ -4828,9 +4833,7 @@
       "syncSuccess": "{synced} Skills erfolgreich synchronisiert",
       "syncPartial": "{synced} synchronisiert, {errors} fehlgeschlagen",
       "syncFailed": "Skills konnten nicht synchronisiert werden"
-    },
-    "autoPreviewLabel": "Vorschau automatisch öffnen",
-    "autoPreviewHint": "Wenn ein Agent eine Word-, Excel- oder PowerPoint-Datei erstellt oder bearbeitet, wird die Live-Vorschau automatisch geöffnet."
+    }
   },
   "SkillPacksSettings": {
     "title": "Skill-Pakete",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "In den Merge Request gepusht"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Verzeichnis importieren",
+      "remote": "Von einer Remote-Adresse importieren",
+      "description": "Unterstützt GitHub-Repositories oder Unterordner, ZIP, tar.gz und Raw-SKILL.md-Adressen.",
+      "urlLabel": "Remote-Skill-Adresse",
+      "urlPlaceholder": "https://github.com/eigentuemer/repo/tree/main/skills",
+      "confirm": "Importieren",
+      "results": "Ergebnis des Skill-Imports",
+      "empty": "Keine gültigen Skill-Pakete gefunden. SKILL.md braucht gültiges YAML sowie einen nicht leeren name, description und Text.",
+      "success": "Importiert",
+      "skipped": "Bereits vorhanden, übersprungen",
+      "failed": "Import fehlgeschlagen"
+    },
     "loading": "Benutzerdefinierte Skills werden geladen…",
     "category": "Benutzerdefiniert",
     "searchPlaceholder": "Benutzerdefinierte Skills nach Name, ID oder Beschreibung suchen",

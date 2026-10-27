@@ -2131,6 +2131,9 @@
       "cancelled": "已取消"
     },
     "sidebar": {
+      "openRemoteWorkspace": "打开远程工作区",
+      "manageRemoteWorkspace": "管理远程工作区",
+      "noRemoteConnections": "暂无远程连接",
       "title": "会话",
       "locateActiveConversation": "定位当前会话",
       "expandAllGroups": "展开全部分组",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "加载目录失败",
     "permissionDenied": "权限不足",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "新建文件夹",
       "placeholder": "文件夹名称",
       "create": "创建文件夹",
@@ -4848,9 +4853,7 @@
       "syncSuccess": "已成功同步 {synced} 个技能",
       "syncPartial": "已同步 {synced} 个技能，{errors} 个失败",
       "syncFailed": "同步技能失败"
-    },
-    "autoPreviewLabel": "自动打开预览",
-    "autoPreviewHint": "当智能体创建或编辑 Word、Excel、PowerPoint 文件时，自动打开其实时预览。"
+    }
   },
   "SkillPacksSettings": {
     "title": "技能包",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "已推回合并请求"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "批量导入目录",
+      "remote": "从远程地址导入",
+      "description": "支持 GitHub 仓库或子目录、ZIP、tar.gz 和 raw SKILL.md 地址。",
+      "urlLabel": "远程技能地址",
+      "urlPlaceholder": "https://github.com/所有者/仓库/tree/main/skills",
+      "confirm": "导入",
+      "results": "技能导入结果",
+      "empty": "未发现有效技能包。SKILL.md 需含有效 YAML、非空 name、description 和正文。",
+      "success": "已导入",
+      "skipped": "已存在，跳过",
+      "failed": "导入失败"
+    },
     "loading": "正在加载自定义技能…",
     "category": "自定义",
     "searchPlaceholder": "按名称、ID 或描述搜索自定义技能",

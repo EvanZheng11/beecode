@@ -21,6 +21,9 @@ const spies = vi.hoisted(() => ({
   scrollToActive: vi.fn(),
   expandAll: vi.fn(),
   collapseAll: vi.fn(),
+  // 45px 图标栏里的远端动作，测试只验证它们接到既有入口。
+  openRemote: vi.fn(),
+  refreshRemote: vi.fn(() => Promise.resolve()),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
   // assert what the sidebar threads down (e.g. showWorktrees / showCompleted).
   listProps: null as {
@@ -32,6 +35,10 @@ const spies = vi.hoisted(() => ({
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
+  remoteDesktop: true,
+  remoteConnections: [
+    { id: 11, name: "prod-box", base_url: "https://prod.example" },
+  ],
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -95,6 +102,18 @@ vi.mock("@/contexts/workbench-route-context", () => ({
     setRoute: spies.setRoute,
     openConversations: spies.openConversations,
   }),
+}))
+vi.mock("@/hooks/use-remote-workspace-connections", () => ({
+  useRemoteWorkspaceConnections: () => ({
+    desktop: mockState.remoteDesktop,
+    connections: mockState.remoteConnections,
+    refresh: spies.refreshRemote,
+    open: spies.openRemote,
+  }),
+}))
+vi.mock("./remote-workspace-manage-dialog", () => ({
+  RemoteWorkspaceManageDialog: ({ open }: { open: boolean }) =>
+    open ? <div>REMOTE-MANAGE-DIALOG</div> : null,
 }))
 vi.mock("@/hooks/use-is-mac", () => ({ useIsMac: () => false }))
 vi.mock("@/hooks/use-shortcut-settings", () => ({
@@ -405,6 +424,45 @@ describe("Sidebar — Navigation item visibility", () => {
     renderSidebar()
     expect(navRow("To-dos")).toBeNull()
     expect(navRow("Automations")).toBeTruthy()
+  })
+})
+
+describe("Sidebar — 45px 图标栏的远端入口", () => {
+  beforeEach(() => {
+    mockState.remoteDesktop = true
+    spies.openRemote.mockClear()
+    spies.refreshRemote.mockClear()
+  })
+
+  it("打开远端连接列表，选择已有连接或进入管理", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    await user.click(
+      screen.getByRole("button", { name: "Open remote workspace" })
+    )
+    // 打开菜单时才拉取，沿用 shared hook 的行为。
+    expect(spies.refreshRemote).toHaveBeenCalledTimes(1)
+    await user.click(await screen.findByRole("menuitem", { name: /prod-box/ }))
+    expect(spies.openRemote).toHaveBeenCalledWith(11)
+
+    await user.click(
+      screen.getByRole("button", { name: "Open remote workspace" })
+    )
+    await user.click(
+      await screen.findByRole("menuitem", {
+        name: "Manage remote workspace",
+      })
+    )
+    expect(screen.getByText("REMOTE-MANAGE-DIALOG")).toBeInTheDocument()
+  })
+
+  it("非桌面环境隐藏远端入口", () => {
+    mockState.remoteDesktop = false
+    renderSidebar()
+    expect(
+      screen.queryByRole("button", { name: "Open remote workspace" })
+    ).not.toBeInTheDocument()
   })
 })
 

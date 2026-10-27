@@ -2131,6 +2131,9 @@
       "cancelled": "Annulé"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Ouvrir l’espace de travail distant",
+      "manageRemoteWorkspace": "Gérer l’espace de travail distant",
+      "noRemoteConnections": "Aucune connexion distante",
       "title": "Discussions",
       "locateActiveConversation": "Localiser la conversation active",
       "expandAllGroups": "Développer tous les groupes",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Échec du chargement du répertoire",
     "permissionDenied": "Permission refusée",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "Nouveau dossier",
       "placeholder": "Nom du dossier",
       "create": "Créer le dossier",
@@ -4828,9 +4833,7 @@
       "syncSuccess": "{synced} compétences synchronisées",
       "syncPartial": "{synced} synchronisées, {errors} échouées",
       "syncFailed": "Échec de la synchronisation des compétences"
-    },
-    "autoPreviewLabel": "Ouvrir l'aperçu automatiquement",
-    "autoPreviewHint": "Lorsqu'un agent crée ou modifie un fichier Word, Excel ou PowerPoint, ouvrir automatiquement son aperçu en direct."
+    }
   },
   "SkillPacksSettings": {
     "title": "Packs de compétences",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "Poussé vers la merge request"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Importer un dossier",
+      "remote": "Importer depuis une URL distante",
+      "description": "Prend en charge les dépôts ou sous-dossiers GitHub, ZIP, tar.gz et les URL SKILL.md brutes.",
+      "urlLabel": "URL de la compétence distante",
+      "urlPlaceholder": "https://github.com/proprietaire/depot/tree/main/skills",
+      "confirm": "Importer",
+      "results": "Résultat de l'import",
+      "empty": "Aucun paquet de compétences valide trouvé. SKILL.md doit contenir un YAML valide, un name, une description et un corps non vides.",
+      "success": "Importée",
+      "skipped": "Déjà présente, ignorée",
+      "failed": "Échec de l'import"
+    },
     "loading": "Chargement des compétences personnalisées…",
     "category": "Personnalisées",
     "searchPlaceholder": "Rechercher des compétences personnalisées par nom, ID ou description",

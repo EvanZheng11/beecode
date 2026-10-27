@@ -2131,6 +2131,9 @@
       "cancelled": "キャンセル済み"
     },
     "sidebar": {
+      "openRemoteWorkspace": "リモートワークスペースを開く",
+      "manageRemoteWorkspace": "リモートワークスペースを管理",
+      "noRemoteConnections": "リモート接続がありません",
       "title": "会話",
       "locateActiveConversation": "アクティブな会話を表示",
       "expandAllGroups": "すべてのグループを展開",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "ディレクトリの読み込みに失敗しました",
     "permissionDenied": "アクセス権がありません",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "新しいフォルダ",
       "placeholder": "フォルダ名",
       "create": "フォルダを作成",
@@ -4828,9 +4833,7 @@
       "syncSuccess": "{synced} 個のスキルを同期しました",
       "syncPartial": "{synced} 個同期、{errors} 個失敗",
       "syncFailed": "スキルの同期に失敗"
-    },
-    "autoPreviewLabel": "プレビューを自動で開く",
-    "autoPreviewHint": "エージェントが Word、Excel、PowerPoint ファイルを作成または編集したときに、ライブプレビューを自動で開きます。"
+    }
   },
   "SkillPacksSettings": {
     "title": "スキルパック",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "マージリクエストに push しました"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "ディレクトリを一括取り込み",
+      "remote": "リモート URL から取り込む",
+      "description": "GitHub リポジトリまたはサブディレクトリ、ZIP、tar.gz、raw SKILL.md の URL に対応します。",
+      "urlLabel": "リモートスキル URL",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "取り込む",
+      "results": "スキルの取り込み結果",
+      "empty": "有効なスキルパッケージが見つかりません。SKILL.md には有効な YAML と、空でない name、description、本文が必要です。",
+      "success": "取り込み済み",
+      "skipped": "既に存在するためスキップ",
+      "failed": "取り込み失敗"
+    },
     "loading": "カスタムスキルを読み込み中…",
     "category": "カスタム",
     "searchPlaceholder": "名前・ID・説明でカスタムスキルを検索",

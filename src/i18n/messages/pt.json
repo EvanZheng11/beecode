@@ -2131,6 +2131,9 @@
       "cancelled": "Cancelado"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Abrir espaço de trabalho remoto",
+      "manageRemoteWorkspace": "Gerenciar espaço de trabalho remoto",
+      "noRemoteConnections": "Nenhuma conexão remota",
       "title": "Conversas",
       "locateActiveConversation": "Localizar conversa ativa",
       "expandAllGroups": "Expandir todos os grupos",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Falha ao carregar o diretório",
     "permissionDenied": "Permissão negada",
     "newFolder": {
+      "pathPlaceholder": "文件夹名称或多级路径（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支持多级相对路径和绝对路径，缺失目录会逐级创建；末级已存在会报错，不能使用 .. 。",
       "button": "Nova pasta",
       "placeholder": "Nome da pasta",
       "create": "Criar pasta",
@@ -4828,9 +4833,7 @@
       "syncSuccess": "{synced} habilidades sincronizadas",
       "syncPartial": "{synced} sincronizadas, {errors} falharam",
       "syncFailed": "Falha ao sincronizar habilidades"
-    },
-    "autoPreviewLabel": "Abrir visualização automaticamente",
-    "autoPreviewHint": "Quando um agente cria ou edita um arquivo do Word, Excel ou PowerPoint, abre sua visualização ao vivo automaticamente."
+    }
   },
   "SkillPacksSettings": {
     "title": "Pacotes de habilidades",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "Enviado ao merge request"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Importar um diretório",
+      "remote": "Importar de um endereço remoto",
+      "description": "Compatível com repositórios ou subpastas do GitHub, ZIP, tar.gz e URLs de SKILL.md brutas.",
+      "urlLabel": "URL da skill remota",
+      "urlPlaceholder": "https://github.com/proprietario/repositorio/tree/main/skills",
+      "confirm": "Importar",
+      "results": "Resultado da importação",
+      "empty": "Nenhum pacote de skill válido encontrado. O SKILL.md precisa de YAML válido e de name, description e corpo não vazios.",
+      "success": "Importada",
+      "skipped": "Já existe, ignorada",
+      "failed": "Falha na importação"
+    },
     "loading": "Carregando habilidades personalizadas…",
     "category": "Personalizadas",
     "searchPlaceholder": "Pesquisar habilidades personalizadas por nome, ID ou descrição",

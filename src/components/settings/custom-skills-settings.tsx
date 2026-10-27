@@ -58,7 +58,8 @@ import {
   customDeleteSkills,
   customDuplicateSkill,
   customImportFromAgent,
-  customImportSkill,
+  customImportDirectory,
+  customImportRemote,
   customList,
   customListAllInstallStatuses,
   customReadSkill,
@@ -83,6 +84,7 @@ import type {
   AgentSkillItem,
   AgentType,
   CustomSkillItem,
+  CustomImportResult,
   ExpertLinkState,
 } from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
@@ -156,7 +158,11 @@ export function CustomSkillsBody({
   // local desktop app uses the native OS folder picker instead.
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
-
+  const [remoteImportOpen, setRemoteImportOpen] = useState(false)
+  const [remoteUrl, setRemoteUrl] = useState("")
+  const [importResults, setImportResults] = useState<
+    CustomImportResult[] | null
+  >(null)
   // Import-from-agent dialog (multi-select an agent's own global skills).
   const [agentImportOpen, setAgentImportOpen] = useState(false)
   const [agentImportAgent, setAgentImportAgent] = useState<AgentType | null>(
@@ -326,14 +332,18 @@ export function CustomSkillsBody({
   }, [editorContent, editorId, editorMode, invalidateAll, refresh, t])
 
   const handleImport = useCallback(
-    async (path: string) => {
+    async (path: string, remote = false) => {
       setImportOpen(false)
       setImporting(true)
+      setImportResults(null)
       try {
-        await customImportSkill({ sourcePath: path })
+        const results = remote
+          ? await customImportRemote(path.trim())
+          : await customImportDirectory(path)
+        setRemoteImportOpen(false)
+        setImportResults(results)
         invalidateAll()
         await refresh()
-        toast.success(t("toasts.imported"))
       } catch (err) {
         toast.error(t("toasts.importFailed"), {
           description: toErrorMessage(err),
@@ -573,7 +583,15 @@ export function CustomSkillsBody({
         ) : (
           <FolderInput className="h-3.5 w-3.5" />
         )}
-        {t("actions.import")}
+        {t("batchImport.directory")}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setRemoteImportOpen(true)}
+        disabled={importing}
+      >
+        {t("batchImport.remote")}
       </Button>
     </>
   )
@@ -854,6 +872,100 @@ export function CustomSkillsBody({
         }}
         title={t("import.title")}
       />
+
+      <Dialog
+        open={remoteImportOpen}
+        onOpenChange={(open) => {
+          if (!importing) setRemoteImportOpen(open)
+        }}
+      >
+        <DialogContent className="sm:max-w-[35rem]">
+          <DialogHeader>
+            <DialogTitle>{t("batchImport.remote")}</DialogTitle>
+            <DialogDescription>
+              {t("batchImport.description")}
+            </DialogDescription>
+          </DialogHeader>
+          <label htmlFor="skill-import-url" className="text-sm">
+            {t("batchImport.urlLabel")}
+          </label>
+          <Input
+            id="skill-import-url"
+            type="url"
+            value={remoteUrl}
+            onChange={(event) => setRemoteUrl(event.target.value)}
+            placeholder={t("batchImport.urlPlaceholder")}
+            disabled={importing}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={importing}
+              onClick={() => setRemoteImportOpen(false)}
+            >
+              {t("actions.cancel")}
+            </Button>
+            <Button
+              disabled={importing || !remoteUrl.trim()}
+              onClick={() => {
+                void handleImport(remoteUrl, true)
+              }}
+            >
+              {importing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {t("batchImport.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={importResults !== null}
+        onOpenChange={(open) => {
+          if (!open) setImportResults(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-[35rem]">
+          <DialogHeader>
+            <DialogTitle>{t("batchImport.results")}</DialogTitle>
+            <DialogDescription>
+              {t("batchImport.success")}:{" "}
+              {importResults?.filter((r) => r.ok).length ?? 0} ·{" "}
+              {t("batchImport.skipped")}:{" "}
+              {importResults?.filter((r) => r.skipped).length ?? 0} ·{" "}
+              {t("batchImport.failed")}:{" "}
+              {importResults?.filter((r) => r.error).length ?? 0}
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="h-[20rem]">
+            {importResults &&
+              !importResults.some((result) => result.ok || result.skipped) && (
+                <p className="text-sm text-muted-foreground">
+                  {t("batchImport.empty")}
+                </p>
+              )}
+            {importResults?.map((result, index) => (
+              <div
+                key={`${result.id}:${index}`}
+                className="border-b py-2 text-sm"
+              >
+                <div>
+                  {result.name || result.id} ·{" "}
+                  {result.ok
+                    ? t("batchImport.success")
+                    : result.skipped
+                      ? t("batchImport.skipped")
+                      : t("batchImport.failed")}
+                </div>
+                {result.error && (
+                  <p className="text-xs text-destructive break-words">
+                    {result.error}
+                  </p>
+                )}
+              </div>
+            ))}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
 
       {/* Import from agent (multi-select an agent's own skills). */}
       <Dialog open={agentImportOpen} onOpenChange={setAgentImportOpen}>

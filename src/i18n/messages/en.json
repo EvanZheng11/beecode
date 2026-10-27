@@ -2131,6 +2131,9 @@
       "cancelled": "Cancelled"
     },
     "sidebar": {
+      "openRemoteWorkspace": "Open remote workspace",
+      "manageRemoteWorkspace": "Manage remote workspace",
+      "noRemoteConnections": "No remote connections",
       "title": "Conversations",
       "locateActiveConversation": "Locate Active Conversation",
       "expandAllGroups": "Expand All Groups",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "Failed to load directory",
     "permissionDenied": "Permission denied",
     "newFolder": {
+      "pathPlaceholder": "Folder name or multi-level path (e.g. a/b/c or /home/me/project)",
+      "pathHint": "Multi-level relative paths and absolute paths are supported; missing folders are created level by level, and an existing final folder is an error. `..` is not allowed.",
       "button": "New folder",
       "placeholder": "Folder name",
       "create": "Create folder",
@@ -4848,9 +4853,7 @@
       "syncSuccess": "{synced} skills synced successfully",
       "syncPartial": "{synced} skills synced, {errors} failed",
       "syncFailed": "Failed to sync skills"
-    },
-    "autoPreviewLabel": "Auto-open preview",
-    "autoPreviewHint": "When an agent creates or edits a Word, Excel, or PowerPoint file, open its live preview automatically."
+    }
   },
   "SkillPacksSettings": {
     "title": "Skill Packs",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "Pushed to the merge request"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "Import a directory",
+      "remote": "Import from a URL",
+      "description": "Supports GitHub repos or subfolders, ZIP, tar.gz, and raw SKILL.md URLs.",
+      "urlLabel": "Remote skill URL",
+      "urlPlaceholder": "https://github.com/owner/repo/tree/main/skills",
+      "confirm": "Import",
+      "results": "Skill import results",
+      "empty": "No valid skill packages found. SKILL.md needs valid YAML plus a non-empty name, description, and body.",
+      "success": "Imported",
+      "skipped": "Already exists, skipped",
+      "failed": "Import failed"
+    },
     "loading": "Loading custom skills…",
     "category": "Custom",
     "searchPlaceholder": "Search custom skills by name, id, or description",

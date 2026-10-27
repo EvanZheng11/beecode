@@ -2131,6 +2131,9 @@
       "cancelled": "已取消"
     },
     "sidebar": {
+      "openRemoteWorkspace": "開啟遠端工作區",
+      "manageRemoteWorkspace": "管理遠端工作區",
+      "noRemoteConnections": "暫無遠端連線",
       "title": "會話",
       "locateActiveConversation": "定位目前會話",
       "expandAllGroups": "展開全部分組",
@@ -4441,6 +4444,8 @@
     "errorLoadingDir": "載入目錄失敗",
     "permissionDenied": "權限不足",
     "newFolder": {
+      "pathPlaceholder": "資料夾名稱或多層路徑（如 a/b/c 或 /home/me/project）",
+      "pathHint": "支援多層相對路徑和絕對路徑，缺少的目錄會逐層建立；最末層已存在會報錯，不能使用 .. 。",
       "button": "新增資料夾",
       "placeholder": "資料夾名稱",
       "create": "建立資料夾",
@@ -4828,9 +4833,7 @@
       "syncSuccess": "已成功同步 {synced} 個技能",
       "syncPartial": "已同步 {synced} 個技能，{errors} 個失敗",
       "syncFailed": "同步技能失敗"
-    },
-    "autoPreviewLabel": "自動開啟預覽",
-    "autoPreviewHint": "當智慧代理建立或編輯 Word、Excel、PowerPoint 檔案時，自動開啟其即時預覽。"
+    }
   },
   "SkillPacksSettings": {
     "title": "技能包",
@@ -6402,6 +6405,19 @@
     "deliverPrBackDoneMr": "已推回合併請求"
   },
   "CustomSkillsSettings": {
+    "batchImport": {
+      "directory": "批次匯入目錄",
+      "remote": "從遠端位址匯入",
+      "description": "支援 GitHub 儲存庫或子目錄、ZIP、tar.gz 和 raw SKILL.md 位址。",
+      "urlLabel": "遠端技能位址",
+      "urlPlaceholder": "https://github.com/所有者/倉庫/tree/main/skills",
+      "confirm": "匯入",
+      "results": "技能匯入結果",
+      "empty": "未發現有效技能包。SKILL.md 需含有效 YAML、非空 name、description 和正文。",
+      "success": "已匯入",
+      "skipped": "已存在，略過",
+      "failed": "匯入失敗"
+    },
     "loading": "正在載入自訂技能…",
     "category": "自訂",
     "searchPlaceholder": "依名稱、ID 或描述搜尋自訂技能",

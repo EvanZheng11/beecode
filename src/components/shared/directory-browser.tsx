@@ -116,6 +116,7 @@ interface DirectoryBrowserProps {
   /**
    * Offer "New folder", which creates a folder inside the directory being
    * listed and then moves into it, so the host's confirm picks it up.
+   * 输入框也接受多级相对路径（`a/b/c`）和绝对路径，由后端逐级创建。
    */
   allowCreateFolder?: boolean
 }
@@ -715,7 +716,9 @@ function NewFolderRow({
             }
           }}
           readOnly={draft.busy}
-          placeholder={t("newFolder.placeholder")}
+          // 可见占位符提示可以输入多级/绝对路径；可访问名称仍用原来的
+          // `newFolder.placeholder`，宿主测试按它定位这个输入框。
+          placeholder={t("newFolder.pathPlaceholder")}
           aria-label={t("newFolder.placeholder")}
           aria-invalid={draft.error ? true : undefined}
           aria-describedby={draft.error ? errorId : undefined}
@@ -762,11 +765,17 @@ function NewFolderRow({
           {draft.error}
         </div>
       ) : (
-        <div
-          className="truncate ps-6 text-xs text-muted-foreground"
-          title={parentPath}
-        >
-          {t("newFolder.location", { path: parentPath })}
+        <div className="space-y-0.5 ps-6">
+          <div
+            className="truncate text-xs text-muted-foreground"
+            title={parentPath}
+          >
+            {t("newFolder.location", { path: parentPath })}
+          </div>
+          {/* 明确告知支持多级相对路径与绝对路径，避免用户以为只能填名字。 */}
+          <div className="text-xs text-muted-foreground">
+            {t("newFolder.pathHint")}
+          </div>
         </div>
       )}
     </div>
