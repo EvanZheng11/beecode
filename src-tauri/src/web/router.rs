@@ -1401,6 +1401,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::custom_skills::custom_import_skill),
         )
         .route(
+            "/custom_import_directory",
+            post(handlers::custom_skills::custom_import_directory),
+        )
+        .route(
+            "/custom_import_remote",
+            post(handlers::custom_skills::custom_import_remote),
+        )
+        .route(
             "/custom_import_from_agent",
             post(handlers::custom_skills::custom_import_from_agent),
         )
