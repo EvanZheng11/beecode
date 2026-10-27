@@ -149,8 +149,8 @@ INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
 
 ### updater manifest 门禁
 
-- 以 `src-tauri/scripts/generate-updater-manifest.mjs` 的 `expectedAssets()` 为唯一资产命名依据，不要凭经验手写名称。
-- 当前必须存在这些桌面 updater 资产及同名 `.sig`：macOS x64、macOS arm64、Linux x64、Windows x64、Windows arm64；manifest 会为基础键和安装器后缀键建立 10 个平台键。
+- 以 `scripts/generate-updater-manifest.mjs` 的 `expectedAssets()` 为唯一资产命名依据，不要凭经验手写名称。
+- 当前必须存在这些桌面 updater 资产及同名 `.sig`：macOS x64、macOS arm64、Linux x64（AppImage / deb / rpm 三种安装包各一份签名）、Windows x64、Windows arm64；manifest 稳定版建立 12 个平台键，预发布 11 个（不含 `linux-x86_64-rpm`）。
 - 每个服务器 `.tar.gz` 或 `.zip` 包也必须有同名 `.sig`。
 - 6 个桌面矩阵全部成功并上传资产后，才运行 `Generate updater manifest`；manifest 成功后才允许 `publish-release`。
 - manifest job 失败时，优先检查缺失的资产名或签名名，再修改代码。不要用手工补文件绕过门禁。

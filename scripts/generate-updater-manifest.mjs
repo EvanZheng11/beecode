@@ -10,7 +10,9 @@
 // 模式，tauri-bundler updater_bundle.rs 只在 "v1Compatible" 下才产 tar.gz/zip
 // 包装）与 tauri-action v0.6.1（getAssetName 对 macOS .app.tar.gz 插入 arch）实测规则：
 // macOS `codeg_{x64,aarch64}.app.tar.gz`；Windows `codeg_<v>_{x64,arm64}-setup.exe`；
-// Linux `codeg_<v>_amd64.AppImage`。
+// Linux x64 `codeg_<v>_amd64.AppImage`、`codeg_<v>_amd64.deb`、`codeg-<v>-1.x86_64.rpm`
+// （三个安装包都由 createUpdaterArtifacts 直接签出同名 .sig）。预发布（版本号带
+// "-"）的发布工作流只构建 deb + AppImage（RPM 不接受带 "-" 的版本号）。
 //
 // 用法：
 //   node scripts/generate-updater-manifest.mjs \
@@ -23,26 +25,36 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-// 平台键 → updater 资产名。基础键与 -app / -nsis / -appimage 后缀键都要有：
-// tauri-plugin-updater 先找 `{os}-{arch}-{installer}`，找不到才回退 `{os}-{arch}`。
+// 平台键 → updater 资产名。基础键与 -app / -nsis / -appimage / -deb / -rpm 后缀键
+// 都要有：tauri-plugin-updater 先找 `{os}-{arch}-{installer}`，找不到才回退
+// `{os}-{arch}`，而安装始终按当前安装包类型（install_deb / install_rpm /
+// install_appimage）。缺 -deb / -rpm 键时 deb 安装版会回退到 AppImage，下载后报
+// "update is not a valid deb package"（0.40.3 → 0.40.4 实际事故）。
+// 预发布（版本号带 "-"）的发布工作流只构建 deb + AppImage，不生成 rpm 键，
+// 否则门禁会阻断现有 beta / rc 发布；稳定版 deb / rpm 必须齐全。
 export function expectedAssets(version) {
   const macX64 = "codeg_x64.app.tar.gz"
   const macArm = "codeg_aarch64.app.tar.gz"
   const appImage = `codeg_${version}_amd64.AppImage`
+  const deb = `codeg_${version}_amd64.deb`
+  const rpm = `codeg-${version}-1.x86_64.rpm`
   const nsisX64 = `codeg_${version}_x64-setup.exe`
   const nsisArm = `codeg_${version}_arm64-setup.exe`
-  return {
+  const assets = {
     "darwin-x86_64": macX64,
     "darwin-x86_64-app": macX64,
     "darwin-aarch64": macArm,
     "darwin-aarch64-app": macArm,
     "linux-x86_64": appImage,
     "linux-x86_64-appimage": appImage,
+    "linux-x86_64-deb": deb,
     "windows-x86_64": nsisX64,
     "windows-x86_64-nsis": nsisX64,
     "windows-aarch64": nsisArm,
     "windows-aarch64-nsis": nsisArm,
   }
+  if (!version.includes("-")) assets["linux-x86_64-rpm"] = rpm
+  return assets
 }
 
 function fail(message) {

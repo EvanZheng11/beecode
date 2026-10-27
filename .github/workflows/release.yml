@@ -227,6 +227,23 @@ jobs:
           node-version: 24
           cache: "pnpm"
 
+      # 发布通道只看检出源码里的实际版本：tag 构建检出的是 tag 提交（meta 已校验
+      # 标签与 tauri.conf.json 版本一致），纯 Artifacts 构建检出的就是当前提交。
+      # 不能用 GITHUB_REF_NAME —— workflow_dispatch 时它是启动分支名，与实际
+      # 发布标签无关，会把稳定版当预发布（漏 rpm）或反之。
+      - id: version
+        name: 解析构建版本与发布通道
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          printf 'version=%s\nprerelease=%s\n' "$version" "$prerelease" >> "$GITHUB_OUTPUT"
+          echo "构建版本：$version；预发布：$prerelease"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -669,7 +686,7 @@ jobs:
           tauriScript: pnpm tauri
           # RPM 不接受版本号里的 "-"，rc 版本（x.y.z-rc.N）只出 deb。
           # Linux arm64 按设计不产出 updater 资产，因此关闭 createUpdaterArtifacts。
-          args: --target ${{ matrix.target }} --bundles ${{ contains(github.ref_name, '-') && 'deb' || 'deb,rpm' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          args: --target ${{ matrix.target }} --bundles ${{ steps.version.outputs.prerelease == 'true' && 'deb' || 'deb,rpm' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -739,7 +756,7 @@ jobs:
           # rc 版本（x.y.z-rc.N）跳过 rpm：版本号里的 "-" 会让 bundler 报错。
           # latest.json 等全部矩阵完成后由 generate-updater-manifest 统一生成，
           # 所以这里 includeUpdaterJson 保持 false。
-          args: --target ${{ matrix.target }}${{ contains(github.ref_name, '-') && ' --bundles deb,appimage' || '' }}
+          args: --target ${{ matrix.target }}${{ steps.version.outputs.prerelease == 'true' && ' --bundles deb,appimage' || '' }}
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -776,17 +793,29 @@ jobs:
       # 必须在这里就看到非空的 updater .sig，避免未签名包走到发布。
       # 产物名对照 tauri-cli 2.11.4 / tauri-action v0.6.1：createUpdaterArtifacts
       # 为 bool true 即 v2 模式，直接签原包——macOS 在 bundle/macos 签
-      # codeg.app.tar.gz，Linux 在 bundle/appimage 签 *.AppImage，Windows 在
-      # bundle/nsis 签 *-setup.exe；tar.gz/zip 包装只在 "v1Compatible" 模式下产出。
+      # codeg.app.tar.gz，Linux 在 bundle/appimage 签 *.AppImage、bundle/deb 签
+      # *.deb、bundle/rpm 签 *.rpm（deb/rpm 的 -deb / -rpm 平台键依赖这两份签名），
+      # Windows 在 bundle/nsis 签 *-setup.exe；tar.gz/zip 包装只在 "v1Compatible" 模式下产出。
+      # 预发布（版本号带 "-"）只构建 deb + AppImage，没有 rpm 签名可查。
       - name: 校验 updater 产物已签名
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         shell: bash
+        env:
+          # 与两个构建步骤使用同一个版本判断；不要用 GITHUB_REF_NAME（dispatch
+          # 时它是启动分支名），否则稳定版发布可能漏查 rpm 签名。
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           case "${{ matrix.target }}" in
             *apple-darwin) candidates=("$bundle/macos/codeg.app.tar.gz.sig") ;;
-            x86_64-unknown-linux-gnu) candidates=("$bundle"/appimage/*.AppImage.sig) ;;
+            x86_64-unknown-linux-gnu)
+              candidates=("$bundle"/appimage/*.AppImage.sig "$bundle"/deb/*.deb.sig)
+              # 预发布不构建 rpm（与上方 --bundles 判断保持一致）。
+              if [ "$PRERELEASE" != "true" ]; then
+                candidates+=("$bundle"/rpm/*.rpm.sig)
+              fi
+              ;;
             *windows*) candidates=("$bundle"/nsis/*-setup.exe.sig) ;;
             *) echo "::error::未知桌面目标：${{ matrix.target }}"; exit 1 ;;
           esac

@@ -75,14 +75,18 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # 交互输入，不回显
   updater 资产）：
   - macOS：`codeg_{x64,aarch64}.app.tar.gz`；
   - Windows：`codeg_<version>_{x64,arm64}-setup.exe`；
-  - Linux x64：`codeg_<version>_amd64.AppImage`。
+  - Linux x64：`codeg_<version>_amd64.AppImage`、`codeg_<version>_amd64.deb`、
+    `codeg-<version>-1.x86_64.rpm`，三种安装包各签出同名 `.sig`（清单的
+    `linux-x86_64-deb` / `linux-x86_64-rpm` 键取自后两份签名；缺键时 deb/rpm
+    安装版会回退到 AppImage 并安装失败）。
   （`createUpdaterArtifacts` 为 bool true 时 tauri-cli 直接签原包；
   `.AppImage.tar.gz` / `.nsis.zip` 包装只在 `"v1Compatible"` 模式下产出。）
 - 服务器：`codeg-server-{linux,darwin}-{x64,arm64}.tar.gz` 与
   `codeg-server-windows-{x64,arm64}.zip` + 同名 `.sig`。
 - `latest.json`：由独立 job `generate-updater-manifest` 在 `build-tauri` 与
   `build-server` 全部成功、且所有 `.sig` 已上传到 draft release 之后统一
-  生成并上传；平台键固定 10 个；清单内各平台 URL 指向当前 tag（不是
+  生成并上传；平台键稳定版 12 个、预发布 11 个（预发布不产 rpm，无
+  `linux-x86_64-rpm` 键）；清单内各平台 URL 指向当前 tag（不是
   `latest`）。`publish-release` 以该 job 成功为前置，缺任一桌面 updater 包
   或服务器包的 `.sig` 都会让 draft 不发布。
 
