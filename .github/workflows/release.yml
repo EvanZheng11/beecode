@@ -89,7 +89,7 @@ jobs:
           fi
           git cat-file -e "$SOURCE_REF^{commit}"
           printf 'source_ref=%s\ntag=%s\nprerelease=%s\n' "$SOURCE_REF" "$TAG" "$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "源码：$SOURCE_REF；标签：${TAG:-无，仅构建 Artifacts}；预发布：$PRERELEASE"
+          echo "源码：${SOURCE_REF}；标签：${TAG:-无，仅构建 Artifacts}；预发布：${PRERELEASE}"
           echo "本版本起桌面与服务器均发布 minisign 签名与 latest.json；旧签名密钥版本需手动安装一次；beta（预发布）不经 releases/latest 分发。macOS 使用自签名代码签名证书，computer-use 双向验签保留，未经 Apple 公证，首次打开可能出现 Gatekeeper 提示。SHA256 仅用于完整性校验，不是身份认证签名。"
 
       - id: release
@@ -242,7 +242,7 @@ jobs:
             prerelease=true
           fi
           printf 'version=%s\nprerelease=%s\n' "$version" "$prerelease" >> "$GITHUB_OUTPUT"
-          echo "构建版本：$version；预发布：$prerelease"
+          echo "构建版本：${version}；预发布：${prerelease}"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
