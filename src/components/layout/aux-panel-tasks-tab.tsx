@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ChevronRight,
+  Funnel,
   ListTodo,
   Plus,
   Search,
@@ -15,7 +16,10 @@ import {
   type BoardColumnId,
 } from "@/components/tasks/board-columns"
 import { mergeQueueRanks } from "@/components/tasks/task-acceptance"
+import { ConversationBoardCard } from "@/components/tasks/conversation-board-card"
+import { projectBoardConversations } from "@/components/tasks/folder-board-conversations"
 import { TaskCard } from "@/components/tasks/task-card"
+import { useOpenConversation } from "@/components/tasks/use-open-conversation"
 import { searchTerms, taskMatchesSearch } from "@/components/tasks/task-search"
 import { useTaskDialogs } from "@/components/tasks/use-task-dialogs"
 import { Button } from "@/components/ui/button"
@@ -25,12 +29,21 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
-import { useTasksBoardFilter } from "@/lib/tasks-board-filter-storage"
+import {
+  saveTasksBoardFilter,
+  useTasksBoardFilter,
+} from "@/lib/tasks-board-filter-storage"
 import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -66,23 +79,33 @@ const SECTION_TONE: Record<BoardColumnId, string> = {
 }
 
 /**
- * 右侧面板的任务页签：列出所有项目未归档的任务，按分区纵向堆叠。
+ * 右侧面板的任务页签：只看当前文件夹——项目根目录下已有的任务，加上还没有
+ * 关联任务的普通会话（纯前端投影，不新建任务记录）。两者按同一套看板分区纵向
+ * 堆叠，已关联任务的会话不会重复出现。
  *
- * 卡片能力与看板一致：编辑器、详情抽屉，以及验收 / 重启 / 跟进对话框都来自
- * Tasks 页面同一个 `useTaskDialogs`。留在完整页上的，是需要更大空间的那些操作：
- * 拖拽卡片、列表视图、文件夹选择器，以及看板设置（点一下即可打开，不带过滤）。
+ * 任务卡片能力与看板一致：编辑器、详情抽屉，以及验收 / 重启 / 跟进对话框都来自
+ * Tasks 页面同一个 `useTaskDialogs`。普通会话卡只打开会话本身，不调用任何任务
+ * 更新/删除接口。留在完整页上的，是需要更大空间的那些操作：拖拽卡片、列表视图。
  *
  * 分区按任务的真实状态划分：「以后处理」的 review / failed 仍归入等你处理分区；
  * 完整看板则把它们归到已完成——那个覆盖规则属于看板，不改变状态本身，也不改变
- * 右侧面板的分组。
+ * 右侧面板的分组。归档 / 已取消开关直接在本页签的筛选按钮里操作，与完整页共用
+ * 同一份持久化设置。
  */
 export function TasksAuxTab() {
   const t = useTranslations("Tasks")
   const tAux = useTranslations("Folder.auxPanel")
   const { tasks, loading, refetch } = useTasksView()
-  const projectFolderId = useActiveProjectFolderId()
+  // 当前目录所属的项目根：任务行的 folder_id 就记在这里（在 worktree 里跑的任务
+  // 也记在项目根），按它严格过滤既覆盖当前 worktree 的任务，也不混入别的项目。
+  const folderId = useActiveProjectFolderId()
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
+  // 普通会话则严格按「当前目录」取：worktree 标签页里只看这个 worktree 的会话，
+  // 不把同项目其它 worktree 的会话混进来。
+  const conversationFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
   const { setRoute } = useWorkbenchRoute()
+  const openConversation = useOpenConversation()
 
   const folderNames = useMemo(() => {
     const map = new Map<number, string>()
@@ -90,8 +113,8 @@ export function TasksAuxTab() {
     return map
   }, [allFolders])
 
-  // 只跟随看板的「显示已取消」开关；「显示归档」只属于完整页——右侧面板
-  // 永远只列未归档任务。
+  // 与完整看板共用同一份开关（跨窗口实时同步），所以这里直接切换归档筛选
+  // 就等同于完整页的「显示归档」。
   const boardFilter = useTasksBoardFilter()
   const [searchInput, setSearchInput] = useState("")
   const terms = useMemo(() => searchTerms(searchInput), [searchInput])
@@ -110,12 +133,18 @@ export function TasksAuxTab() {
     return () => window.clearInterval(id)
   }, [])
 
-  // 全项目范围：面板列出所有项目的未归档任务，每张卡片按自己所属的项目名
-  // 参与搜索和展示。
+  // 当前文件夹范围：没有当前文件夹时列表为空（页签本身也只在这种时候隐藏）。
+  const currentTasks = useMemo(
+    () =>
+      folderId == null
+        ? []
+        : tasks.filter((task) => task.folder_id === folderId),
+    [tasks, folderId]
+  )
   const columns = useMemo(
     () =>
       groupTasksByColumn(
-        tasks.filter((task) =>
+        currentTasks.filter((task) =>
           taskMatchesSearch(
             task,
             terms,
@@ -123,12 +152,32 @@ export function TasksAuxTab() {
           )
         ),
         boardFilter.showCanceled,
-        // 归档任务只出现在完整页，这里固定隐藏（不看 boardFilter.showArchived）。
-        false,
+        boardFilter.showArchived,
         // 按真实状态分区（以后处理的 review / failed 仍在等你处理）。
         true
       ),
-    [tasks, terms, folderNames, boardFilter]
+    [currentTasks, terms, folderNames, boardFilter]
+  )
+  // 未关联任务的普通会话：用全量任务做去重，避免已归档任务的会话又冒出来。
+  const conversationColumns = useMemo(
+    () =>
+      projectBoardConversations({
+        conversations,
+        tasks,
+        folderId: conversationFolderId ?? folderId,
+        showCanceled: boardFilter.showCanceled,
+        terms,
+        folderNames,
+      }),
+    [
+      conversations,
+      tasks,
+      conversationFolderId,
+      folderId,
+      boardFilter.showCanceled,
+      terms,
+      folderNames,
+    ]
   )
   // Over ALL tasks: the merge queue is the project's, and a narrowed view must
   // not renumber it (the board computes it the same way).
@@ -138,14 +187,14 @@ export function TasksAuxTab() {
     tasks,
     refetch,
     folderNames,
-    defaultFolderId: projectFolderId,
+    defaultFolderId: folderId,
   })
 
-  // 完整页与这里同范围：不按项目过滤，打开就是全部文件夹。
+  // 完整页与这里同范围：打开就是当前文件夹的看板。
   const openBoard = useCallback(() => {
-    requestTasksFocus({ folderId: null })
+    requestTasksFocus({ folderId })
     setRoute("tasks")
-  }, [setRoute])
+  }, [folderId, setRoute])
 
   const toggleSection = useCallback((column: BoardColumnId) => {
     setCollapsed((prev) => {
@@ -157,9 +206,14 @@ export function TasksAuxTab() {
   }, [])
 
   const shownSections = SECTION_ORDER.filter(
-    (column) => columns[column].length > 0
+    (column) =>
+      columns[column].length > 0 || conversationColumns[column].length > 0
   )
-  const hasAnyTask = tasks.length > 0
+  const conversationTotal = SECTION_ORDER.reduce(
+    (total, column) => total + conversationColumns[column].length,
+    0
+  )
+  const hasAnyTask = currentTasks.length > 0 || conversationTotal > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -196,6 +250,51 @@ export function TasksAuxTab() {
             </InputGroupAddon>
           ) : null}
         </InputGroup>
+        {/* 归档 / 已取消筛选：直接在当前看板上操作，写入与完整页共用的设置。 */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                GIT_TOOLBAR_ICON_BUTTON_CLASS,
+                (boardFilter.showArchived || !boardFilter.showCanceled) &&
+                  "text-primary"
+              )}
+              title={t("filter")}
+              aria-label={t("filter")}
+            >
+              <Funnel className="size-3.5" aria-hidden />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-52 gap-0.5 rounded-xl p-1.5">
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
+              <Checkbox
+                checked={boardFilter.showArchived}
+                onCheckedChange={(v) =>
+                  saveTasksBoardFilter({
+                    ...boardFilter,
+                    showArchived: v === true,
+                  })
+                }
+              />
+              {t("showArchived")}
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
+              <Checkbox
+                checked={boardFilter.showCanceled}
+                onCheckedChange={(v) =>
+                  saveTasksBoardFilter({
+                    ...boardFilter,
+                    showCanceled: v === true,
+                  })
+                }
+              />
+              {t("showCanceled")}
+            </label>
+          </PopoverContent>
+        </Popover>
         <Button
           type="button"
           variant="ghost"
@@ -304,7 +403,7 @@ export function TasksAuxTab() {
                           : "bg-muted/70 font-medium text-muted-foreground"
                       )}
                     >
-                      {sectionTasks.length}
+                      {sectionTasks.length + conversationColumns[column].length}
                     </span>
                   </button>
                   {open ? (
@@ -313,12 +412,22 @@ export function TasksAuxTab() {
                         <TaskCard
                           key={task.id}
                           task={task}
-                          // 分区里混着多个项目，每张卡都要说明自己属于哪个项目。
                           folderName={folderNames.get(task.folder_id) ?? null}
                           now={now}
                           mergeQueueRank={queueRanks.get(task.id)}
                           onOpen={() => openDetail(task.id)}
                           {...handlersFor(task)}
+                        />
+                      ))}
+                      {conversationColumns[column].map((conversation) => (
+                        <ConversationBoardCard
+                          key={`conversation-${conversation.id}`}
+                          conversation={conversation}
+                          folderName={
+                            folderNames.get(conversation.folder_id) ?? null
+                          }
+                          now={now}
+                          onOpen={() => openConversation(conversation)}
                         />
                       ))}
                     </div>
