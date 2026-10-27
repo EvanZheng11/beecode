@@ -25,6 +25,21 @@ const dir = (
   hasChildren = false
 ): DirectoryEntry => ({ name, path, hasChildren })
 
+// `newFolder.pathPlaceholder` / `newFolder.pathHint` 由集成人员合并进 10 个
+// locale；测试先在本文件补齐，否则 next-intl 会回退成 key。
+const enWithPathHint = {
+  ...enMessages,
+  DirectoryBrowser: {
+    ...enMessages.DirectoryBrowser,
+    newFolder: {
+      ...enMessages.DirectoryBrowser.newFolder,
+      pathPlaceholder: "Folder name or path",
+      pathHint:
+        "Relative paths like a/b/c and absolute paths are created level by level; `..` is not allowed.",
+    },
+  },
+}
+
 // What the transport rejects with: the backend's serialized AppCommandError.
 const appError = (
   code: string,
@@ -64,7 +79,7 @@ function Harness({
   return (
     <NextIntlClientProvider
       locale={locale}
-      messages={locale === "ar" ? arMessages : enMessages}
+      messages={locale === "ar" ? arMessages : enWithPathHint}
     >
       <Dialog
         open={open}
@@ -190,6 +205,55 @@ describe("DirectoryBrowser — new folder", () => {
 
     expect(api.createDirectory).toHaveBeenCalledWith("/home/me", "site")
     await screen.findByDisplayValue("/home/me/site")
+  })
+
+  it("creates a nested relative path and moves into the leaf", async () => {
+    render(<Harness />)
+    const input = await openNewFolderRow()
+    fireEvent.change(input, { target: { value: "apps/site/web" } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" })
+    })
+
+    // 多级相对路径原样交给后端，由后端逐级创建。
+    expect(api.createDirectory).toHaveBeenCalledWith(
+      "/home/me",
+      "apps/site/web"
+    )
+    await screen.findByDisplayValue("/home/me/apps/site/web")
+    expect(latestValue).toBe("/home/me/apps/site/web")
+  })
+
+  it("creates an absolute path and moves into it", async () => {
+    api.createDirectory.mockImplementation(
+      async (parent: string, name: string) => {
+        // 绝对路径不落在 parent 下，模拟后端直接返回输入本身。
+        void parent
+        listing.set(name, [])
+        return name
+      }
+    )
+    render(<Harness />)
+    const input = await openNewFolderRow()
+    fireEvent.change(input, { target: { value: "/srv/apps/site" } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" })
+    })
+
+    expect(api.createDirectory).toHaveBeenCalledWith(
+      "/home/me",
+      "/srv/apps/site"
+    )
+    await screen.findByDisplayValue("/srv/apps/site")
+    expect(latestValue).toBe("/srv/apps/site")
+  })
+
+  it("hints that multi-level and absolute paths are accepted", async () => {
+    render(<Harness />)
+    const input = await openNewFolderRow()
+
+    expect(input).toHaveAttribute("placeholder", "Folder name or path")
+    expect(screen.getByText(/Relative paths like a\/b\/c/)).toBeInTheDocument()
   })
 
   it("cancels on Escape without closing the dialog or creating anything", async () => {
@@ -338,19 +402,19 @@ describe("DirectoryBrowser — new folder", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 
-  it("shows the backend's reason for an invalid name", async () => {
+  it("shows the backend's reason for an invalid path", async () => {
     api.createDirectory.mockRejectedValue(
-      appError("invalid_input", "newFolder.errors.separator")
+      appError("invalid_input", "newFolder.errors.reservedName", { name: ".." })
     )
     render(<Harness />)
     const input = await openNewFolderRow()
-    fireEvent.change(input, { target: { value: "a/b" } })
+    fireEvent.change(input, { target: { value: "../outside" } })
     await act(async () => {
       fireEvent.keyDown(input, { key: "Enter" })
     })
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "A folder name can't contain / or \\."
+      "“..” can't be used as a folder name."
     )
   })
 
