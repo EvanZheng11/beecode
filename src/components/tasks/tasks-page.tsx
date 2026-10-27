@@ -122,6 +122,7 @@ export function TasksPage() {
   const t = useTranslations("Tasks")
   const { tasks, loading, refetch, viewMode } = useTasksView()
   const folders = useAppWorkspaceStore((s) => s.folders)
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const activeFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
   const activeProjectFolderId = useActiveProjectFolderId()
@@ -129,11 +130,31 @@ export function TasksPage() {
     () => folders.filter((f) => f.parent_id == null && f.kind === "regular"),
     [folders]
   )
+  // 名字取 allFolders 而不是侧边栏的已打开列表：被保留的项目筛选可能指向一个
+  // 已关闭的项目根（见 selectableFolders），它的任务卡和搜索仍需要项目名。
   const folderNames = useMemo(() => {
     const map = new Map<number, string>()
-    for (const f of folders) map.set(f.id, f.alias ?? f.name)
+    for (const f of allFolders) map.set(f.id, f.alias ?? f.name)
     return map
-  }, [folders])
+  }, [allFolders])
+  // 活动会话所在的工作树可能挂在一个已关闭的项目根下：右侧面板仍按该项目展示
+  // 任务与会话，所以打开完整看板时这个根要留在选择器里，否则筛选会退化成「全部
+  // 文件夹」——会话消失、任务扩到所有项目。只补活动工作树所属的这一个根，其它
+  // 关闭项目不进入选择器；项目本身已不存在（allFolders 里没有）时才回退全部。
+  const selectableFolders = useMemo(() => {
+    if (
+      activeProjectFolderId == null ||
+      projectFolders.some((f) => f.id === activeProjectFolderId)
+    ) {
+      return projectFolders
+    }
+    const activeProject = allFolders.find((f) => f.id === activeProjectFolderId)
+    return activeProject != null &&
+      activeProject.parent_id == null &&
+      activeProject.kind === "regular"
+      ? [...projectFolders, activeProject]
+      : projectFolders
+  }, [activeProjectFolderId, allFolders, projectFolders])
 
   // Opened from the aux panel's task tab: start on the project it was showing.
   // Read in the initializer so the first paint is already filtered; cleared
@@ -151,7 +172,7 @@ export function TasksPage() {
   // it still scoped to the folder that vanished.
   const folderFilter =
     selectedFolderFilter != null &&
-    !projectFolders.some((f) => f.id === selectedFolderFilter)
+    !selectableFolders.some((f) => f.id === selectedFolderFilter)
       ? null
       : selectedFolderFilter
   // 与右侧面板共用同一份实时开关：任何一侧切换归档/已取消，另一侧立刻跟上。
@@ -556,7 +577,7 @@ export function TasksPage() {
               with a folder glyph like the Automations filter pill: "全部文件夹"
               alone doesn't say WHICH axis the pill filters. */}
           <FolderSelect
-            folders={projectFolders}
+            folders={selectableFolders}
             value={folderFilter}
             onChange={setFolderFilter}
             allLabel={t("allFolders")}

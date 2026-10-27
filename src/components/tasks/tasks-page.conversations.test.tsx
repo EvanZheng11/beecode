@@ -20,6 +20,17 @@ const scene = vi.hoisted(() => ({
     { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
     { id: 5, name: "wt_login", alias: null, parent_id: 1, kind: "regular" },
   ],
+  // 侧边栏当前打开的文件夹：项目根 1 关闭后只剩它的工作树 5。
+  openFolders: [
+    {
+      id: 1,
+      name: "codeg",
+      alias: null,
+      parent_id: null as number | null,
+      kind: "regular",
+    },
+    { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
+  ],
 }))
 const view = {
   tasks: [] as WorkTask[],
@@ -40,10 +51,9 @@ vi.mock("@/stores/app-workspace-store", () => {
       return scene.activeFolderId
     },
     allFolders: scene.allFolders,
-    folders: [
-      { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
-      { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
-    ],
+    get folders() {
+      return scene.openFolders
+    },
     get conversations() {
       return scene.conversations
     },
@@ -153,6 +163,10 @@ beforeEach(() => {
   localStorage.clear()
   scene.openTab.mockClear()
   scene.activeFolderId = 1
+  scene.openFolders = [
+    { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
+    { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
+  ]
   view.viewMode = "board"
   view.tasks = [
     task({ id: 1, folder_id: 1, title: "Fix the login timeout" }),
@@ -215,6 +229,42 @@ describe("TasksPage conversations", () => {
     mount()
     expect(screen.getByText("Worktree session")).toBeInTheDocument()
     expect(screen.queryByText("Project root session")).not.toBeInTheDocument()
+  })
+
+  it("keeps the project of the active worktree while its root is closed", () => {
+    // 项目根 1 已关闭，只剩它的工作树 5 还开着，且 5 是活动目录：从右侧面板打开
+    // 完整看板时仍锁在项目 1（任务按项目根、会话按活动工作树），不回退全部。
+    scene.openFolders = [
+      { id: 5, name: "wt_login", alias: null, parent_id: 1, kind: "regular" },
+    ]
+    scene.activeFolderId = 5
+    scene.conversations = [
+      conversation({ id: 201, folder_id: 5, title: "Worktree session" }),
+      conversation({ id: 202, folder_id: 2, title: "Other project session" }),
+    ]
+    requestTasksFocus({ folderId: 1 })
+    mount()
+    expect(screen.getByTestId("folder-select")).toHaveAttribute(
+      "data-value",
+      "1"
+    )
+    expect(screen.getByText("Fix the login timeout")).toBeInTheDocument()
+    expect(screen.getByText("Worktree session")).toBeInTheDocument()
+    // 别的项目的任务与会话仍不出现。
+    expect(screen.queryByText("Other project session")).not.toBeInTheDocument()
+  })
+
+  it("falls back to every folder when the project no longer exists", () => {
+    // 活动工作树所属的项目根本身已经不在工作区：保持原有的回退语义。
+    scene.activeFolderId = 5
+    scene.conversations = []
+    requestTasksFocus({ folderId: 99 })
+    mount()
+    expect(screen.getByTestId("folder-select")).toHaveAttribute(
+      "data-value",
+      "null"
+    )
+    expect(screen.getByText("Fix the login timeout")).toBeInTheDocument()
   })
 
   it("opens a conversation's original tab without task actions", async () => {

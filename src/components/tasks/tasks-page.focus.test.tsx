@@ -26,6 +26,10 @@ vi.mock("@/stores/app-workspace-store", () => {
       { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
       { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
     ],
+    allFolders: [
+      { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
+      { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
+    ],
   }
   const useStore = (selector: (s: typeof state) => unknown) => selector(state)
   // tab-store reads a fresh snapshot at module load and subscribes to it.
