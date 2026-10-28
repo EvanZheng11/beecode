@@ -8,11 +8,14 @@ BeeCode 是一个多智能体编码工作台，把 Claude Code、Codex CLI、Ope
 - 在对话中查看思考过程、工具调用、文件差异和运行结果，处理权限请求与智能体提问。
 - 通过任务看板安排工作，用独立 Git worktree 隔离改动，在完成后审查、提交或合并。
 - 在同一工作区使用文件浏览器、编辑器、终端和浏览器，也可以在画布上并排摆放会话与文件。
-- 管理智能体、模型、MCP 服务和技能，为不同任务选择合适的工具。
+- 管理智能体、模型、MCP 服务和技能，支持技能批量导入，以及 [ZCode](../agents/zcode.md) 技能包的创建、编辑与安装。
+- 接入 [MiniMax Code](../agents/minimax-code.md) 等 ACP 智能体，按任务选择工具。
 - 连接远程工作区，通过 Web 服务从浏览器访问，或接入聊天渠道跟进任务。
 - 导出会话、查看用量统计，备份与恢复工作台数据。
 
 ## 使用方式
+
+桌面安装包与服务器包见 [BeeCode Releases](https://github.com/EvanZheng11/beecode/releases/latest)。服务器安装脚本：[Linux / macOS](https://github.com/EvanZheng11/beecode/blob/main/install.sh)、[Windows](https://github.com/EvanZheng11/beecode/blob/main/install.ps1)。
 
 BeeCode 支持 macOS、Windows 和 Linux 桌面端，也支持独立服务器与 Docker 部署。桌面端适合本机开发；服务器模式可以让其他设备通过浏览器连接工作区。需要系统权限的桌面功能以实际运行平台为准。
 

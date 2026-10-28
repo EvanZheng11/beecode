@@ -1,5 +1,9 @@
 # BeeCode
 
+يدعم BeeCode أيضًا [MiniMax Code](../agents/minimax-code.md) وإدارة حزم مهارات [ZCode](../agents/zcode.md)، مع الاستيراد الدفعي للمهارات.
+
+[تنزيل BeeCode](https://github.com/EvanZheng11/beecode/releases/latest) · [تثبيت الخادم](https://github.com/EvanZheng11/beecode/blob/main/install.sh)
+
 BeeCode هو مساحة عمل للبرمجة باستخدام وكلاء مثل Claude Code وCodex CLI وOpenCode وGemini CLI وPi.
 
 يمكنك استيراد المحادثات السابقة والبحث فيها ومتابعتها، ومراجعة استدعاءات الأدوات وتغييرات الشيفرة، وتنظيم المهام في مساحات Git worktree منفصلة. تتضمن مساحة العمل محررًا وطرفية ومتصفحًا ولوحة حرة، مع إعدادات للنماذج وخدمات MCP والمهارات.

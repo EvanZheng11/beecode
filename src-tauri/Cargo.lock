@@ -628,7 +628,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beecode"
-version = "0.41.1"
+version = "0.41.2"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol",
@@ -665,6 +665,7 @@ dependencies = [
  "include_dir",
  "insta",
  "javascriptcore-rs",
+ "jsonc-parser",
  "junction",
  "keyring",
  "kill_tree",
@@ -3472,6 +3473,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecded084f9b9a718d39668a42657c32253663d1f6afb3fbb9134f0305f73f48"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

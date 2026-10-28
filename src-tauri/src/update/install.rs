@@ -2839,4 +2839,93 @@ mod tests {
                 )))
         );
     }
+
+    /// macOS 权限依赖固定的证书和签名标识。服务器包沿用本仓自签名证书，
+    /// helper 在编译时配置双向验签条件；四个程序须在归档前签名并严格验签。
+    #[test]
+    fn the_release_signs_the_macos_server_with_its_certificate_before_archiving_it() {
+        fn run_of(step: &serde_yaml::Value) -> &str {
+            step["run"].as_str().unwrap_or_default()
+        }
+        let workflow: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../.github/workflows/release.yml"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let steps = workflow["jobs"]["build-server"]["steps"]
+            .as_sequence()
+            .expect("the build-server job's steps");
+
+        let sign = steps
+            .iter()
+            .position(|step| {
+                let run = run_of(step);
+                run.contains("codesign") && run.contains("--sign \"$APPLE_SIGNING_IDENTITY\"")
+            })
+            .expect("build-server signs nothing with the Developer ID");
+        let script = run_of(&steps[sign]);
+        assert_eq!(
+            steps[sign]["if"].as_str(),
+            Some("contains(matrix.target, 'apple-darwin')"),
+            "the signing step runs for the macOS targets"
+        );
+        for flag in ["--options runtime", "--digest-algorithm=sha256"] {
+            assert!(script.contains(flag), "签名缺少 {flag}");
+        }
+        for (bin, identifier, requirement) in [
+            (
+                "codeg-server",
+                "codeg-server",
+                "CODEG_COMPUTER_PEER_REQUIREMENT",
+            ),
+            ("codeg-mcp", "codeg-mcp", "req_mcp"),
+            ("codeg-cli", "codeg-cli", "req_cli"),
+            (
+                "codeg-computer-helper",
+                "app.codeg.computer-helper",
+                "CODEG_COMPUTER_HELPER_REQUIREMENT",
+            ),
+        ] {
+            assert!(
+                script.contains(&format!(
+                    "codesign \"${{sign[@]}}\" -i {identifier} \"$dir/{bin}\""
+                )),
+                "{bin} 缺少固定签名标识"
+            );
+            assert!(
+                script.contains(&format!(
+                    "codesign --verify --strict -R=\"${requirement}\" \"$dir/{bin}\""
+                )),
+                "{bin} 缺少严格验签"
+            );
+        }
+        let requirements = steps
+            .iter()
+            .position(|step| {
+                let run = run_of(step);
+                run.contains("CODEG_COMPUTER_HELPER_REQUIREMENT=")
+                    && run.contains("CODEG_COMPUTER_PEER_REQUIREMENT=")
+            })
+            .expect("缺少 helper 双向验签编译条件");
+        let build = steps
+            .iter()
+            .position(|step| run_of(step).contains("cargo build --release --bin codeg-server"))
+            .expect("缺少服务器编译步骤");
+        assert!(
+            requirements < build && build < sign,
+            "双向验签条件须在编译前配置"
+        );
+
+        let archive = steps
+            .iter()
+            .position(|step| run_of(step).contains("tar czf ${{ matrix.artifact }}.tar.gz"))
+            .expect("build-server makes no .tar.gz release archive");
+        assert!(
+            sign < archive,
+            "the executables are signed after they went into the archive"
+        );
+    }
 }

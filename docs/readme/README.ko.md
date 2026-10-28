@@ -1,5 +1,9 @@
 # BeeCode
 
+[MiniMax Code](../agents/minimax-code.md), [ZCode](../agents/zcode.md) 스킬 패키지 관리와 스킬 일괄 가져오기도 지원합니다.
+
+[BeeCode 다운로드](https://github.com/EvanZheng11/beecode/releases/latest) · [서버 설치](https://github.com/EvanZheng11/beecode/blob/main/install.sh)
+
 BeeCode는 Claude Code, Codex CLI, OpenCode, Gemini CLI, Pi 등을 한 작업 공간에서 사용하는 다중 에이전트 코딩 도구입니다.
 
 기존 대화를 가져와 검색하고 이어서 작업할 수 있습니다. 도구 호출과 코드 변경을 확인하고, 작업 보드와 독립된 Git worktree로 업무를 나눌 수 있습니다. 편집기, 터미널, 브라우저, 캔버스를 제공하며 모델, MCP 서비스, 스킬도 관리합니다.

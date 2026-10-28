@@ -21,6 +21,7 @@ import { useActivityRender } from "../activity-context"
 import { ActivityRow } from "../activity-row"
 import { DetailBox } from "../detail-box"
 import { useDisclosure } from "../disclosure-store"
+import { useFoldRow } from "../fold-back"
 import { ProgressLine } from "../progress-line"
 import { RailIcon } from "../rail-icon"
 import { StatusFigure, useStatusText } from "../step-visuals"
@@ -71,6 +72,7 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
     defaultOpen: false,
     force: failed,
   })
+  const foldRow = useFoldRow()
   const elapsed = useLiveElapsed(step.key, live)
   const clock =
     elapsed !== null && elapsed >= LIVE_CLOCK_AFTER_MS
@@ -144,14 +146,14 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
     [m.adaptedToolCalls]
   )
 
-  // pi 原生 subagent 的最终答复已经在它自己的时间线里（最后一条消息就是要看的
-  // 结果；parallel / chain 的外层文本还只是各子任务的汇总）。有详情时不再在底部
-  // 重复渲染一份，折叠状态的摘要行改读子任务最后说的那句话。
+  // Pi 结果已在子任务时间线展示；后台生命周期只展示结果，不回退到标记文本。
   const output = m.piSubagent
     ? null
-    : (m.backgroundLifecycle?.result ??
-      (m.taskOutcome || m.isLiveBackgroundLaunch ? null : step.part.output) ??
-      null)
+    : m.backgroundLifecycle
+      ? m.backgroundLifecycle.result
+      : ((m.taskOutcome || m.isLiveBackgroundLaunch
+          ? null
+          : step.part.output) ?? null)
   const latest = live
     ? (m.grokProgressLine ??
       (m.hasTimeline
@@ -273,7 +275,18 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
                 </div>
               </DetailBox>
             ) : null}
-            {childModel ? renderNested(childModel, m.isRunning) : null}
+            {childModel
+              ? renderNested(childModel, m.isRunning, {
+                  working: m.isRunning,
+                  what:
+                    childModel.summary.steps > 0
+                      ? tActivity("header.steps", {
+                          count: childModel.summary.steps,
+                        })
+                      : tActivity("kind.agent"),
+                  onFold: (control) => foldRow(control, () => setOpen(false)),
+                })
+              : null}
             {launchCaveat ? (
               <p className="text-xs text-muted-foreground">
                 {t("agentCodexLaunchOnly")}
@@ -355,7 +368,7 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
           )}
           {m.agentId ? (
             <span
-              className="shrink-0 font-mono text-[0.8125rem] text-muted-foreground"
+              className="shrink-0 font-mono text-[0.8125rem] text-activity-secondary"
               dir="ltr"
             >
               #{shortAgentId(m.agentId)}
@@ -365,7 +378,7 @@ export const AgentRow = memo(function AgentRow({ step }: { step: ToolStep }) {
             <span
               ref={promptRef}
               dir="auto"
-              className="min-w-0 flex-1 truncate text-muted-foreground"
+              className="min-w-0 flex-1 truncate text-activity-secondary"
             >
               {promptLine}
             </span>

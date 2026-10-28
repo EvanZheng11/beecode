@@ -112,6 +112,11 @@ test("客户端公钥副本一致且为可解析的 Ed25519 公钥", async () =>
   assert.equal(key.length, 42)
   assert.equal(key.subarray(0, 2).toString(), "Ed")
   assert.equal(
+    key.readBigUInt64LE(2).toString(16).toUpperCase(),
+    "AC1565DF083F5E9A"
+  )
+  assert.equal(config.plugins.updater.requireSignedVersion, true)
+  assert.equal(
     createPublicKey({
       key: Buffer.concat([
         Buffer.from("302a300506032b6570032100", "hex"),
@@ -236,7 +241,7 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json"))
   const cargo = read("src-tauri/Cargo.toml")
   assert.equal(pkg.name, "beecode")
-  assert.equal(pkg.version, "0.41.1")
+  assert.equal(pkg.version, "0.41.2")
   assert.equal(config.version, pkg.version)
   assert.equal(config.productName, "BeeCode")
   assert.equal(config.mainBinaryName, "codeg")
@@ -249,12 +254,15 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   assert.deepEqual(config.plugins.updater.endpoints, [
     "https://github.com/EvanZheng11/beecode/releases/latest/download/latest.json",
   ])
-  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.41\.1"/)
+  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.41\.2"/)
   assert.match(
     read("src-tauri/Cargo.lock"),
-    /name = "beecode"\nversion = "0\.41\.1"/
+    /name = "beecode"\nversion = "0\.41\.2"/
   )
   assert.match(cargo, /default-run = "codeg"/)
+  const lock = read("src-tauri/Cargo.lock")
+  assert.equal([...lock.matchAll(/^name = "beecode"$/gm)].length, 1)
+  assert.doesNotMatch(lock, /^name = "codeg"$/m)
   assert.match(cargo, /\[lib\][\s\S]*?name = "codeg_lib"/)
   assert.match(cargo, /tauri-plugin-opener = \{ version = "2"/)
   assert.match(cargo, /webview2-com = \{ version = "0\.39"/)
@@ -724,6 +732,8 @@ test("旧标签重跑的上传脚本和最终资产清单均检出 workflow SHA"
 })
 
 for (const [version, count] of [
+  ["0.41.2", 40],
+  ["0.41.2-beta.1", 37],
   ["0.41.1", 40],
   ["0.41.1-beta.1", 37],
 ]) {
@@ -747,7 +757,11 @@ for (const [version, count] of [
   })
 
   test(`发布内容一致时按资产 ID 下载并放行：${version}`, async () => {
-    const { assets, contents } = publishFixture(version)
+    const { assets, contents, manifest } = publishFixture(version)
+    assert.equal(
+      Object.keys(manifest.platforms).length,
+      version.includes("-") ? 11 : 12
+    )
     const downloads = []
     const writes = await runPublish(
       assets,

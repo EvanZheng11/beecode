@@ -1,5 +1,9 @@
 # BeeCode
 
+也支援 [MiniMax Code](../agents/minimax-code.md)、[ZCode](../agents/zcode.md) 技能套件管理與技能批次匯入。
+
+[下載 BeeCode](https://github.com/EvanZheng11/beecode/releases/latest) · [伺服器安裝腳本](https://github.com/EvanZheng11/beecode/blob/main/install.sh)
+
 BeeCode 是多智慧體程式開發工作台，將 Claude Code、Codex CLI、OpenCode、Gemini CLI、Pi 等工具整合在同一個工作區。
 
 你可以匯入並搜尋既有對話、繼續工作階段、查看工具呼叫與程式差異，也可以透過任務看板與獨立 Git worktree 安排協作。在工作區中可使用檔案編輯器、終端機、瀏覽器和畫布，並管理模型、MCP 服務與技能。

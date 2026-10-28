@@ -12,6 +12,7 @@ import {
   Crosshair,
   Eye,
   Globe,
+  FolderSync,
   ListChevronsDownUp,
   ListChevronsUpDown,
   LayoutTemplate,
@@ -36,6 +37,7 @@ import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
@@ -287,6 +289,11 @@ export function Sidebar() {
   const [allExpanded, setAllExpanded] = useState(true)
   // 会话标题搜索词：受控输入，即时过滤下面的列表（不落盘，关掉侧栏/重开就清空）。
   const [titleQuery, setTitleQuery] = useState("")
+  // Not a list preference like the rows above: it decides which conversation
+  // and file tabs the window shows. Its store owns the stored value (hydrated
+  // with the tab set, see `TabProvider`), so this reads it live.
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const setTabsFollowFolder = useFolderTabsStore((s) => s.setEnabled)
   // What the user picked, persisted as picked. The list gets it PRUNED to tags
   // that still exist (below) — but only once the tag list has loaded: matching
   // needs nothing but ids, so a persisted filter applies from the first paint
@@ -519,15 +526,7 @@ export function Sidebar() {
                 clips overflow-x — 48 would start truncating longer localized
                 section names. */}
             <DropdownMenuContent align="end" className="min-w-56">
-              {/* Four groups: what the list shows → which nav rows exist → how
-                  the list is sorted → how its sections are stacked. The first
-                  two are hover-opened submenus rather than inline blocks: they
-                  are set-and-forget on/off inventories, six checkboxes between
-                  them, and inlining all six left a fifteen-row menu with Sort
-                  by / Section order — the two settings people actually come
-                  back for — stranded at the bottom of it. Those two stay
-                  inline: a pair of radios and a ranked list read wrong behind
-                  another hop, and the order rows need this menu's width.
+              {/* 列表、导航、文件夹标签、排序及分组设置。
                   Every option keeps the menu open on select (the default is to
                   close): this menu is a settings panel, not a command list, and
                   flipping two of them used to cost two round trips through the
@@ -593,6 +592,16 @@ export function Sidebar() {
                   })}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={tabsFollowFolder}
+                onCheckedChange={setTabsFollowFolder}
+                onSelect={(event) => event.preventDefault()}
+                title={t("tabsFollowFolderHint")}
+              >
+                <FolderSync className="text-muted-foreground" />
+                {t("tabsFollowFolder")}
+              </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("sortBy")}</DropdownMenuLabel>
               <DropdownMenuRadioGroup

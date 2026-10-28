@@ -1,5 +1,9 @@
 # BeeCode
 
+BeeCode prend aussi en charge [MiniMax Code](../agents/minimax-code.md), la gestion des compétences de [ZCode](../agents/zcode.md) et leur importation par lots.
+
+[Télécharger BeeCode](https://github.com/EvanZheng11/beecode/releases/latest) · [Installer le serveur](https://github.com/EvanZheng11/beecode/blob/main/install.sh)
+
 BeeCode est un espace de travail pour coder avec plusieurs agents, dont Claude Code, Codex CLI, OpenCode, Gemini CLI et Pi.
 
 Vous pouvez importer, rechercher et reprendre des conversations, examiner les appels d’outils et les différences de code, puis répartir les tâches dans des worktrees Git séparés. L’espace comprend un éditeur, un terminal, un navigateur et un canevas, ainsi que la gestion des modèles, des services MCP et des compétences.
