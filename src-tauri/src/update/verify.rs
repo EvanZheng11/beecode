@@ -23,7 +23,7 @@ use crate::update::version::trim_v_prefix;
 /// Tauri-format minisign public key — copied verbatim from
 /// `tauri.conf.json` `plugins.updater.pubkey`. Base64 of the two-line
 /// `minisign.pub` file (`untrusted comment:` + `RW…` key line).
-const TAURI_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDNTA0MTZGNzIxOENCM0YKUldRL3l4aHliMEZRakVvYjZTakc2Q0pITTA3VXpvRG5zUlZYQ096ZDZNNXEveXF0a0U2WHBHdGwK";
+const TAURI_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDMTU2NURGMDgzRjVFOUEKUldTYVhqOEkzMlVWckJpRDFkRXBNZjdTc2lYMlZwcnpOcURKUjhBZkZsa0JXN3FsZHdXQzlFSisK";
 
 /// Decode an outer base64 wrapper into the inner minisign text file.
 fn unwrap_base64(b64: &str) -> Result<String, String> {

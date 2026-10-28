@@ -128,21 +128,21 @@ jobs:
             ].join("\n\n");
             let release;
 
-            try {
-              const existing = await github.rest.repos.getReleaseByTag({
-                owner,
-                repo,
-                tag,
-              });
+            // 草稿可能不被按 tag 查询返回；分页列出全部发布，拒绝歧义。
+            const matches = (await github.paginate(github.rest.repos.listReleases, {
+              owner, repo, per_page: 100,
+            })).filter((release) => release.tag_name === tag);
+            if (matches.some((release) => !release.draft)) {
+              core.setFailed(`标签 ${tag} 的发布已不是草稿，拒绝覆盖。`);
+              return;
+            }
+            if (matches.length > 1) {
+              core.setFailed(`标签 ${tag} 存在多个草稿：${matches.map((r) => r.id).join(", ")}，请先人工处理。`);
+              return;
+            }
 
-              if (!existing.data.draft) {
-                core.setFailed(
-                  `标签 ${tag} 的发布已不是草稿，拒绝覆盖。`,
-                );
-                return;
-              }
-
-              release = existing.data;
+            if (matches.length === 1) {
+              release = matches[0];
               if (
                 release.prerelease !== prerelease ||
                 release.name !== releaseName ||
@@ -159,11 +159,7 @@ jobs:
                 release = updated.data;
               }
               core.info(`复用已有草稿发布 #${release.id}`);
-            } catch (error) {
-              if (error.status !== 404) {
-                throw error;
-              }
-
+            } else {
               const created = await github.rest.repos.createRelease({
                 owner,
                 repo,
@@ -829,6 +825,7 @@ jobs:
               ls -la "$(dirname "$sig")" || true
               exit 1
             fi
+            node -e 'const fs = require("node:fs"); const decode = text => Buffer.from(Buffer.from(text.trim(), "base64").toString("utf8").split(/\r?\n/)[1], "base64"); const key = decode(JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).plugins.updater.pubkey); const sig = decode(fs.readFileSync(process.argv[1], "utf8")); if (key.length !== 42 || sig.length !== 74 || !key.subarray(2, 10).equals(sig.subarray(2, 10))) throw new Error("签名 key ID 与客户端公钥不匹配，拒绝发布"); console.log("签名 key ID 与客户端公钥一致")' "$sig"
             echo "已生成 updater 签名：$sig"
           done
 
@@ -1000,15 +997,25 @@ jobs:
           path: src-tauri/target/${{ matrix.target }}/release/bundle/installers
           if-no-files-found: error
 
+      - name: 检出当前发布上传脚本
+        if: needs.create-draft-release.outputs.release_id != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/upload-release-assets.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 上传桌面校验文件到草稿发布
         if: needs.create-draft-release.outputs.release_id != ''
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-draft-release.outputs.tag }}
+          RELEASE_ID: ${{ needs.create-draft-release.outputs.release_id }}
           TARGET: ${{ matrix.target }}
         run: |
-          gh release upload "$TAG" "src-tauri/target/$TARGET/release/bundle/installers/SHA256SUMS-$TARGET.txt" --clobber
+          node .release-tools/scripts/upload-release-assets.mjs "src-tauri/target/$TARGET/release/bundle/installers/SHA256SUMS-$TARGET.txt"
 
       # cleanup 在 always() 阶段还原 keychain 搜索列表并删除本 job 的临时
       # keychain；失败路径也要执行。清理本身不需要 secrets。
@@ -1331,6 +1338,7 @@ jobs:
           test -s "$file"
           pnpm tauri signer sign --app-version "${RELEASE_TAG#v}" "$file"
           test -s "$file.sig"
+          node -e 'const fs = require("node:fs"); const decode = text => Buffer.from(Buffer.from(text.trim(), "base64").toString("utf8").split(/\r?\n/)[1], "base64"); const key = decode(JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).plugins.updater.pubkey); const sig = decode(fs.readFileSync(process.argv[1], "utf8")); if (key.length !== 42 || sig.length !== 74 || !key.subarray(2, 10).equals(sig.subarray(2, 10))) throw new Error("签名 key ID 与客户端公钥不匹配，拒绝发布"); console.log("签名 key ID 与客户端公钥一致")' "$file.sig"
           node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const text = Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64").toString("utf8"); const line = text.split(/\r?\n/).find(line => line.startsWith("trusted comment: ")); if (!line?.split("\t").includes(`version:${version}`)) throw new Error(`签名可信注释缺少 version:${version}`); console.log(line)' "$file.sig" "${RELEASE_TAG#v}"
           echo "已生成签名：$file.sig（version:${RELEASE_TAG#v}）"
 
@@ -1358,6 +1366,8 @@ jobs:
           $version = $env:RELEASE_TAG.Substring(1)
           pnpm tauri signer sign --app-version $version $file
           if (-not (Test-Path -LiteralPath "$file.sig" -PathType Leaf)) { throw "缺少签名文件 $file.sig" }
+          node -e 'const fs = require("node:fs"); const decode = text => Buffer.from(Buffer.from(text.trim(), "base64").toString("utf8").split(/\r?\n/)[1], "base64"); const key = decode(JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).plugins.updater.pubkey); const sig = decode(fs.readFileSync(process.argv[1], "utf8")); if (key.length !== 42 || sig.length !== 74 || !key.subarray(2, 10).equals(sig.subarray(2, 10))) throw new Error("签名 key ID 与客户端公钥不匹配，拒绝发布"); console.log("签名 key ID 与客户端公钥一致")' "$file.sig"
+          if ($LASTEXITCODE -ne 0) { throw "签名 key ID 与客户端公钥校验失败" }
           node -e 'const fs = require("node:fs"); const [file, version] = process.argv.slice(1); const text = Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64").toString("utf8"); const line = text.split(/\r?\n/).find(line => line.startsWith("trusted comment: ")); if (!line?.split("\t").includes(`version:${version}`)) throw new Error(`签名可信注释缺少 version:${version}`); console.log(line)' "$file.sig" $version
           if ($LASTEXITCODE -ne 0) { throw "签名可信注释版本校验失败" }
           Write-Host "已生成签名：$file.sig（version:$version）"
@@ -1375,25 +1385,34 @@ jobs:
             dist/${{ matrix.artifact }}.zip.sig
           if-no-files-found: error
 
+      - name: 检出当前发布上传脚本
+        if: needs.create-draft-release.outputs.release_id != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: scripts/upload-release-assets.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Upload to release (Unix)
         if: runner.os != 'Windows' && needs.create-draft-release.outputs.release_id != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-draft-release.outputs.tag }}
+          RELEASE_ID: ${{ needs.create-draft-release.outputs.release_id }}
         run: |
-          gh release upload "$TAG" \
+          node .release-tools/scripts/upload-release-assets.mjs \
             "dist/${{ matrix.artifact }}.tar.gz" \
             "dist/${{ matrix.artifact }}.tar.gz.sha256" \
-            "dist/${{ matrix.artifact }}.tar.gz.sig" \
-            --clobber
+            "dist/${{ matrix.artifact }}.tar.gz.sig"
 
       - name: Upload to release (Windows)
         if: runner.os == 'Windows' && needs.create-draft-release.outputs.release_id != ''
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-draft-release.outputs.tag }}
-        run: gh release upload "$env:TAG" "dist/${{ matrix.artifact }}.zip" "dist/${{ matrix.artifact }}.zip.sha256" "dist/${{ matrix.artifact }}.zip.sig" --clobber
+          RELEASE_ID: ${{ needs.create-draft-release.outputs.release_id }}
+        run: node .release-tools/scripts/upload-release-assets.mjs "dist/${{ matrix.artifact }}.zip" "dist/${{ matrix.artifact }}.zip.sha256" "dist/${{ matrix.artifact }}.zip.sig"
 
       # cleanup 在 always() 阶段还原 keychain 搜索列表并删除本 job 的临时
       # keychain；失败路径也要执行。
@@ -1436,6 +1455,9 @@ jobs:
           rm -rf "$work"
           mkdir -p "$work/sigs"
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$work/release.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" | jq 'add' > "$work/assets.json"
+          jq --slurpfile assets "$work/assets.json" '.assets = $assets[0]' "$work/release.json" > "$work/complete.json"
+          mv "$work/complete.json" "$work/release.json"
           # 草稿资产不走浏览器直链：用 assets API（Accept: application/octet-stream）
           # 把全部 .sig 下载到 sigs 目录，供生成器读取签名文本。
           while IFS=$'\t' read -r asset_id asset_name; do
@@ -1454,8 +1476,8 @@ jobs:
             --sig-dir "$work/sigs" \
             --version "$version" \
             --out "$work/latest.json"
-          gh release upload "$TAG" "$work/latest.json" --clobber
-          echo "latest.json 已上传到 $TAG"
+          node scripts/upload-release-assets.mjs "$work/latest.json"
+          echo "latest.json 已上传到发布 #$RELEASE_ID"
 
   build-docker:
     needs:
@@ -1581,16 +1603,73 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Publish draft release
         uses: actions/github-script@v7
         env:
           RELEASE_ID: ${{ needs.create-draft-release.outputs.release_id }}
+          TAG: ${{ needs.create-draft-release.outputs.tag }}
           PRERELEASE: ${{ needs.create-draft-release.outputs.prerelease }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const releaseId = Number(process.env.RELEASE_ID);
             const prerelease = process.env.PRERELEASE === "true";
+
+            const { expectedAssets, expectedReleaseAssets } = await import(
+              `${process.env.GITHUB_WORKSPACE}/scripts/generate-updater-manifest.mjs`
+            );
+            const { data: release } = await github.rest.repos.getRelease({
+              owner, repo, release_id: releaseId,
+            });
+            if (!release.draft || release.tag_name !== process.env.TAG) {
+              throw new Error(`发布 #${releaseId} 的草稿状态或标签不匹配，拒绝发布。`);
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner, repo, release_id: releaseId, per_page: 100,
+            });
+            core.info(`发布 #${releaseId} 实际资产 ${assets.length} 个：${assets.map((a) => a.name).join(", ")}`);
+            const version = process.env.TAG.slice(1);
+            for (const name of expectedReleaseAssets(version)) {
+              const matches = assets.filter((asset) => asset.name === name);
+              if (matches.length !== 1 || matches[0].state !== "uploaded" || matches[0].size <= 0) {
+                throw new Error(`发布 #${releaseId} 缺少有效资产：${name}`);
+              }
+            }
+
+            // 按当前发布的资产 ID 读取内容，避免草稿下载 URL 或同标签发布歧义。
+            const expected = expectedAssets(version);
+            const contents = new Map();
+            for (const name of ["latest.json", ...new Set(Object.values(expected).map((name) => `${name}.sig`))]) {
+              const asset = assets.find((asset) => asset.name === name);
+              const { data } = await github.rest.repos.getReleaseAsset({
+                owner, repo, asset_id: asset.id,
+                headers: { accept: "application/octet-stream" },
+              });
+              contents.set(name, Buffer.from(data).toString("utf8").trim());
+            }
+            const manifest = JSON.parse(contents.get("latest.json"));
+            if (manifest?.version !== version) {
+              throw new Error("latest.json 版本与发布标签不一致，拒绝发布。");
+            }
+            if (JSON.stringify(Object.keys(manifest.platforms ?? {}).sort()) !== JSON.stringify(Object.keys(expected).sort())) {
+              throw new Error("latest.json 平台集合与预期不一致，拒绝发布。");
+            }
+            for (const [platform, name] of Object.entries(expected)) {
+              const entry = manifest.platforms[platform];
+              const url = `https://github.com/${owner}/${repo}/releases/download/${process.env.TAG}/${name}`;
+              if (entry?.url !== url) {
+                throw new Error(`latest.json 平台 ${platform} 的 URL 与当前仓库、标签或资产不一致。`);
+              }
+              const signature = contents.get(`${name}.sig`);
+              if (!signature || entry.signature !== signature) {
+                throw new Error(`latest.json 平台 ${platform} 的签名与 ${name}.sig 内容不一致。`);
+              }
+            }
+            core.info(`latest.json 内容一致性检查通过：版本 ${version}，平台 ${Object.keys(expected).length} 个；未执行密码学验签。`);
 
             await github.rest.repos.updateRelease({
               owner,

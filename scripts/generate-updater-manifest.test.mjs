@@ -21,7 +21,14 @@ const SCRIPT = fileURLToPath(
   new URL("./generate-updater-manifest.mjs", import.meta.url)
 )
 const VERSION = "0.35.1-beta.1"
-const SERVER = "beecode-server-linux-x64.tar.gz"
+const SERVERS = [
+  "beecode-server-linux-x64.tar.gz",
+  "beecode-server-linux-arm64.tar.gz",
+  "beecode-server-darwin-x64.tar.gz",
+  "beecode-server-darwin-arm64.tar.gz",
+  "beecode-server-windows-x64.zip",
+]
+const SERVER = SERVERS[0]
 // 生成器只做 base64 形态门禁；密码学校验在客户端（桌面插件 / verify.rs）。
 const SIG = Buffer.from("untrusted comment: signature\nAAAA\n").toString(
   "base64"
@@ -33,7 +40,7 @@ function fixture() {
   mkdirSync(sigDir)
   const names = [...new Set(Object.values(expectedAssets(VERSION)))]
   const assets = []
-  for (const name of [...names, SERVER]) {
+  for (const name of [...names, ...SERVERS]) {
     assets.push({
       name,
       browser_download_url: `https://example.test/releases/download/untagged-draft/${name}`,
@@ -209,7 +216,7 @@ function literalRelease(t, version, { omit = [], omitSig = [] } = {}) {
     browser_download_url: `https://example.test/releases/download/untagged-draft/${name}`,
   })
   const assets = []
-  for (const name of literalNames(version)) {
+  for (const name of [...literalNames(version), ...SERVERS]) {
     if (has(omit, name)) continue
     writeFileSync(join(sigDir, `${name}.sig`), signatureOf(name))
     assets.push(asset(name))
@@ -502,9 +509,29 @@ function runSignGate({ prerelease, files }) {
       RELEASE_TARGETS.x64,
       "release/bundle"
     )
+    const config = readFileSync(
+      new URL("../src-tauri/tauri.conf.json", import.meta.url),
+      "utf8"
+    )
+    mkdirSync(join(dir, "src-tauri"), { recursive: true })
+    writeFileSync(join(dir, "src-tauri/tauri.conf.json"), config)
+    const key = Buffer.from(
+      Buffer.from(JSON.parse(config).plugins.updater.pubkey, "base64")
+        .toString("utf8")
+        .split(/\r?\n/)[1],
+      "base64"
+    )
+    const signature = Buffer.alloc(74)
+    signature.write("ED")
+    key.copy(signature, 2, 2, 10)
     for (const file of files) {
       mkdirSync(join(bundle, dirname(file)), { recursive: true })
-      writeFileSync(join(bundle, file), "sig")
+      writeFileSync(
+        join(bundle, file),
+        Buffer.from(
+          `untrusted comment: 测试\n${signature.toString("base64")}\n`
+        ).toString("base64")
+      )
     }
     const script = stepBy("name", "校验 updater 产物已签名").run.replaceAll(
       "${{ matrix.target }}",
@@ -576,22 +603,7 @@ test("BeeCode 0.41.1 模拟发布覆盖 12 平台键和五服务器签名门禁"
   const version = "0.41.1"
   const { releaseJson, sigDir } = literalRelease(t, version)
   const release = JSON.parse(readFileSync(releaseJson, "utf8"))
-  const names = [
-    "linux-x64.tar.gz",
-    "linux-arm64.tar.gz",
-    "darwin-x64.tar.gz",
-    "darwin-arm64.tar.gz",
-    "windows-x64.zip",
-  ].map((suffix) => `beecode-server-${suffix}`)
-  for (const name of names) {
-    for (const asset of [name, `${name}.sig`]) {
-      release.assets.push({
-        name: asset,
-        browser_download_url: `https://github.com/EvanZheng11/beecode/releases/download/v${version}/${asset}`,
-      })
-    }
-    writeFileSync(join(sigDir, `${name}.sig`), signatureOf(name))
-  }
+  const names = SERVERS
   for (const asset of release.assets) {
     asset.browser_download_url = `https://github.com/EvanZheng11/beecode/releases/download/v${version}/${asset.name}`
   }
@@ -620,6 +632,40 @@ test("BeeCode 0.41.1 模拟发布覆盖 12 平台键和五服务器签名门禁"
     assert.throws(
       () => buildManifest({ releaseJson, sigDir, version }),
       /服务器包缺少签名资产/
+    )
+  }
+})
+
+test("服务器包全部缺失时拒绝生成 latest.json", (t) => {
+  const { dir, releaseJson, sigDir, assets } = fixture()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(
+    releaseJson,
+    JSON.stringify({
+      assets: assets.filter(
+        (asset) => !asset.name.startsWith("beecode-server-")
+      ),
+    })
+  )
+  assert.throws(
+    () => buildManifest({ releaseJson, sigDir, version: VERSION }),
+    /缺少服务器包/
+  )
+})
+
+test("五个服务器包任意缺一个都拒绝生成", (t) => {
+  const { dir, releaseJson, sigDir, assets } = fixture()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  for (const name of SERVERS) {
+    writeFileSync(
+      releaseJson,
+      JSON.stringify({
+        assets: assets.filter((asset) => asset.name !== name),
+      })
+    )
+    assert.throws(
+      () => buildManifest({ releaseJson, sigDir, version: VERSION }),
+      /缺少服务器包/
     )
   }
 })

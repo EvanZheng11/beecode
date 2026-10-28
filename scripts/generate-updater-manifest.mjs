@@ -58,6 +58,41 @@ export function expectedAssets(version) {
   return assets
 }
 
+export const SERVER_PACKAGES = [
+  "beecode-server-linux-x64.tar.gz",
+  "beecode-server-linux-arm64.tar.gz",
+  "beecode-server-darwin-x64.tar.gz",
+  "beecode-server-darwin-arm64.tar.gz",
+  "beecode-server-windows-x64.zip",
+]
+
+// 发布前以同一份命名规则核验真实上传资产，包含六桌面的完整性清单。
+export function expectedReleaseAssets(version) {
+  const desktop = [...new Set(Object.values(expectedAssets(version)))]
+  const targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+  ]
+  return [
+    ...desktop.flatMap((name) => [name, `${name}.sig`]),
+    `beecode_${version}_arm64.deb`,
+    ...(!version.includes("-") ? [`beecode_${version}_aarch64.rpm`] : []),
+    `beecode_${version}_x64.dmg`,
+    `beecode_${version}_aarch64.dmg`,
+    ...SERVER_PACKAGES.flatMap((name) => [
+      name,
+      `${name}.sig`,
+      `${name}.sha256`,
+    ]),
+    ...targets.map((target) => `SHA256SUMS-${target}.txt`),
+    "latest.json",
+  ]
+}
+
 function fail(message) {
   throw new Error(message)
 }
@@ -112,14 +147,21 @@ export function buildManifest({
     }
   }
 
-  // 服务器自更新同样下载 `<包名>.sig`（install.rs），缺签名的包不得发布。
-  for (const name of assets.keys()) {
-    const isServerPackage =
-      name.startsWith("beecode-server-") &&
-      (name.endsWith(".tar.gz") || name.endsWith(".zip"))
-    if (isServerPackage && !assets.has(`${name}.sig`)) {
+  // 五个服务器目标必须齐全；不能只校验恰好存在的包。
+  const serverPackages = new Set([
+    ...SERVER_PACKAGES,
+    ...[...assets.keys()].filter(
+      (name) =>
+        name.startsWith("beecode-server-") &&
+        (name.endsWith(".tar.gz") || name.endsWith(".zip"))
+    ),
+  ])
+  for (const name of serverPackages) {
+    if (!assets.has(name)) fail(`缺少服务器包：${name}`)
+    if (!assets.has(`${name}.sig`)) {
       fail(`服务器包缺少签名资产：${name}.sig`)
     }
+    readSignature(sigDir, name)
   }
 
   return {
