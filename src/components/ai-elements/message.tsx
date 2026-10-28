@@ -630,7 +630,12 @@ export const MessageResponse = memo(
     (prevProps.mode ?? FINISHED_MODE) === (nextProps.mode ?? FINISHED_MODE) &&
     (prevProps.parseIncompleteMarkdown ??
       FINISHED_PARSE_INCOMPLETE_MARKDOWN) ===
-      (nextProps.parseIncompleteMarkdown ?? FINISHED_PARSE_INCOMPLETE_MARKDOWN)
+      (nextProps.parseIncompleteMarkdown ??
+        FINISHED_PARSE_INCOMPLETE_MARKDOWN) &&
+    // The prose being written wraps its new characters to fade them in
+    // (`animated` + `isAnimating`); done, it drops the wrapping.
+    (prevProps.isAnimating ?? false) === (nextProps.isAnimating ?? false) &&
+    prevProps.animated === nextProps.animated
 )
 
 MessageResponse.displayName = "MessageResponse"

@@ -2618,6 +2618,124 @@
   color: var(--ansi-cyan) !important;
 }
 
+/* ===== Chat motion (the conversation view; `@/lib/chat-motion`) =====
+   What arrives while the reader is watching eases in; what is already there
+   when they arrive stays put. Every rule here plays only without a
+   reduced-motion preference, and the "Chat animations" switch below drops all
+   of it. Script-driven motion (`ReplyMotion`, the reply's layout as it changes
+   shape) asks the same two questions before it plays. */
+
+/* Something that arrives fades in, rising a few pixels: a reply's stats row
+   and its changed files as it finishes (`useArrivedOnCompletion`).
+   `chat-enter-late` waits a beat first — the pending reply, after the
+   message that was just sent — and `chat-enter-rise` comes from further
+   down: that message. Each is put on its element once, as it mounts, so the
+   virtual list bringing an element back never replays it; filled backwards
+   only, so once played it leaves nothing applied to the element. */
+@keyframes chat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes chat-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-enter {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .chat-enter-late {
+    animation: chat-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) 120ms backwards;
+  }
+
+  .chat-enter-rise {
+    animation: chat-enter-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+}
+
+/* A slot that slides open as its content arrives and shut as it goes
+   (`SlideSlot`): a running command's last lines, the running turn's figures
+   over the composer. On a grid track like the reply's own fold, so nothing
+   reads layout; its content is clipped only while it moves. With no
+   animation the slot opens and shuts at once. */
+.slide-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.slide-slot > * {
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .slide-slot[data-motion] > * {
+    overflow: hidden;
+  }
+
+  .slide-slot[data-motion="enter"] {
+    animation: slide-slot-open 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .slide-slot[data-motion="leave"] {
+    animation: slide-slot-close 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+}
+
+@keyframes slide-slot-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes slide-slot-close {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* The prose being written (`MarkdownText`), as it arrives: every character
+   Streamdown wraps for it (`[data-sd-animate]`) fades in, a chunk's
+   characters one after another (`--sd-delay`), and a block that is not words
+   — a code block, a table, a rule, an image — fades in whole. A transition
+   from the starting style rather than Streamdown's keyframes, which its next
+   render re-times to nothing mid-fade; and a starting style applies only to
+   an element's first style, so what was already written when the fade was
+   armed (`data-word-fade`, a frame after the text mounted) stays as it is. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-word-fade] [data-sd-animate],
+  [data-word-fade]
+    :is(
+      [data-streamdown="code-block"],
+      [data-streamdown="table-wrapper"],
+      hr,
+      img
+    ) {
+    transition: opacity 320ms ease-out var(--sd-delay, 0ms);
+  }
+
+  @starting-style {
+    [data-word-fade] [data-sd-animate],
+    [data-word-fade]
+      :is(
+        [data-streamdown="code-block"],
+        [data-streamdown="table-wrapper"],
+        hr,
+        img
+      ) {
+      opacity: 0;
+    }
+  }
+}
+
 /* A reply's Markdown spaces its blocks with `space-y-4` and drops the outer
    margins of the first and last (`MessageResponse`, Streamdown's own root).
    While the text streams, Streamdown wraps each block in a `display:

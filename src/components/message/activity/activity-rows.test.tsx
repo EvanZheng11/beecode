@@ -950,7 +950,14 @@ describe("the foot of a live reply", () => {
     // The answer has started under the steps: the ring at their foot still
     // turns, and nothing turns under the answer.
     renderUi(<Round parts={parts(LIVE, true, ["r1"])} completed={false} />)
-    expect(screen.getByText("Done.")).toBeTruthy()
+    // Still being written: a character at a time, each its own span.
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Done." &&
+          ![...element.children].some((child) => child.textContent === "Done.")
+      )
+    ).toBeTruthy()
     expect(footOf()).toHaveAttribute("data-marker", "working")
     expect(footOf().querySelector(".animate-spin")).toBeTruthy()
     expect(working()).toHaveLength(1)

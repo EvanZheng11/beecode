@@ -129,6 +129,9 @@ export const ActivityHeader = memo(function ActivityHeader({
   return (
     <div
       ref={ref}
+      // The same capsule in every shape of the reply, the pending one's too
+      // (`ReplyMotion`).
+      data-motion-key="header"
       // `activity-capsule`: filled like the user's message bubble, over a
       // workspace background image too — translucent there, with its ring —
       // and a step deeper in the same colour when pointed at (globals.css).

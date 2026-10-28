@@ -807,16 +807,28 @@ describe("activity timeline: failures", () => {
 
 describe("activity timeline: a live turn", () => {
   it("shows the running command with the tail of its output", () => {
-    renderTurn(
-      <CurrentRound
-        parts={partsOf(MOCKUP_LIVE_TURN, true, ["l3"])}
-        completed={false}
-      />
-    )
-    expect(screen.getByText("Working")).toBeTruthy()
+    vi.useFakeTimers()
+    try {
+      renderTurn(
+        <CurrentRound
+          parts={partsOf(MOCKUP_LIVE_TURN, true, ["l3"])}
+          completed={false}
+        />
+      )
+      expect(screen.getByText("Working")).toBeTruthy()
+      const row = rowOf("Run web unit tests")
+      expect(row.getAttribute("data-status")).toBe("running")
+      // The tail opens under the row once the command has run a moment: one
+      // that is over at once never opens a gap under its row.
+      expect(within(row).queryByText(/lib\/state\.test\.ts/)).toBeNull()
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+      expect(within(row).getByText(/lib\/state\.test\.ts/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
     const row = rowOf("Run web unit tests")
-    expect(row.getAttribute("data-status")).toBe("running")
-    expect(within(row).getByText(/lib\/state\.test\.ts/)).toBeTruthy()
     // Its label shimmers while it runs, as a running row's verb does.
     expect(within(row).getByText("Command")).toHaveClass("activity-shimmer")
     expect(within(row).getByText("Run web unit tests")).toHaveClass(

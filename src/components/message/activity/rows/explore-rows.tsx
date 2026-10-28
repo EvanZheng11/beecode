@@ -138,6 +138,7 @@ export const ExploreGroupRow = memo(function ExploreGroupRow({
   return (
     <ActivityRow
       stepKey={groupKey}
+      motionKey={`group:${groupKey}`}
       status={status}
       marker={
         <RailIcon
@@ -173,6 +174,7 @@ export const ExploreGroupRow = memo(function ExploreGroupRow({
           foot={{
             working: going,
             after: "dot",
+            motionScope: groupKey,
             what: summary,
             onFold: () => setOpen(false),
           }}

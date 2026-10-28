@@ -43,6 +43,14 @@ const COMPLETED_PARTS: AdaptedContentPart[] = [
 // between tests. Render tests take a fresh copy.
 const freshCompletedParts = (): AdaptedContentPart[] => [...COMPLETED_PARTS]
 
+/**
+ * Prose the agent is still writing fades in a character at a time, each its
+ * own span while it does: it is found by the element that holds all of it.
+ */
+const writing = (text: string) => (_: string, element: Element | null) =>
+  element?.textContent === text &&
+  ![...element.children].some((child) => child.textContent === text)
+
 /** The header's fold control: its label. */
 const toggle = () =>
   screen.getByRole("button", { name: /^(Activity|Working)$/ })
@@ -221,7 +229,9 @@ describe("CompletedTurnContent", () => {
       screen.getByText("I found the relevant component.")
     ).toBeInTheDocument()
     expect(screen.getByText("src/app.tsx")).toBeInTheDocument()
-    expect(screen.getByText("The fix is complete.")).toBeInTheDocument()
+    expect(
+      screen.getByText(writing("The fix is complete."))
+    ).toBeInTheDocument()
   })
 
   it("does not fold the round when the reply finishes", () => {
@@ -287,6 +297,30 @@ describe("CompletedTurnContent", () => {
     )
     expect(toggle()).toHaveAttribute("aria-expanded", "true")
     expect(foldBody()).not.toHaveClass("reply-fold-enter")
+  })
+
+  it("unfolds nothing when the failure link opens a reply that cannot fold", () => {
+    // Stopped on a failed call, with no answer: its steps are on show already,
+    // so opening it moves nothing.
+    const parts: AdaptedContentPart[] = [
+      {
+        type: "tool-call",
+        toolCallId: "call-fail",
+        toolName: "Bash",
+        input: '{"command":"pnpm build"}',
+        state: "output-error",
+        errorText: "exit 1",
+      },
+    ]
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0)
+    renderWithIntl(
+      <CompletedTurnContent parts={parts} durationMs={9000} completed />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    expect(
+      document.querySelector('[data-slot="collapsible-content"]')
+    ).not.toHaveClass("reply-fold-enter")
+    vi.restoreAllMocks()
   })
 
   it("folds a hand-opened reply when a send bumps the epoch", () => {
@@ -426,9 +460,9 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     // the words being written.
     expect(marks(container)).toHaveLength(1)
     const mark = onRail(container)!
-    expect(screen.getAllByText("The fix is complete.")).toHaveLength(1)
+    expect(screen.getAllByText(writing("The fix is complete."))).toHaveLength(1)
     const prose = screen
-      .getByText("The fix is complete.")
+      .getByText(writing("The fix is complete."))
       .closest(".activity-timeline > li")
     expect(prose).toHaveAttribute("data-marker", "dot")
     expect(prose!.nextElementSibling).toBe(mark)
@@ -442,7 +476,7 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
       <CompletedTurnContent parts={parts} durationMs={null} completed={false} />
     )
     const prose = screen
-      .getByText("The fix is complete.")
+      .getByText(writing("The fix is complete."))
       .closest(".activity-timeline > li")!
 
     view.rerender(
@@ -466,7 +500,7 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
 
     expect(
       screen
-        .getByText("The fix is complete.")
+        .getByText(writing("The fix is complete."))
         .closest(".activity-timeline > li")
     ).toBe(prose)
     const next = screen
@@ -489,7 +523,7 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
 
     fireEvent.click(toggle())
 
-    const prose = screen.getByText("The fix is complete.")
+    const prose = screen.getByText(writing("The fix is complete."))
     expect(prose.closest(".activity-timeline")).toBeNull()
     expect(marks(container)).toHaveLength(1)
     expect(onRail(container)).toBeNull()
@@ -546,7 +580,7 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     expect(marks(view.container)).toHaveLength(1)
     expect(
       screen
-        .getByText("Let me look.")
+        .getByText(writing("Let me look."))
         .compareDocumentPosition(marks(view.container)[0]!) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
@@ -630,9 +664,13 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
       )
       fireEvent.click(toggle())
       expect(container.querySelector(".activity-timeline > li")).not.toBeNull()
-      expect(screen.getAllByText("The fix is complete.")).toHaveLength(1)
+      expect(screen.getAllByText(writing("The fix is complete."))).toHaveLength(
+        1
+      )
       expect(
-        screen.getByText("The fix is complete.").closest(".activity-timeline")
+        screen
+          .getByText(writing("The fix is complete."))
+          .closest(".activity-timeline")
       ).toBeNull()
     } finally {
       spy.mockRestore()
