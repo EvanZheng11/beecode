@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "forge": "Repository-Panel",
       "canvas": "Unendlicher Canvas",
+      "openBrowser": "Browser öffnen",
       "folderGroup": {
         "newGroup": "Neue Gruppe",
         "newGroupTitle": "Neue Ordnergruppe",
@@ -4097,6 +4098,9 @@
         "singleSelect": "Einfach",
         "multiSelect": "Mehrfach",
         "skip": "Überspringen",
+        "extend": "Verlängern",
+        "extendTooltip": "Um 10 Minuten verlängern",
+        "extendError": "Verlängern fehlgeschlagen. Bitte erneut versuchen.",
         "next": "Weiter",
         "submit": "Senden",
         "submitError": "Senden fehlgeschlagen. Bitte versuche es erneut.",

@@ -36,8 +36,12 @@ function ConnectionBlockingPromptsImpl({
   agentType,
   itemClassName,
 }: Props) {
-  const { respondPermission, answerQuestion, answerPlanApproval } =
-    useAcpActions()
+  const {
+    respondPermission,
+    answerQuestion,
+    extendQuestion,
+    answerPlanApproval,
+  } = useAcpActions()
 
   const onRespondPermission = useCallback(
     (requestId: string, optionId: string) => {
@@ -49,6 +53,10 @@ function ConnectionBlockingPromptsImpl({
     (questionId: string, answer: QuestionAnswer) =>
       answerQuestion(connectionId, questionId, answer),
     [connectionId, answerQuestion]
+  )
+  const onExtendAskQuestion = useCallback(
+    (questionId: string) => extendQuestion(connectionId, questionId),
+    [connectionId, extendQuestion]
   )
   const onAnswerPlanApproval = useCallback(
     (approvalId: string, answer: PlanApprovalAnswer) =>
@@ -72,6 +80,7 @@ function ConnectionBlockingPromptsImpl({
           <AskQuestionCard
             question={prompts.askQuestion}
             onAnswer={onAnswerAskQuestion}
+            onExtend={onExtendAskQuestion}
           />
         </div>
       )}

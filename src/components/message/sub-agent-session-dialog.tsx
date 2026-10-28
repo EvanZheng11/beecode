@@ -29,7 +29,7 @@
  * 处理该子任务的结果。
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Bell, Check, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -47,6 +47,7 @@ import {
   DrawerTitle,
   SIDE_PANEL_CONTENT_CLASS,
 } from "@/components/ui/drawer"
+import { SidePanelResizeHandle } from "@/components/ui/side-panel-resize"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
@@ -78,6 +79,9 @@ export function SubAgentSessionDialog({
   kickoffTask,
 }: Props) {
   const t = useTranslations("Folder.chat.delegation")
+  // 弹框宽度只在本次打开期间临时生效：每次打开（或换一个子会话）都回到
+  // `SIDE_PANEL_CONTENT_CLASS` 的响应式默认宽度，不做持久化。
+  const panelRef = useRef<HTMLDivElement>(null)
   // The drawer is a state toggle, not a route: without a history entry behind
   // it, the back gesture unloads the whole page instead of closing the panel.
   useHistoryBackDismiss(open, () => onOpenChange(false))
@@ -131,9 +135,15 @@ export function SubAgentSessionDialog({
           height goes away; the width comes from the shared side-panel shape so
           this stacks flush with whatever it opened over. */}
       <DrawerContent
+        ref={panelRef}
         closeButtonClassName="top-2.5 right-3"
         className={SIDE_PANEL_CONTENT_CLASS}
       >
+        <SidePanelResizeHandle
+          panelRef={panelRef}
+          open={open}
+          resetKey={childConversationId}
+        />
         <DrawerTitle className="sr-only">{t("detailTitle")}</DrawerTitle>
         <DrawerDescription className="sr-only">
           {t("detailDescription")}

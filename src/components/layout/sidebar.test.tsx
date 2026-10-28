@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Ref } from "react"
 
 import { Sidebar } from "./sidebar"
@@ -21,9 +21,10 @@ const spies = vi.hoisted(() => ({
   scrollToActive: vi.fn(),
   expandAll: vi.fn(),
   collapseAll: vi.fn(),
-  // 45px 图标栏里的远端动作，测试只验证它们接到既有入口。
+  // 45px 图标栏里的远端/浏览器动作，测试只验证它们接到既有入口。
   openRemote: vi.fn(),
   refreshRemote: vi.fn(() => Promise.resolve()),
+  openBrowserTab: vi.fn(() => "browser:new"),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
   // assert what the sidebar threads down (e.g. showWorktrees / showCompleted).
   listProps: null as {
@@ -36,6 +37,7 @@ const spies = vi.hoisted(() => ({
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
   remoteDesktop: true,
+  browserAvailable: true,
   remoteConnections: [
     { id: 11, name: "prod-box", base_url: "https://prod.example" },
   ],
@@ -103,12 +105,22 @@ vi.mock("@/contexts/workbench-route-context", () => ({
     openConversations: spies.openConversations,
   }),
 }))
+vi.mock("@/contexts/workspace-context", () => ({
+  useOptionalWorkspaceActions: () => ({
+    openBrowserTab: spies.openBrowserTab,
+  }),
+}))
 vi.mock("@/hooks/use-remote-workspace-connections", () => ({
   useRemoteWorkspaceConnections: () => ({
     desktop: mockState.remoteDesktop,
     connections: mockState.remoteConnections,
     refresh: spies.refreshRemote,
     open: spies.openRemote,
+  }),
+}))
+vi.mock("@/lib/browser/use-browser-capabilities", () => ({
+  useBrowserCapabilities: () => ({
+    available: mockState.browserAvailable,
   }),
 }))
 vi.mock("./remote-workspace-manage-dialog", () => ({
@@ -427,11 +439,19 @@ describe("Sidebar — Navigation item visibility", () => {
   })
 })
 
-describe("Sidebar — 45px 图标栏的远端入口", () => {
+describe("Sidebar — 45px 图标栏的远端与浏览器入口", () => {
   beforeEach(() => {
     mockState.remoteDesktop = true
+    mockState.browserAvailable = true
     spies.openRemote.mockClear()
     spies.refreshRemote.mockClear()
+    spies.openBrowserTab.mockClear()
+    spies.openConversations.mockClear()
+  })
+
+  afterEach(() => {
+    mockState.remoteDesktop = true
+    mockState.browserAvailable = true
   })
 
   it("打开远端连接列表，选择已有连接或进入管理", async () => {
@@ -457,11 +477,37 @@ describe("Sidebar — 45px 图标栏的远端入口", () => {
     expect(screen.getByText("REMOTE-MANAGE-DIALOG")).toBeInTheDocument()
   })
 
-  it("非桌面环境隐藏远端入口", () => {
+  it("打开浏览器前先回到会话工作区，保证文件列宿主存在", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    await user.click(screen.getByRole("button", { name: "Open browser" }))
+    expect(spies.openConversations).toHaveBeenCalledTimes(1)
+    expect(spies.openBrowserTab).toHaveBeenCalledWith("about:blank")
+    expect(spies.openConversations.mock.invocationCallOrder[0]).toBeLessThan(
+      spies.openBrowserTab.mock.invocationCallOrder[0]
+    )
+  })
+
+  it("浏览器能力不足时只隐藏浏览器入口，浏览器按钮不会变成死按钮", () => {
+    mockState.browserAvailable = false
+    renderSidebar()
+    expect(
+      screen.queryByRole("button", { name: "Open browser" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Open remote workspace" })
+    ).toBeInTheDocument()
+  })
+
+  it("非桌面环境隐藏远端和浏览器入口", () => {
     mockState.remoteDesktop = false
     renderSidebar()
     expect(
       screen.queryByRole("button", { name: "Open remote workspace" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Open browser" })
     ).not.toBeInTheDocument()
   })
 })

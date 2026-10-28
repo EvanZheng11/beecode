@@ -40,9 +40,8 @@ export const CACHEABLE_PREFIXES = [
 export function serviceWorkerUrl(
   version: string | undefined = process.env.CODEG_APP_VERSION
 ): string {
-  return version
-    ? `${SERVICE_WORKER_PATH}?v=${encodeURIComponent(version)}`
-    : SERVICE_WORKER_PATH
+  // 品牌修订同时更新注册 URL 和缓存版本，避免同版本继续使用旧图标。
+  return `${SERVICE_WORKER_PATH}?v=${encodeURIComponent(version || "unversioned")}-bee1`
 }
 
 /** Whether this environment should have the app service worker (no side effects). */

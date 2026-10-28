@@ -88,6 +88,10 @@ pub enum AcpError {
     /// notification's detail under the localized headline.
     #[error("{0}")]
     AgentRuntimeOutdated(String),
+    /// 提问的等待期限不能延长：提问已结束（已回答 / 已取消 / 被清理）、从来
+    /// 没有期限（原生 agent 提问），或期限已经过去。前端直接展示错误消息。
+    #[error("question deadline cannot be extended: {0}")]
+    QuestionDeadlineNotExtendable(String),
 }
 
 impl AcpError {
@@ -143,6 +147,7 @@ impl AcpError {
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
             Self::AgentAuthRequired(_) => Some("agent_auth_required"),
             Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
+            Self::QuestionDeadlineNotExtendable(_) => Some("question_deadline_not_extendable"),
             Self::Protocol(_) => None,
         }
     }

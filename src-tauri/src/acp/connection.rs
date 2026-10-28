@@ -23137,6 +23137,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: "q-1".to_string(),
                 answer_rx: rx,
+                deadline: None,
             })
         }
 
@@ -41860,6 +41861,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: "q-1".to_string(),
                 answer_rx: rx,
+                deadline: None,
             })
         }
 

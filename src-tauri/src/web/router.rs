@@ -1057,6 +1057,12 @@ pub fn build_router_with_proxy_auth(
             "/acp_answer_question",
             post(handlers::acp::acp_answer_question),
         )
+        // 提问倒计时延长：body 为 `{ question_id }`，返回 JSON 字符串
+        // （新的 RFC3339 UTC 期限）。
+        .route(
+            "/acp/question/extend",
+            post(handlers::acp::acp_extend_question),
+        )
         .route(
             "/acp_answer_plan_approval",
             post(handlers::acp::acp_answer_plan_approval),

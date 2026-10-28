@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   Check,
@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Loader2,
   MessageCircleQuestionMark,
+  Timer,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -17,8 +18,18 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { splitRecommended } from "@/lib/ask-question"
+import {
+  formatQuestionCountdown,
+  questionDeadlineMs,
+} from "@/lib/question-deadline"
 import type {
   PendingQuestionState,
   QuestionAnswer,
@@ -32,6 +43,9 @@ interface AskQuestionCardProps {
   /** Resolves the parked tool call. Returns a promise so the card can show an
    *  in-flight state and surface a retryable error if the round-trip fails. */
   onAnswer: (questionId: string, answer: QuestionAnswer) => void | Promise<void>
+  /** 延长后端等待期限，返回后端确认的新 RFC3339 时间。缺省时不显示延长入口
+   *  （只读历史卡片与恢复提问没有可延长的后端等待者）。 */
+  onExtend?: (questionId: string) => Promise<string>
   /** Read-only/answered view (the in-message record): controls are disabled,
    *  the footer is dropped, and selections are seeded from `initialSelections`
    *  rather than collected. Omit it for the live, interactive card. */
@@ -83,9 +97,28 @@ function isAnswered(s: QState | undefined): boolean {
   return s.chosen.length > 0 || hasOther
 }
 
+/** 让卡片按秒重算剩余时间。只负责驱动文本更新，不使用 aria-live；
+ *  到期后主动停表，避免卡片留在屏幕上时每秒无意义重渲染。 */
+function useDeadlineNow(deadlineMs: number | null, active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  // 剩余时间始终按「期限 - 当前时刻」现算：期限一变（延长、另一窗口同步）
+  // 下一次渲染立刻得到新读数，最多只有一秒的取样延迟。
+  useEffect(() => {
+    if (!active || deadlineMs === null) return
+    const timer = setInterval(() => {
+      const next = Date.now()
+      setNow(next)
+      if (next >= deadlineMs) clearInterval(timer)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [deadlineMs, active])
+  return now
+}
+
 export function AskQuestionCard({
   question,
   onAnswer,
+  onExtend,
   readOnly = false,
   initialSelections,
   title,
@@ -100,8 +133,28 @@ export function AskQuestionCard({
   const [activeId, setActiveId] = useState(() => questions[0]?.id ?? "")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(false)
+  // 延长请求的进行中状态与同步防重入守卫（loading 时按钮也禁用）。
+  const [extending, setExtending] = useState(false)
+  const [extendError, setExtendError] = useState(false)
   // Synchronous guard against a double-submit before `submitting` re-renders.
   const inFlight = useRef(false)
+  // 正在进行中的延长请求（question_id + 代数）：同一张卡重复点击被拦截，
+  // 而换成新问题时旧请求的成功/失败/finally 都不能写新问题的状态。
+  const extendInFlight = useRef<{
+    questionId: string
+    generation: number
+  } | null>(null)
+  // 当前渲染的提问身份。question_id 变化即换题，代数递增使旧请求彻底失效。
+  const questionIdentity = useRef({
+    questionId: question.question_id,
+    generation: 0,
+  })
+  if (questionIdentity.current.questionId !== question.question_id) {
+    questionIdentity.current = {
+      questionId: question.question_id,
+      generation: questionIdentity.current.generation + 1,
+    }
+  }
   // Tracks which question set the above state belongs to. If the card is reused
   // for a different set (a new question_id) without remounting, reset so stale
   // selections never carry over — the component stays correct on its own rather
@@ -138,6 +191,8 @@ export function AskQuestionCard({
     setActiveId(questions[0]?.id ?? "")
     setSubmitting(false)
     setError(false)
+    setExtending(false)
+    setExtendError(false)
     // Collapsed too, and this one is not housekeeping. A replacement set is a
     // NEW blocking request; left collapsed it renders as the same header row
     // the user already dismissed from view — identical title, and an
@@ -230,6 +285,38 @@ export function AskQuestionCard({
   // `pendingAskQuestion`, which unmounts this card — so we intentionally stay
   // disabled rather than flash the controls back on. On failure we re-enable and
   // surface a retryable error instead of swallowing it.
+  const handleExtend = async () => {
+    const { questionId, generation } = questionIdentity.current
+    const inFlightFor = extendInFlight.current
+    if (
+      !onExtend ||
+      (inFlightFor?.questionId === questionId &&
+        inFlightFor.generation === generation)
+    ) {
+      return
+    }
+    extendInFlight.current = { questionId, generation }
+    setExtending(true)
+    setExtendError(false)
+    // 只有发起请求的那个问题仍然在场时才能写卡片状态；A 的失败或 finally
+    // 不能污染已换上的 B，也不能提前解开 B 的进行中状态。
+    const isCurrent = () =>
+      questionIdentity.current.questionId === questionId &&
+      questionIdentity.current.generation === generation
+    try {
+      // 期限只从受控 props 读取：store 已用命令返回值立即刷新 expires_at，
+      // 卡片不再缓存本地覆盖值，晚到的旧响应也就无从覆盖新期限。
+      await onExtend(questionId)
+    } catch {
+      if (isCurrent()) setExtendError(true)
+    } finally {
+      if (isCurrent()) {
+        extendInFlight.current = null
+        setExtending(false)
+      }
+    }
+  }
+
   const run = async (answer: QuestionAnswer) => {
     if (inFlight.current) return
     inFlight.current = true
@@ -278,6 +365,19 @@ export function AskQuestionCard({
   // Every control is inert while a live answer is in flight (`submitting`) and in
   // the read-only/answered view (`readOnly`). Tabs stay navigable in both.
   const locked = submitting || readOnly
+
+  // 只有带后端期限的实时卡片显示倒计时；多题共用同一张卡和同一个期限。
+  // `now` 每秒更新，但不加 aria-live，避免读屏器每秒播报。
+  const deadlineMs = useMemo(
+    () => questionDeadlineMs(question.expires_at),
+    [question.expires_at]
+  )
+  const countdownNow = useDeadlineNow(deadlineMs, !readOnly)
+  const remainingMs = deadlineMs === null ? null : deadlineMs - countdownNow
+  const countdown =
+    remainingMs === null ? null : formatQuestionCountdown(remainingMs)
+  const expired = remainingMs !== null && remainingMs <= 0
+  const urgent = remainingMs !== null && remainingMs < 60_000
 
   // A selectable option card: the radix control state colors the card. The
   // accent comes from our own selection state (not a radix data-attribute) so it
@@ -580,7 +680,7 @@ export function AskQuestionCard({
 
         {/* Footer — dropped in the read-only/answered view and while collapsed */}
         {!readOnly && !collapsed && (
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
@@ -589,7 +689,49 @@ export function AskQuestionCard({
             >
               {t("skip")}
             </Button>
-            <div className="ml-auto flex items-center gap-2">
+            {deadlineMs !== null && countdown !== null && (
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 text-xs tabular-nums text-muted-foreground",
+                    urgent && "text-destructive"
+                  )}
+                >
+                  <Timer aria-hidden="true" className="size-3.5" />
+                  <span className="font-mono">{countdown}</span>
+                </span>
+                {onExtend && (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={handleExtend}
+                          disabled={extending || expired || submitting}
+                          aria-busy={extending || undefined}
+                          title={t("extendTooltip")}
+                        >
+                          {extending && (
+                            <Loader2 className="size-3 animate-spin" />
+                          )}
+                          {t("extend")}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {t("extendTooltip")}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+                {extendError && (
+                  <span role="alert" className="text-xs text-destructive">
+                    {t("extendError")}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {error && (
                 <span role="alert" className="text-xs text-destructive">
                   {t("submitError")}

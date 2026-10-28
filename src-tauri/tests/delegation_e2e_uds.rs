@@ -174,6 +174,7 @@ impl SessionQuestionAccess for StubQuestions {
         Some(RegisteredQuestion {
             question_id,
             answer_rx: rx,
+            deadline: None,
         })
     }
     async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {

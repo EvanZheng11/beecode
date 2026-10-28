@@ -1643,6 +1643,11 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
+  const handleExtendAskQuestion = useCallback(
+    (questionId: string) => acpActions.extendQuestion(tabId, questionId),
+    [acpActions, tabId]
+  )
+
   // Grok `exit_plan_mode` approval: resolve the blocked ext request. The backend
   // broadcasts `plan_approval_resolved` to clear the card on every client.
   //
@@ -2304,6 +2309,7 @@ const ConversationTabView = memo(function ConversationTabView({
       onRespondPermission={handleRespondPermission}
       onAnswerQuestion={handleAnswerQuestion}
       onAnswerAskQuestion={handleAnswerAskQuestion}
+      onExtendAskQuestion={handleExtendAskQuestion}
       onAnswerPlanApproval={handleAnswerPlanApproval}
       modes={connectionModes}
       configOptions={connectionConfigOptions}

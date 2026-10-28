@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "正在加载子会话…",
       "forge": "仓库面板",
       "canvas": "无限画布",
+      "openBrowser": "打开浏览器",
       "folderGroup": {
         "newGroup": "新建分组",
         "newGroupTitle": "新建文件夹分组",
@@ -4097,6 +4098,9 @@
         "singleSelect": "单选",
         "multiSelect": "多选",
         "skip": "跳过",
+        "extend": "延长",
+        "extendTooltip": "延长10分钟",
+        "extendError": "延长失败，请重试。",
         "next": "下一题",
         "submit": "提交",
         "submitError": "提交失败，请重试。",

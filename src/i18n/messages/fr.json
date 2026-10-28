@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "Chargement des sous-conversations…",
       "forge": "Panneau du dépôt",
       "canvas": "Canevas infini",
+      "openBrowser": "Ouvrir le navigateur",
       "folderGroup": {
         "newGroup": "Nouveau groupe",
         "newGroupTitle": "Nouveau groupe de dossiers",
@@ -4097,6 +4098,9 @@
         "singleSelect": "Unique",
         "multiSelect": "Multiple",
         "skip": "Ignorer",
+        "extend": "Prolonger",
+        "extendTooltip": "Prolonger de 10 minutes",
+        "extendError": "Impossible de prolonger. Veuillez réessayer.",
         "next": "Suivant",
         "submit": "Envoyer",
         "submitError": "Échec de l'envoi. Veuillez réessayer.",

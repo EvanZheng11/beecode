@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "forge": "لوحة المستودع",
       "canvas": "لوحة لا نهائية",
+      "openBrowser": "فتح المتصفح",
       "folderGroup": {
         "newGroup": "مجموعة جديدة",
         "newGroupTitle": "مجموعة مجلدات جديدة",
@@ -4097,6 +4098,9 @@
         "singleSelect": "اختيار واحد",
         "multiSelect": "اختيار متعدد",
         "skip": "تخطّي",
+        "extend": "تمديد",
+        "extendTooltip": "تمديد 10 دقائق",
+        "extendError": "تعذّر التمديد. حاول مرة أخرى.",
         "next": "التالي",
         "submit": "إرسال",
         "submitError": "تعذّر الإرسال. حاول مرة أخرى.",

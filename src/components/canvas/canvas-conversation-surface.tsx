@@ -761,6 +761,11 @@ export function CanvasConversationSurface({
     [acpActions, contextKey]
   )
 
+  const handleExtendAskQuestion = useCallback(
+    (questionId: string) => acpActions.extendQuestion(contextKey, questionId),
+    [acpActions, contextKey]
+  )
+
   const handleAnswerPlanApproval = useCallback(
     (approvalId: string, answer: PlanApprovalAnswer) =>
       acpActions.answerPlanApproval(contextKey, approvalId, answer),
@@ -875,6 +880,7 @@ export function CanvasConversationSurface({
           onRespondPermission={handleRespondPermission}
           onAnswerQuestion={handleAnswerQuestion}
           onAnswerAskQuestion={handleAnswerAskQuestion}
+          onExtendAskQuestion={handleExtendAskQuestion}
           onAnswerPlanApproval={handleAnswerPlanApproval}
           modes={connectionModes}
           configOptions={connectionConfigOptions}

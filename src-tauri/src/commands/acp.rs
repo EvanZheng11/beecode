@@ -11910,6 +11910,17 @@ pub async fn acp_answer_question(
         .await
 }
 
+/// 把待回答提问的期限延长 10 分钟，返回新的 RFC3339 UTC 截止时间。
+/// 已结束（已回答/取消）、没有期限或已过期的提问返回错误。
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_extend_question(
+    question_id: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<String, AcpError> {
+    manager.extend_question(&question_id).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_answer_plan_approval(

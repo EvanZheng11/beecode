@@ -104,17 +104,19 @@ describe("serviceWorkerEligible", () => {
 
 describe("serviceWorkerUrl", () => {
   it("carries the app version so each release installs a fresh worker", () => {
-    expect(serviceWorkerUrl("0.36.0")).toBe("/sw.js?v=0.36.0")
-    expect(serviceWorkerUrl("1.0.0-rc.1+b2")).toBe("/sw.js?v=1.0.0-rc.1%2Bb2")
+    expect(serviceWorkerUrl("0.36.0")).toBe("/sw.js?v=0.36.0-bee1")
+    expect(serviceWorkerUrl("1.0.0-rc.1+b2")).toBe(
+      "/sw.js?v=1.0.0-rc.1%2Bb2-bee1"
+    )
   })
 
-  it("falls back to the bare script without a version", () => {
-    expect(serviceWorkerUrl("")).toBe("/sw.js")
+  it("无应用版本时仍使用品牌缓存修订", () => {
+    expect(serviceWorkerUrl("")).toBe("/sw.js?v=unversioned-bee1")
   })
 
   it("reads the version next.config.ts inlines at build", () => {
     vi.stubEnv("CODEG_APP_VERSION", "9.8.7")
-    expect(serviceWorkerUrl()).toBe("/sw.js?v=9.8.7")
+    expect(serviceWorkerUrl()).toBe("/sw.js?v=9.8.7-bee1")
   })
 })
 
@@ -126,7 +128,9 @@ describe("registerAppServiceWorker", () => {
     await expect(registerAppServiceWorker()).resolves.toBe(true)
     // The literal on purpose: a narrower scope would leave /, /login and
     // the build assets uncontrolled.
-    expect(register).toHaveBeenCalledWith("/sw.js?v=0.36.0", { scope: "/" })
+    expect(register).toHaveBeenCalledWith("/sw.js?v=0.36.0-bee1", {
+      scope: "/",
+    })
     expect(SERVICE_WORKER_SCOPE).toBe("/")
   })
 

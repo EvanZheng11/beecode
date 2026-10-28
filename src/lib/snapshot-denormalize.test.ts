@@ -77,6 +77,38 @@ describe("denormalizeSnapshot — hasPrompted", () => {
   })
 })
 
+describe("denormalizeSnapshot — 提问期限", () => {
+  it("原样带上 pending_question.expires_at，供重连时恢复倒计时", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        pending_question: {
+          question_id: "q-1",
+          questions: [],
+          created_at: "2026-01-01T00:00:00Z",
+          expires_at: "2026-01-01T00:05:00Z",
+        },
+      })
+    )
+    expect(patch.pendingAskQuestion).toMatchObject({
+      question_id: "q-1",
+      expires_at: "2026-01-01T00:05:00Z",
+    })
+  })
+
+  it("没有期限时保持 null，原生提问不会凭空获得倒计时", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        pending_question: {
+          question_id: "q-native",
+          questions: [],
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      })
+    )
+    expect(patch.pendingAskQuestion?.expires_at).toBeUndefined()
+  })
+})
+
 describe("denormalizeSnapshot — subagent attribution on live blocks", () => {
   it("forwards parent_tool_use_id onto text/thinking, absent field stays undefined", () => {
     const patch = denormalizeSnapshot(

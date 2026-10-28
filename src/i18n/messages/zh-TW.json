@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "正在載入子會話…",
       "forge": "儲存庫面板",
       "canvas": "無限畫布",
+      "openBrowser": "開啟瀏覽器",
       "folderGroup": {
         "newGroup": "新增分組",
         "newGroupTitle": "新增資料夾分組",
@@ -4097,6 +4098,9 @@
         "singleSelect": "單選",
         "multiSelect": "多選",
         "skip": "略過",
+        "extend": "延長",
+        "extendTooltip": "延長 10 分鐘",
+        "extendError": "延長失敗，請重試。",
         "next": "下一題",
         "submit": "提交",
         "submitError": "提交失敗，請重試。",

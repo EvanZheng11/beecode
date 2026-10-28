@@ -448,6 +448,22 @@ export async function acpAnswerQuestion(
 }
 
 /**
+ * 把待回答的 MCP 提问期限延长 10 分钟，返回后端确认的新 RFC3339 截止时间。
+ *
+ * 本地桌面走 Tauri 命令（参数名按 Rust 的 camelCase 约定）；Web 与远程桌面
+ * 窗口走固定的 HTTP 端点，body 使用后端约定的 snake_case 字段。路径不同是
+ * 因为该命令不是通用 JSON-RPC 命名的镜像接口。
+ */
+export async function acpExtendQuestion(questionId: string): Promise<string> {
+  if (isDesktop() && !isRemoteDesktopMode()) {
+    return getTransport().call<string>("acp_extend_question", { questionId })
+  }
+  return getTransport().call<string>("acp/question/extend", {
+    question_id: questionId,
+  })
+}
+
+/**
  * Submit the user's decision on a blocking Grok `exit_plan_mode` approval
  * (approve / request-changes / abandon). Resolves the parked ext request on the
  * backend (and clears the card on every client via the `plan_approval_resolved`

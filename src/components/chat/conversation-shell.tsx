@@ -81,6 +81,8 @@ interface ConversationShellProps {
     questionId: string,
     answer: QuestionAnswer
   ) => void | Promise<void>
+  /** 延长 MCP 提问的后端等待期限；省略时实时卡片仍显示倒计时，但不提供延长。 */
+  onExtendAskQuestion?: (questionId: string) => Promise<string>
   onAnswerPlanApproval: (
     approvalId: string,
     answer: PlanApprovalAnswer
@@ -192,6 +194,7 @@ export function ConversationShell({
   onRespondPermission,
   onAnswerQuestion,
   onAnswerAskQuestion,
+  onExtendAskQuestion,
   onAnswerPlanApproval,
   children,
   modes,
@@ -289,6 +292,7 @@ export function ConversationShell({
             <AskQuestionCard
               question={pendingAskQuestion}
               onAnswer={onAnswerAskQuestion}
+              onExtend={onExtendAskQuestion}
             />
           </div>
         )}

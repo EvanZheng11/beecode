@@ -331,6 +331,7 @@ const h = vi.hoisted(() => {
     acpFindConnectionForConversation: vi.fn(),
     acpConnect: vi.fn(),
     acpDisconnect: vi.fn(),
+    acpExtendQuestion: vi.fn(),
     acpGetSessionSnapshot: vi.fn(),
     acpTouchConnection: vi.fn(),
     acpCancel: vi.fn(),
@@ -421,6 +422,7 @@ vi.mock("@/lib/api", () => ({
   acpFindConnectionForConversation: h.acpFindConnectionForConversation,
   acpConnect: h.acpConnect,
   acpDisconnect: h.acpDisconnect,
+  acpExtendQuestion: h.acpExtendQuestion,
   acpGetSessionSnapshot: h.acpGetSessionSnapshot,
   acpPrompt: vi.fn(),
   acpSetMode: vi.fn(),
@@ -471,6 +473,8 @@ beforeEach(() => {
   h.acpFindConnectionForConversation.mockReset()
   h.acpConnect.mockReset()
   h.acpDisconnect.mockReset()
+  h.acpExtendQuestion.mockReset()
+  h.acpExtendQuestion.mockResolvedValue("2026-01-01T00:15:00.000Z")
   h.acpGetSessionSnapshot.mockReset()
   h.denormalizeSnapshot.mockReset()
   h.denormalizeSnapshot.mockReturnValue({
@@ -8918,5 +8922,197 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
     })
     expect(h.store!.getConnection(TAB)!.connectionId).toBe("respawned-conn")
     expect(hasPrompted()).toBe(false)
+  })
+})
+
+describe("AcpConnectionsProvider 提问期限", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  it("question_request 带上期限，deadline_changed 更新并可用 null 清空", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion).toMatchObject({
+      question_id: "q-1",
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_deadline_changed",
+      question_id: "q-1",
+      expires_at: "2026-01-01T00:15:00.000Z",
+    })
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion?.expires_at).toBe(
+      "2026-01-01T00:15:00.000Z"
+    )
+
+    // 其他问题的期限事件不能覆盖当前卡片。
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "question_deadline_changed",
+      question_id: "q-other",
+      expires_at: "2026-01-01T00:25:00.000Z",
+    })
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion?.expires_at).toBe(
+      "2026-01-01T00:15:00.000Z"
+    )
+
+    // 等待结束时清空期限；卡片本身仍由 question_resolved 负责移除。
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "question_deadline_changed",
+      question_id: "q-1",
+      expires_at: null,
+    })
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion).toMatchObject({
+      question_id: "q-1",
+      expires_at: null,
+    })
+  })
+
+  it("extendQuestion 用后端返回值立即刷新期限", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+    h.acpExtendQuestion.mockResolvedValueOnce("2026-01-01T00:15:00.000Z")
+
+    let returned = ""
+    await act(async () => {
+      returned = await h.actions!.extendQuestion(TAB, "q-1")
+    })
+
+    expect(h.acpExtendQuestion).toHaveBeenCalledWith("q-1")
+    expect(returned).toBe("2026-01-01T00:15:00.000Z")
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion?.expires_at).toBe(
+      "2026-01-01T00:15:00.000Z"
+    )
+  })
+
+  it("extendQuestion 失败时抛出，保留原期限供卡片重试", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+    h.acpExtendQuestion.mockRejectedValueOnce(new Error("boom"))
+
+    await act(async () => {
+      await expect(h.actions!.extendQuestion(TAB, "q-1")).rejects.toThrow(
+        "boom"
+      )
+    })
+
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion?.expires_at).toBe(
+      "2026-01-01T00:05:00.000Z"
+    )
+  })
+
+  it("新期限事件先到、旧延长响应后到时不回退", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+    let resolveExtend!: (value: string) => void
+    h.acpExtendQuestion.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveExtend = resolve
+        })
+    )
+
+    let extended!: Promise<string>
+    act(() => {
+      extended = h.actions!.extendQuestion(TAB, "q-1")
+    })
+    // 另一窗口（或事件通道）先推送了更晚的期限。
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_deadline_changed",
+      question_id: "q-1",
+      expires_at: "2026-01-01T00:25:00.000Z",
+    })
+
+    await act(async () => {
+      resolveExtend("2026-01-01T00:15:00.000Z")
+      await expect(extended).resolves.toBe("2026-01-01T00:15:00.000Z")
+    })
+    // 命令仍返回自己的结果，但晚到的旧值不能覆盖已应用的权威事件。
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion?.expires_at).toBe(
+      "2026-01-01T00:25:00.000Z"
+    )
+  })
+
+  it("期限被权威事件清空后，旧延长响应不能复活", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+      expires_at: "2026-01-01T00:05:00.000Z",
+    })
+    let resolveExtend!: (value: string) => void
+    h.acpExtendQuestion.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveExtend = resolve
+        })
+    )
+
+    let extended!: Promise<string>
+    act(() => {
+      extended = h.actions!.extendQuestion(TAB, "q-1")
+    })
+    // 等待结束：期限被清空，但问题本身仍 pending（由 resolved 事件移除）。
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_deadline_changed",
+      question_id: "q-1",
+      expires_at: null,
+    })
+
+    await act(async () => {
+      resolveExtend("2026-01-01T00:15:00.000Z")
+      await extended
+    })
+    expect(h.store!.getConnection(TAB)?.pendingAskQuestion).toMatchObject({
+      question_id: "q-1",
+      expires_at: null,
+    })
   })
 })

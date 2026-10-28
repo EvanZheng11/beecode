@@ -31,6 +31,7 @@ import {
   acpCancel,
   acpRespondPermission,
   acpAnswerQuestion,
+  acpExtendQuestion,
   acpAnswerPlanApproval,
   acpDisconnect,
   acpTouchConnection,
@@ -739,6 +740,17 @@ type Action =
       /** When present, only clear if the current question_id matches (guards a
        *  late `question_resolved` from wiping a freshly-raised question). */
       questionId?: string
+    }
+  | {
+      /** 后端确认的等待截止时间变化（延长成功、等待结束清空，或另一窗口同步）。
+       *  只更新仍在等待的同一问题，绝不把已解决的问题重新挂回卡片。
+       *  `source` 区分来源：事件已按 envelope.seq 去重、按序应用，属于权威；
+       *  命令响应没有 seq，只允许把当前有效期限往后推（见 reducer）。 */
+      type: "SET_ASK_QUESTION_DEADLINE"
+      contextKey: string
+      questionId: string
+      expiresAt: string | null
+      source: "event" | "command"
     }
   | {
       type: "SET_PLAN_APPROVAL"
@@ -2864,6 +2876,31 @@ function connectionsReducer(
       return next
     }
 
+    case "SET_ASK_QUESTION_DEADLINE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const pending = conn.pendingAskQuestion
+      if (!pending || pending.question_id !== action.questionId) return state
+      // `undefined`（旧后端）与 `null`（等待结束）表示同一件事：没有期限。
+      const current = pending.expires_at ?? null
+      if (current === action.expiresAt) return state
+      if (action.source === "command") {
+        // 命令响应可能晚于更新的事件到达（例如 A 窗口延长的旧响应在 B 窗口
+        // 的新期限事件之后回来）。当前期限已被清空时不能用它复活，返回值
+        // 不比当前更晚时也不能回退倒计时。
+        if (current === null || action.expiresAt === null) return state
+        const nextMs = Date.parse(action.expiresAt)
+        const currentMs = Date.parse(current)
+        if (!(nextMs > currentMs)) return state
+      }
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        pendingAskQuestion: { ...pending, expires_at: action.expiresAt },
+      })
+      return next
+    }
+
     case "SET_PLAN_APPROVAL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
@@ -3532,6 +3569,8 @@ export interface AcpActionsValue {
     questionId: string,
     answer: QuestionAnswer
   ): Promise<void>
+  /** 延长一个仍在等待的 MCP 提问期限；返回后端确认的新截止时间。 */
+  extendQuestion(contextKey: string, questionId: string): Promise<string>
   answerPlanApproval(
     contextKey: string,
     approvalId: string,
@@ -5329,6 +5368,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               question_id: e.question_id,
               questions: e.questions,
               created_at: new Date().toISOString(),
+              expires_at: e.expires_at ?? null,
             },
           })
           // A blocked agent is exactly what a notification is for — the sound
@@ -5358,6 +5398,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "CLEAR_ASK_QUESTION",
             contextKey,
             questionId: e.question_id,
+          })
+          break
+        case "question_deadline_changed":
+          // 延长成功、等待结束或另一窗口同步期限。事件 envelope 已带
+          // connection_id，因此重连/多窗口都会落到同一条连接的卡片上。
+          dispatch({
+            type: "SET_ASK_QUESTION_DEADLINE",
+            contextKey,
+            questionId: e.question_id,
+            expiresAt: e.expires_at,
+            source: "event",
           })
           break
         case "plan_approval_request":
@@ -8222,6 +8273,42 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [dispatch]
   )
 
+  const extendQuestion = useCallback(
+    async (contextKey: string, questionId: string): Promise<string> => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) {
+        // 与 answerQuestion 一致：抛错让卡片显示可重试的错误，而不是静默停留。
+        throw new Error(
+          `[AcpConnections] extendQuestion: no connection for ${contextKey}`
+        )
+      }
+      try {
+        lastActivityRef.current.set(contextKey, Date.now())
+        const expiresAt = await acpExtendQuestion(questionId)
+        if (!expiresAt) {
+          throw new Error(
+            "[AcpConnections] extendQuestion returned no deadline"
+          )
+        }
+        // 立即用返回值刷新 UI；随后到达的 question_deadline_changed
+        // 事件是幂等的，快照则负责重连/多窗口恢复。命令响应可能晚于事件，
+        // reducer 只在当前仍 pending、期限非空且返回值更晚时才合并。
+        dispatch({
+          type: "SET_ASK_QUESTION_DEADLINE",
+          contextKey,
+          questionId,
+          expiresAt,
+          source: "command",
+        })
+        return expiresAt
+      } catch (e) {
+        console.error("[AcpConnections] extendQuestion failed:", e)
+        throw e
+      }
+    },
+    [dispatch]
+  )
+
   const answerPlanApproval = useCallback(
     async (
       contextKey: string,
@@ -8405,6 +8492,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       goalControl,
       respondPermission,
       answerQuestion,
+      extendQuestion,
       answerPlanApproval,
       setActiveKey,
       touchActivity,
@@ -8433,6 +8521,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       goalControl,
       respondPermission,
       answerQuestion,
+      extendQuestion,
       answerPlanApproval,
       setActiveKey,
       touchActivity,

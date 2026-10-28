@@ -647,6 +647,7 @@ mod permission_push_tests {
                     ],
                     is_secret: false,
                 }],
+                expires_at: None,
             },
         }
     }

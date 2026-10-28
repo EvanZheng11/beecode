@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "サブ会話を読み込み中…",
       "forge": "リポジトリパネル",
       "canvas": "無限キャンバス",
+      "openBrowser": "ブラウザーを開く",
       "folderGroup": {
         "newGroup": "新しいグループ",
         "newGroupTitle": "新しいフォルダグループ",
@@ -4097,6 +4098,9 @@
         "singleSelect": "単一選択",
         "multiSelect": "複数選択",
         "skip": "スキップ",
+        "extend": "延長",
+        "extendTooltip": "10 分延長",
+        "extendError": "延長できませんでした。もう一度お試しください。",
         "next": "次へ",
         "submit": "送信",
         "submitError": "送信できませんでした。もう一度お試しください。",

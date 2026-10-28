@@ -532,10 +532,19 @@ impl DelegationListener {
                 };
                 let cfg = self.question_config.snapshot().await;
                 let attempts = cfg.retry_count.saturating_add(1);
+                // MCP 提问总是带真实期限：前端据此显示倒计时，用户可每次延长
+                // 10 分钟；每次重提都从新的完整等待时长重新计时。
+                let wait_timeout = std::time::Duration::from_secs(
+                    u64::from(cfg.wait_timeout_minutes) * 60,
+                );
                 for attempt in 0..attempts {
                     let Some(reg) = self
                         .questions
-                        .register_question(&parent_conn_id, req.questions.clone())
+                        .register_question_with_timeout(
+                            &parent_conn_id,
+                            req.questions.clone(),
+                            Some(wait_timeout),
+                        )
                         .await
                     else {
                         write_frame(conn, &ask_declined_response()?).await?;
@@ -1419,6 +1428,11 @@ fn question_answer_result(
     }
 }
 
+/// 按共享期限等待提问结果：用户答复、对端关闭，或期限到点。
+///
+/// 期限来自注册时创建的 [`crate::acp::question::QuestionDeadline`]。用户每次
+/// 延长都会推进它并唤醒这里，因此原期限到点后不会误判超时；醒来后总是按最新
+/// 期限重新计时。没有期限时退化为无倒计时的等待。
 async fn wait_for_question_answer<C>(
     conn: &mut C,
     questions: &Arc<dyn SessionQuestionAccess>,
@@ -1432,19 +1446,47 @@ where
 {
     let question_id = reg.question_id;
     let mut answer_rx = reg.answer_rx;
+    let deadline = reg.deadline;
     let mut probe = [0u8; 1];
     let peer_closed = conn.read(&mut probe);
     tokio::pin!(peer_closed);
 
-    let timeout = tokio::time::sleep(std::time::Duration::from_secs(
-        u64::from(config.wait_timeout_minutes) * 60,
-    ));
-    tokio::pin!(timeout);
-    let mut result = tokio::select! {
-        biased;
-        outcome = &mut answer_rx => question_answer_result(outcome),
-        _ = &mut peer_closed => AskWaitResult::PeerClosed,
-        _ = &mut timeout => AskWaitResult::TimedOut,
+    // 期限变化订阅（延长/清空）。watch 会记住版本，“读取期限”与“开始等待”
+    // 之间发生的延长也不会丢。
+    let mut deadline_watch = deadline.as_ref().map(|d| d.subscribe());
+    // 没有期限时的兜底时长（理论上只有原生提问，MCP 提问必带期限）。
+    let fallback = std::time::Duration::from_secs(u64::from(config.wait_timeout_minutes) * 60);
+    let sleep = tokio::time::sleep(fallback);
+    tokio::pin!(sleep);
+
+    let mut result = loop {
+        let Some(wake_at) = deadline.as_ref().and_then(|d| d.current().map(|p| p.at)) else {
+            // 没有期限（或已被清空）：只等答复或对端关闭。
+            break wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed).await;
+        };
+        sleep.as_mut().reset(wake_at);
+        let deadline_changed = async {
+            match deadline_watch.as_mut() {
+                Some(rx) => {
+                    let _ = rx.changed().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            outcome = wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed) => break outcome,
+            _ = &mut sleep => {
+                // 到点瞬间可能与延长并发：以醒来后读到的最新期限为准。
+                match deadline.as_ref().and_then(|d| d.current().map(|p| p.at)) {
+                    Some(at) if at > tokio::time::Instant::now() => continue,
+                    Some(_) => break AskWaitResult::TimedOut,
+                    // 期限已被清空（转为无限等待）—— 下一轮按无期限等待。
+                    None => continue,
+                }
+            }
+            _ = deadline_changed => continue,
+        }
     };
 
     if matches!(result, AskWaitResult::TimedOut)
@@ -1457,11 +1499,11 @@ where
             question_id,
             "提问重提已耗尽，保留表单继续等待用户回答"
         );
-        result = tokio::select! {
-            biased;
-            outcome = &mut answer_rx => question_answer_result(outcome),
-            _ = &mut peer_closed => AskWaitResult::PeerClosed,
-        };
+        // 最终无限等待：清空已失效的期限，前端不再显示倒计时。
+        questions
+            .clear_question_deadline(parent_connection_id, &question_id)
+            .await;
+        result = wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed).await;
     }
 
     if matches!(result, AskWaitResult::TimedOut) {
@@ -1486,6 +1528,22 @@ where
     }
 
     result
+}
+
+/// 只等「用户答复」或「对端关闭」两件事。两者都可取消：对端取消的只是在本
+/// 函数里的 `select` 分支，底层 pinned read 与 oneshot 接收端都不受影响。
+async fn wait_answer_or_peer_close<F>(
+    answer_rx: &mut tokio::sync::oneshot::Receiver<QuestionOutcome>,
+    peer_closed: &mut std::pin::Pin<&mut F>,
+) -> AskWaitResult
+where
+    F: std::future::Future<Output = std::io::Result<usize>>,
+{
+    tokio::select! {
+        biased;
+        outcome = &mut *answer_rx => question_answer_result(outcome),
+        _ = peer_closed.as_mut() => AskWaitResult::PeerClosed,
+    }
 }
 
 fn build_first_option_outcome(
@@ -1950,6 +2008,8 @@ mod tests {
             Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
         >,
         canceled: tokio::sync::Mutex<Vec<String>>,
+        /// 被清空倒计时（最终转为无限等待）的提问 id。
+        cleared: tokio::sync::Mutex<Vec<String>>,
         answer_during_cancel: tokio::sync::Mutex<Option<QuestionOutcome>>,
     }
     #[async_trait]
@@ -1969,7 +2029,19 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id,
                 answer_rx: rx,
+                deadline: None,
             })
+        }
+        async fn register_question_with_timeout(
+            &self,
+            parent_connection_id: &str,
+            questions: Vec<crate::acp::question::QuestionSpec>,
+            timeout: Option<std::time::Duration>,
+        ) -> Option<crate::acp::question::RegisteredQuestion> {
+            // 与生产实现保持一致：MCP 提问的倒计时句柄必须真正传给等待循环。
+            let mut registered = self.register_question(parent_connection_id, questions).await?;
+            registered.deadline = timeout.map(crate::acp::question::QuestionDeadline::from_now);
+            Some(registered)
         }
         async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
             if let Some(outcome) = self.answer_during_cancel.lock().await.take() {
@@ -1985,6 +2057,9 @@ mod tests {
             // Not exercised by the listener unit tests (the teardown sweep lives
             // in connection.rs); drop all parked senders to satisfy the trait.
             self.pending.lock().await.clear();
+        }
+        async fn clear_question_deadline(&self, _parent_connection_id: &str, question_id: &str) {
+            self.cleared.lock().await.push(question_id.to_string());
         }
     }
     impl StubQuestion {
@@ -3851,6 +3926,51 @@ mod tests {
         );
     }
 
+    /// 用户在倒计时中途延长后：原期限到点不得超时，新期限到点才超时。
+    #[tokio::test]
+    async fn question_deadline_extension_defers_the_timeout() {
+        let stub = Arc::new(StubQuestion::default());
+        let questions: Arc<dyn SessionQuestionAccess> = stub.clone();
+        // 初始期限 150ms；80ms 时追加 400ms，新期限约为注册后 550ms。
+        let deadline =
+            crate::acp::question::QuestionDeadline::from_now(Duration::from_millis(150));
+        let (_answer_tx, answer_rx) = oneshot::channel();
+        let reg = crate::acp::question::RegisteredQuestion {
+            question_id: "q-ext".into(),
+            answer_rx,
+            deadline: Some(deadline.clone()),
+        };
+        let (_client, mut server) = duplex(64);
+        let extender = deadline.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let _ = extender.try_extend(Duration::from_millis(400));
+        });
+
+        let started = std::time::Instant::now();
+        let result = wait_for_question_answer(
+            &mut server,
+            &questions,
+            "parent-conn",
+            reg,
+            &default_config(),
+            false,
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(matches!(result, AskWaitResult::TimedOut));
+        assert!(
+            elapsed >= Duration::from_millis(450),
+            "原期限（150ms）不得触发超时，实际 {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(5), "新期限必须真的到点");
+        // 走的是正常超时清理路径（取消注册表条目），不是无限等待。
+        assert_eq!(
+            stub.canceled.lock().await.as_slice(),
+            &["q-ext".to_string()]
+        );
+    }
+
     #[tokio::test]
     async fn ask_without_auto_select_waits_until_user_answers() {
         tokio::time::pause();
@@ -3896,6 +4016,8 @@ mod tests {
             questions.pending.lock().await.contains_key("q-2"),
             "耗尽后必须保留最后的等待者"
         );
+        // 最终无限等待时必须清空已失效的倒计时。
+        assert_eq!(questions.cleared.lock().await.as_slice(), &["q-2".to_string()]);
         questions.answer("q-2", user_answer_outcome()).await;
         let response = read_paused_response(&mut client).await;
         drop(listener);

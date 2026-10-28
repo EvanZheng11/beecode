@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "Loading sub-conversations…",
       "forge": "Repository panel",
       "canvas": "Infinite Canvas",
+      "openBrowser": "Open browser",
       "folderGroup": {
         "newGroup": "New group",
         "newGroupTitle": "New folder group",
@@ -4097,6 +4098,9 @@
         "singleSelect": "Single",
         "multiSelect": "Multiple",
         "skip": "Skip",
+        "extend": "Extend",
+        "extendTooltip": "Extend by 10 minutes",
+        "extendError": "Couldn't extend. Please try again.",
         "next": "Next",
         "submit": "Submit",
         "submitError": "Couldn't submit. Please try again.",

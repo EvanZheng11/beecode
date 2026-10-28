@@ -546,6 +546,27 @@ pub async fn acp_answer_question(
     Ok(Json(()))
 }
 
+/// 延长提问期限的请求体。前端固定发送 `question_id`（snake_case），
+/// 因此这里不做 camelCase 重命名。
+#[derive(Deserialize)]
+pub struct AcpExtendQuestionParams {
+    pub question_id: String,
+}
+
+/// 把待回答提问的期限延长 10 分钟，返回新的 RFC3339 UTC 截止时间。
+/// 已结束（已回答/取消）、没有期限或已过期的提问返回错误。
+pub async fn acp_extend_question(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpExtendQuestionParams>,
+) -> Result<Json<String>, AppCommandError> {
+    let manager = &state.connection_manager;
+    let expires_at = manager
+        .extend_question(&params.question_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(expires_at))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAnswerPlanApprovalParams {

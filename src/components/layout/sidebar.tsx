@@ -11,6 +11,7 @@ import {
 import {
   Crosshair,
   Eye,
+  Globe,
   ListChevronsDownUp,
   ListChevronsUpDown,
   LayoutTemplate,
@@ -33,6 +34,7 @@ import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import {
   SidebarConversationList,
@@ -59,6 +61,8 @@ import { useIsMac } from "@/hooks/use-is-mac"
 import { usePlatform } from "@/hooks/use-platform"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
+import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
+import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { isDesktop } from "@/lib/platform"
 import { leftChromeReserve } from "@/lib/window-chrome"
@@ -245,6 +249,8 @@ export function Sidebar() {
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
+  const workspaceActions = useOptionalWorkspaceActions()
+  const browserCapabilities = useBrowserCapabilities()
   const {
     desktop: remoteDesktop,
     connections: remoteConnections,
@@ -378,6 +384,15 @@ export function Sidebar() {
       setAllExpanded(true)
     }
   }, [allExpanded])
+
+  // 浏览器标签住在文件列里；其他 workbench 路由会把那一列整个替换掉，
+  // 所以先回到会话工作区，保证宿主存在后再开空白页。
+  const handleOpenBrowser = useCallback(() => {
+    const openBrowserTab = workspaceActions?.openBrowserTab
+    if (!openBrowserTab) return
+    openConversations()
+    openBrowserTab(BLANK_PAGE_URL)
+  }, [openConversations, workspaceActions])
 
   const handleNewConversation = useCallback(() => {
     // On mobile the sidebar is a Drawer overlay — close it so the new
@@ -736,6 +751,14 @@ export function Sidebar() {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                {browserCapabilities?.available &&
+                  workspaceActions?.openBrowserTab && (
+                    <SidebarRailButton
+                      icon={Globe}
+                      label={t("openBrowser")}
+                      onClick={handleOpenBrowser}
+                    />
+                  )}
               </>
             )}
           </nav>

@@ -24,8 +24,8 @@ use crate::acp::plan_approval::{
     PlanApprovalAnswer, RegisteredPlanApproval, SessionPlanApprovalAccess,
 };
 use crate::acp::question::{
-    build_outcome, QuestionAnswer, QuestionOutcome, QuestionSpec, RegisteredQuestion,
-    SessionQuestionAccess,
+    build_outcome, format_rfc3339_utc, QuestionAnswer, QuestionDeadline, QuestionOutcome,
+    QuestionSpec, RegisteredQuestion, SessionQuestionAccess, QUESTION_EXTEND_SECONDS,
 };
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
@@ -36,7 +36,9 @@ use crate::db::entities::conversation::{self, ConversationKind, ConversationStat
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
-use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
+use crate::web::event_bridge::{
+    emit_with_state, emit_with_state_built, emit_with_state_gated, EventEmitter,
+};
 
 /// Cap on the number of prompt-text chars kept in the `user_prompt_sent`
 /// preview. Past this, `truncate_str` keeps this many chars and appends a short
@@ -486,6 +488,9 @@ struct PendingQuestionEntry {
     parent_connection_id: String,
     questions: Vec<QuestionSpec>,
     sender: tokio::sync::oneshot::Sender<QuestionOutcome>,
+    /// 本次提问的倒计时句柄。`None` 表示原生 agent 提问从来没有期限（不显示
+    /// 倒计时，也拒绝延长）；MCP `ask_user_question` 注册时总会带上它。
+    deadline: Option<QuestionDeadline>,
 }
 
 /// A parked Grok `exit_plan_mode` approval awaiting the user's decision. The
@@ -3751,6 +3756,22 @@ impl ConnectionManager {
         conn_id: &str,
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion> {
+        // 原生 agent 提问（grok / pi / elicitation）没有确定性的等待时长，
+        // 因此不带倒计时；只有 MCP `ask_user_question` 走下面带期限的入口。
+        self.register_question_with_timeout(conn_id, questions, None)
+            .await
+    }
+
+    /// 同 [`Self::register_question`]，但为提问设置初始等待期限
+    /// （MCP `ask_user_question` 用这个入口）。期限会写进 `QuestionRequest`
+    /// 事件与快照，前端据此显示真实倒计时，并可通过 [`Self::extend_question`]
+    /// 每次延长 10 分钟。`timeout: None` 等价于无倒计时。
+    pub async fn register_question_with_timeout(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
         // (None → the listener declines the ask, as for any other None path).
@@ -3760,6 +3781,7 @@ impl ConnectionManager {
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let deadline = timeout.map(QuestionDeadline::from_now);
         {
             let mut reg = self.pending_questions.lock().await;
             if reg.values().any(|e| e.parent_connection_id == conn_id) {
@@ -3771,19 +3793,20 @@ impl ConnectionManager {
                     parent_connection_id: conn_id.to_string(),
                     questions: questions.clone(),
                     sender: tx,
+                    deadline: deadline.clone(),
                 },
             );
         }
         // Ungated emit: the agent is blocked in the tool call, so the card must
-        // show regardless of any turn-flag timing.
-        emit_with_state(
-            &state,
-            &emitter,
-            AcpEvent::QuestionRequest {
+        // show regardless of any turn-flag timing. 期限在应用事件时从共享句柄
+        // 现读，防止「注册广播」与「并发延长」交错时带上旧期限。
+        emit_with_state_built(&state, &emitter, |_| {
+            Some(AcpEvent::QuestionRequest {
                 question_id: question_id.clone(),
-                questions,
-            },
-        )
+                questions: questions.clone(),
+                expires_at: deadline.as_ref().and_then(|d| d.expires_at()),
+            })
+        })
         .await;
         // Teardown event-ordering race: `cancel_questions_by_parent` may have
         // drained this entry between the insert above and the emit just now. The
@@ -3802,7 +3825,105 @@ impl ConnectionManager {
         Some(RegisteredQuestion {
             question_id,
             answer_rx: rx,
+            deadline,
         })
+    }
+
+    /// 把一个待回答提问的期限延长 [`QUESTION_EXTEND_SECONDS`]（10 分钟），返回
+    /// 新的 RFC3339 UTC 期限。
+    ///
+    /// 拒绝三种情况：提问已结束（已回答 / 已取消 / 已被清理，注册表里没有）、
+    /// 从来没有期限（原生 agent 提问），以及期限已经过去。到期检查与递增
+    /// 由 [`QuestionDeadline::try_extend`] 在同一个 `watch` 写锁临界区内完成，
+    /// 这里不再单独预检，避免“检查后线程被抢占、随后又从 now 复活”的窗口。
+    ///
+    /// 并发延长不会把新期限改回旧值：共享期限在锁内成对推进，广播则走
+    /// `emit_with_state_built` 的「只在比快照更晚时才应用」原子门——晚到的旧
+    /// 延长既不改快照，也不广播。
+    pub async fn extend_question(&self, question_id: &str) -> Result<String, AcpError> {
+        let (parent_connection_id, new_expires_at) = {
+            let reg = self.pending_questions.lock().await;
+            let Some(entry) = reg.get(question_id) else {
+                return Err(AcpError::QuestionDeadlineNotExtendable(
+                    "question is no longer pending".to_string(),
+                ));
+            };
+            let deadline = entry.deadline.as_ref().ok_or_else(|| {
+                AcpError::QuestionDeadlineNotExtendable("question has no deadline".to_string())
+            })?;
+            let new_expires_at = deadline
+                .try_extend(std::time::Duration::from_secs(
+                    QUESTION_EXTEND_SECONDS as u64,
+                ))
+                .map_err(|rejection| {
+                    AcpError::QuestionDeadlineNotExtendable(rejection.to_string())
+                })?;
+            (entry.parent_connection_id.clone(), new_expires_at)
+        };
+        let Some((state, emitter)) = self.get_state_and_emitter(&parent_connection_id).await else {
+            return Err(AcpError::ConnectionNotFound(parent_connection_id));
+        };
+        emit_with_state_built(&state, &emitter, |s| {
+            let current = s
+                .pending_question
+                .as_ref()
+                .filter(|p| p.question_id == question_id)
+                .and_then(|p| p.expires_at);
+            // 只有严格更晚的期限才生效：并发延长的旧值直接丢弃。
+            current
+                .filter(|cur| new_expires_at > *cur)
+                .map(|_| AcpEvent::QuestionDeadlineChanged {
+                    question_id: question_id.to_string(),
+                    expires_at: Some(new_expires_at),
+                })
+        })
+        .await;
+        tracing::info!(
+            question_id,
+            expires_at = %new_expires_at.to_rfc3339(),
+            "提问期限已延长 {QUESTION_EXTEND_SECONDS} 秒"
+        );
+        Ok(format_rfc3339_utc(new_expires_at))
+    }
+
+    /// 把提问倒计时清空、转为无限等待（保留表单与答案通道，只移除倒计时）。
+    /// 最终重提耗尽且未开启自动选择时，由等待循环调用。
+    pub async fn clear_question_deadline(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+    ) {
+        let cleared = {
+            let reg = self.pending_questions.lock().await;
+            let Some(entry) = reg.get(question_id) else {
+                return;
+            };
+            if entry.parent_connection_id != parent_connection_id {
+                return;
+            }
+            match entry.deadline.as_ref() {
+                Some(deadline) => deadline.clear(),
+                None => false,
+            }
+        };
+        if !cleared {
+            return;
+        }
+        let Some((state, emitter)) = self.get_state_and_emitter(parent_connection_id).await else {
+            return;
+        };
+        // 清空是终态：只在卡片仍是这张提问时广播，并把快照同步为「无期限」。
+        emit_with_state_built(&state, &emitter, |s| {
+            s.pending_question
+                .as_ref()
+                .filter(|p| p.question_id == question_id)
+                .map(|_| AcpEvent::QuestionDeadlineChanged {
+                    question_id: question_id.to_string(),
+                    expires_at: None,
+                })
+        })
+        .await;
+        tracing::info!(question_id, "提问已转为无限等待，倒计时已清空");
     }
 
     /// Returns `true` — after emitting a clearing `QuestionResolved` — when
@@ -4524,6 +4645,23 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
     ) -> Option<RegisteredQuestion> {
         self.manager
             .register_question(parent_connection_id, questions)
+            .await
+    }
+
+    async fn register_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<RegisteredQuestion> {
+        self.manager
+            .register_question_with_timeout(parent_connection_id, questions, timeout)
+            .await
+    }
+
+    async fn clear_question_deadline(&self, parent_connection_id: &str, question_id: &str) {
+        self.manager
+            .clear_question_deadline(parent_connection_id, question_id)
             .await
     }
 
@@ -10381,6 +10519,178 @@ mod tests {
             .unwrap();
     }
 
+    // --- ask_user_question: 倒计时与延长 ---------------------------------
+
+    async fn pending_expires_at(
+        mgr: &ConnectionManager,
+        conn_id: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        mgr.get_state(conn_id)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .pending_question
+            .as_ref()
+            .expect("提问卡片应仍在等待")
+            .expires_at
+    }
+
+    #[tokio::test]
+    async fn mcp_question_publishes_deadline_to_snapshot_and_native_does_not() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cd", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mgr.insert_test_connection("cn", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+
+        let timed = mgr
+            .register_question_with_timeout("cd", q_spec(), Some(Duration::from_secs(120)))
+            .await
+            .expect("带期限的提问注册成功");
+        let published = pending_expires_at(&mgr, "cd").await.expect("快照必须带期限");
+        assert!(published > chrono::Utc::now(), "期限应在未来");
+        assert!(timed.deadline.is_some());
+
+        // 原生提问（grok / pi / elicitation）没有确定时长，不能带倒计时。
+        let native = mgr
+            .register_question("cn", q_spec())
+            .await
+            .expect("原生提问注册成功");
+        assert!(pending_expires_at(&mgr, "cn").await.is_none());
+        assert!(native.deadline.is_none());
+    }
+
+    #[tokio::test]
+    async fn extend_question_pushes_deadline_and_updates_snapshot() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("ce", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let reg = mgr
+            .register_question_with_timeout("ce", q_spec(), Some(Duration::from_secs(120)))
+            .await
+            .expect("注册成功");
+        let first = pending_expires_at(&mgr, "ce").await.expect("有初始期限");
+
+        let returned = mgr.extend_question(&reg.question_id).await.expect("可延长");
+        assert!(returned.ends_with('Z'), "返回必须是 RFC3339 UTC：{returned}");
+        let parsed = chrono::DateTime::parse_from_rfc3339(&returned)
+            .expect("返回必须是合法 RFC3339")
+            .with_timezone(&chrono::Utc);
+
+        let extended = pending_expires_at(&mgr, "ce").await.expect("延长后仍有期限");
+        assert!(extended > first, "快照必须同步到更晚的期限");
+        assert_eq!(
+            extended.timestamp() - first.timestamp(),
+            crate::acp::question::QUESTION_EXTEND_SECONDS,
+            "每次延长 600 秒"
+        );
+        assert_eq!(
+            parsed.timestamp(),
+            extended.timestamp(),
+            "命令返回值必须与快照同步"
+        );
+        // 连续延长继续叠加（不设累计上限）。
+        mgr.extend_question(&reg.question_id).await.expect("可重复延长");
+        let twice = pending_expires_at(&mgr, "ce").await.expect("仍有期限");
+        assert_eq!(
+            twice.timestamp() - extended.timestamp(),
+            crate::acp::question::QUESTION_EXTEND_SECONDS
+        );
+    }
+
+    #[tokio::test]
+    async fn extend_question_rejects_finished_unbounded_and_expired_questions() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cf", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+
+        // 没有期限的原生提问。
+        let native = mgr.register_question("cf", q_spec()).await.expect("注册成功");
+        assert!(mgr.extend_question(&native.question_id).await.is_err());
+        mgr.cancel_question("cf", &native.question_id).await;
+
+        // 已结束（已回答）的提问。
+        let answered = mgr
+            .register_question_with_timeout("cf", q_spec(), Some(Duration::from_secs(120)))
+            .await
+            .expect("注册成功");
+        mgr.answer_question("cf", &answered.question_id, QuestionAnswer::default())
+            .await
+            .unwrap();
+        assert!(mgr.extend_question(&answered.question_id).await.is_err());
+
+        // 已过期（期限一到点即拒绝）。
+        let expired = mgr
+            .register_question_with_timeout("cf", q_spec(), Some(Duration::from_secs(0)))
+            .await
+            .expect("注册成功");
+        assert!(mgr.extend_question(&expired.question_id).await.is_err());
+
+        // 完全未知的 id。
+        assert!(mgr.extend_question("ghost").await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn extend_question_cannot_revive_an_expired_deadline() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cr", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let reg = mgr
+            .register_question_with_timeout("cr", q_spec(), Some(Duration::from_secs(30)))
+            .await
+            .expect("注册成功");
+        let before = pending_expires_at(&mgr, "cr")
+            .await
+            .expect("初始快照必须带期限");
+        tokio::time::advance(Duration::from_secs(30)).await;
+        assert!(reg.deadline.as_ref().unwrap().is_expired());
+
+        assert!(
+            mgr.extend_question(&reg.question_id).await.is_err(),
+            "已到期的提问不能再延长"
+        );
+        assert_eq!(
+            pending_expires_at(&mgr, "cr").await,
+            Some(before),
+            "拒绝延长不得复活或改写快照期限"
+        );
+        assert!(
+            reg.deadline.as_ref().unwrap().is_expired(),
+            "拒绝延长后期限仍应是到期状态"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_question_deadline_switches_snapshot_to_unlimited_wait() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cg", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let reg = mgr
+            .register_question_with_timeout("cg", q_spec(), Some(Duration::from_secs(120)))
+            .await
+            .expect("注册成功");
+        assert!(pending_expires_at(&mgr, "cg").await.is_some());
+
+        mgr.clear_question_deadline("cg", &reg.question_id).await;
+        assert!(
+            pending_expires_at(&mgr, "cg").await.is_none(),
+            "无限等待时快照不再带期限"
+        );
+        assert!(reg.deadline.as_ref().unwrap().expires_at().is_none());
+        // 已转为无限等待的提问不能再延长。
+        assert!(mgr.extend_question(&reg.question_id).await.is_err());
+        // 表单与答案通道仍然有效。
+        assert!(mgr
+            .get_state("cg")
+            .await
+            .unwrap()
+            .read()
+            .await
+            .pending_question
+            .is_some());
+    }
+
     #[tokio::test]
     async fn answer_question_removal_delivers_before_timeout_cancel_and_broadcast() {
         let mgr = ConnectionManager::new();
@@ -10612,6 +10922,7 @@ mod tests {
             AcpEvent::QuestionRequest {
                 question_id: "q1".into(),
                 questions: q_spec(),
+                expires_at: None,
             },
         )
         .await;

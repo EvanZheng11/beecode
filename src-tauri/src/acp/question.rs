@@ -102,6 +102,10 @@ pub struct PendingQuestionState {
     pub question_id: String,
     pub questions: Vec<QuestionSpec>,
     pub created_at: DateTime<Utc>,
+    /// 这次提问的等待截止时间（RFC3339 UTC）。`None` 表示没有期限：原生 agent
+    /// 提问从未带过期限，或 MCP 提问的等待已转为“无限等待”（不再显示倒计时）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// One question's answer (frontend → backend). `labels` carries the selected
@@ -146,11 +150,146 @@ pub struct QuestionOutcome {
     pub declined: bool,
 }
 
+/// 用户单次“延长”追加的时长：10 分钟。每次延长独立叠加，不设累计上限。
+pub const QUESTION_EXTEND_SECONDS: i64 = 600;
+
+/// 把截止时间格式化为前端约定的 RFC3339 UTC 字符串（`...Z`，秒精度）。
+pub fn format_rfc3339_utc(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// 提问倒计时的一个时间点：同一瞬间的两种表示。
+///
+/// `at` 供等待循环判断是否到点（tokio 时钟，测试可暂停/快进），`expires_at`
+/// 供广播与快照（RFC3339 UTC，前端据此显示倒计时）。两者只在
+/// [`QuestionDeadline`] 内部成对更新，不会各走各的。
+#[derive(Debug, Clone, Copy)]
+pub struct QuestionDeadlinePoint {
+    pub at: tokio::time::Instant,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// 提问倒计时的共享句柄：注册表条目、等待循环和“延长”命令共用同一份状态。
+///
+/// 内部用 `watch` 保存当前时间点：延长/清空会原子地改写并唤醒等待方，等待
+/// 循环醒来后按最新期限重新计时，因此“原期限到点”不会被误判为超时。
+#[derive(Clone)]
+pub struct QuestionDeadline {
+    tx: tokio::sync::watch::Sender<Option<QuestionDeadlinePoint>>,
+    rx: tokio::sync::watch::Receiver<Option<QuestionDeadlinePoint>>,
+}
+
+/// [`QuestionDeadline::try_extend`] 的拒绝原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionDeadlineExtendError {
+    /// 已转为无限等待，没有可延长的期限。
+    NoDeadline,
+    /// 期限已经到点：不能通过延长复活。
+    Expired,
+}
+
+impl std::fmt::Display for QuestionDeadlineExtendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoDeadline => f.write_str("question has no deadline"),
+            Self::Expired => f.write_str("question deadline has already expired"),
+        }
+    }
+}
+
+impl QuestionDeadline {
+    /// 从现在起 `timeout` 之后到点。
+    pub fn from_now(timeout: std::time::Duration) -> Self {
+        let point = QuestionDeadlinePoint {
+            at: tokio::time::Instant::now() + timeout,
+            expires_at: Utc::now() + chrono_duration(timeout),
+        };
+        let (tx, rx) = tokio::sync::watch::channel(Some(point));
+        Self { tx, rx }
+    }
+
+    /// 当前期限；`None` 表示已转为无限等待。
+    pub fn current(&self) -> Option<QuestionDeadlinePoint> {
+        *self.tx.borrow()
+    }
+
+    /// 当前期限的 UTC 表示（广播/快照用）。
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        self.current().map(|p| p.expires_at)
+    }
+
+    /// 期限是否已经到点。无限等待与尚未到点都返回 `false`。
+    pub fn is_expired(&self) -> bool {
+        self.current()
+            .map(|p| p.at <= tokio::time::Instant::now())
+            .unwrap_or(false)
+    }
+
+    /// 原子地追加 `by` 时长并返回新的 UTC 期限。
+    ///
+    /// 检查与递增在 `watch` 发送端的同一个写锁临界区内完成（`send_if_modified`
+    /// 的闭包）：闭包内取 [`tokio::time::Instant::now`]，期限已到点则直接拒绝，
+    /// 既不修改期限也不唤醒监听方，因此并发到点的提问不会被“复活”。未到期时
+    /// 严格以原期限为基准加 `by`，不从当前时刻重新计时。
+    pub fn try_extend(
+        &self,
+        by: std::time::Duration,
+    ) -> Result<DateTime<Utc>, QuestionDeadlineExtendError> {
+        let mut outcome = Err(QuestionDeadlineExtendError::NoDeadline);
+        // `send_if_modified` 在写锁内执行闭包：拒绝时返回 `false`，不改值也
+        // 不产生变更通知；成功时返回 `true`，唤醒监听方按新期限重新计时。
+        self.tx.send_if_modified(|slot| {
+            let now = tokio::time::Instant::now();
+            let Some(current) = *slot else {
+                outcome = Err(QuestionDeadlineExtendError::NoDeadline);
+                return false;
+            };
+            if current.at <= now {
+                outcome = Err(QuestionDeadlineExtendError::Expired);
+                return false;
+            }
+            let point = QuestionDeadlinePoint {
+                at: current.at + by,
+                expires_at: current.expires_at + chrono_duration(by),
+            };
+            *slot = Some(point);
+            outcome = Ok(point.expires_at);
+            true
+        });
+        outcome
+    }
+
+    /// 转为无限等待（最终保留表单时使用）。已经是无限等待返回 `false`。
+    pub fn clear(&self) -> bool {
+        let mut cleared = false;
+        self.tx.send_modify(|slot| {
+            if slot.take().is_some() {
+                cleared = true;
+            }
+        });
+        cleared
+    }
+
+    /// 订阅期限变化：等待循环在读取期限之后 await 它，被延长/清空后重新计时。
+    /// `watch` 会记住版本，因此“读取期限”与“开始等待”之间的变更不会丢失。
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<Option<QuestionDeadlinePoint>> {
+        self.rx.clone()
+    }
+}
+
+/// `std::time::Duration` → `chrono::Duration`，超出 chrono 表示范围时按 0 处理
+/// （调用方传入的都是分钟级时长，永远不会走到这一支）。
+fn chrono_duration(duration: std::time::Duration) -> chrono::Duration {
+    chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero())
+}
+
 /// What [`SessionQuestionAccess::register_question`] hands back to the listener:
 /// the new question id plus the receiver to await the user's answer on.
 pub struct RegisteredQuestion {
     pub question_id: String,
     pub answer_rx: oneshot::Receiver<QuestionOutcome>,
+    /// 等待期限的共享句柄；`None` 表示这次提问没有倒计时（原生 agent 提问）。
+    pub deadline: Option<QuestionDeadline>,
 }
 
 /// Listener-facing access to register / cancel a pending question on a parent
@@ -169,6 +308,24 @@ pub trait SessionQuestionAccess: Send + Sync {
         parent_connection_id: &str,
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion>;
+
+    /// 注册提问并附带初始等待期限；`timeout: None` 表示不显示倒计时。
+    ///
+    /// 默认实现忽略期限（测试桩只需实现 [`Self::register_question`]，不会被
+    /// 迫改造）；生产实现必须覆盖它，否则 MCP 提问不会带倒计时。
+    async fn register_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: Option<std::time::Duration>,
+    ) -> Option<RegisteredQuestion> {
+        let _ = timeout;
+        self.register_question(parent_connection_id, questions).await
+    }
+
+    /// 把提问的倒计时清空、转为无限等待（最终保留表单时由等待循环调用）。
+    /// 默认无操作，测试桩可以忽略。
+    async fn clear_question_deadline(&self, _parent_connection_id: &str, _question_id: &str) {}
 
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
@@ -3228,6 +3385,127 @@ mod tests {
         })
         .await;
         assert!(cfg.is_enabled().await);
+    }
+
+    // --- 倒计时句柄（真实期限而非前端估算）------------------------------
+
+    #[tokio::test(start_paused = true)]
+    async fn question_deadline_extends_forward_from_the_current_deadline() {
+        let deadline = QuestionDeadline::from_now(std::time::Duration::from_secs(60));
+        let first = deadline.expires_at().expect("初始提问必须有期限");
+        assert!(!deadline.is_expired());
+
+        // 每次延长都叠加在当前期限上，而不是重置成 now + 10 分钟。
+        let second = deadline
+            .try_extend(std::time::Duration::from_secs(600))
+            .expect("有期限的提问可延长");
+        assert_eq!(second, first + chrono::Duration::seconds(600));
+        let third = deadline
+            .try_extend(std::time::Duration::from_secs(600))
+            .expect("可重复延长");
+        assert_eq!(third, second + chrono::Duration::seconds(600));
+
+        // 原期限到点：已经延长，不能算过期。
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(!deadline.is_expired(), "原期限到点后仍应继续等待");
+        // 推进到最新期限（60 + 2×600 秒）才过期。
+        tokio::time::advance(std::time::Duration::from_secs(1200)).await;
+        assert!(deadline.is_expired(), "新期限到点才过期");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn question_deadline_try_extend_rejects_expired_without_reviving() {
+        let deadline = QuestionDeadline::from_now(std::time::Duration::from_secs(30));
+        let original = deadline.current().expect("初始提问必须有期限");
+        let mut watcher = deadline.subscribe();
+        tokio::time::advance(std::time::Duration::from_secs(30)).await;
+        assert!(deadline.is_expired(), "期限已到点");
+
+        assert_eq!(
+            deadline
+                .try_extend(std::time::Duration::from_secs(
+                    QUESTION_EXTEND_SECONDS as u64
+                ))
+                .expect_err("已到期不能通过延长复活"),
+            QuestionDeadlineExtendError::Expired
+        );
+        let after = deadline.current().expect("拒绝延长后期限原样保留");
+        assert_eq!(after.at, original.at, "到期拒绝不得改动 Instant 期限");
+        assert_eq!(
+            after.expires_at, original.expires_at,
+            "到期拒绝不得改动 RFC3339 期限"
+        );
+        // 拒绝不能发“成功”变更通知：监听方仍看到原来的到期值。
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), watcher.changed())
+                .await
+                .is_err(),
+            "拒绝延长不得唤醒监听方"
+        );
+        let unchanged = watcher.borrow().expect("拒绝延长后监听方仍看到原期限");
+        assert_eq!(
+            unchanged.at, original.at,
+            "监听方不得看到改动的 Instant 期限"
+        );
+        assert_eq!(
+            unchanged.expires_at, original.expires_at,
+            "监听方不得看到改动的 RFC3339 期限"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn question_deadline_try_extend_adds_exactly_six_hundred_seconds() {
+        let deadline = QuestionDeadline::from_now(std::time::Duration::from_secs(90));
+        let original = deadline.current().expect("初始提问必须有期限");
+        let extended = deadline
+            .try_extend(std::time::Duration::from_secs(
+                QUESTION_EXTEND_SECONDS as u64,
+            ))
+            .expect("未到期的提问可延长");
+        let current = deadline.current().expect("延长后仍有期限");
+        assert_eq!(extended, current.expires_at, "返回值即新 UTC 期限");
+        assert_eq!(
+            current.at,
+            original.at + std::time::Duration::from_secs(600),
+            "tokio 期限必须严格基于原期限 +600 秒"
+        );
+        assert_eq!(
+            current.expires_at,
+            original.expires_at + chrono::Duration::seconds(600),
+            "RFC3339 UTC 期限必须严格 +600 秒"
+        );
+
+        // 新期限前 1 秒仍未到期，到点才到期。
+        tokio::time::advance(std::time::Duration::from_secs(90 + 599)).await;
+        assert!(!deadline.is_expired(), "新期限前不得提前到期");
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(deadline.is_expired(), "新期限到点才到期");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn question_deadline_clear_switches_to_unlimited_wait() {
+        let deadline = QuestionDeadline::from_now(std::time::Duration::from_secs(60));
+        let mut watcher = deadline.subscribe();
+        // 无变更时等待方应保持挂起。
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), watcher.changed())
+                .await
+                .is_err()
+        );
+
+        assert!(deadline.clear());
+        assert!(deadline.expires_at().is_none(), "清空后不再有期限");
+        assert!(!deadline.is_expired(), "无限等待永远不会过期");
+        assert_eq!(
+            deadline
+                .try_extend(std::time::Duration::from_secs(600))
+                .expect_err("无限等待的提问不能再延长"),
+            QuestionDeadlineExtendError::NoDeadline
+        );
+        // 等待循环必须被唤醒，才能按新状态继续等待。
+        assert!(watcher.changed().await.is_ok());
+        assert!(watcher.borrow().is_none());
+        assert!(!deadline.clear(), "已经是无限等待，不再产生变更");
     }
 
     fn grok_params(questions: Value) -> Value {

@@ -1231,12 +1231,26 @@ impl SessionState {
             AcpEvent::QuestionRequest {
                 question_id,
                 questions,
+                expires_at,
             } => {
                 self.pending_question = Some(PendingQuestionState {
                     question_id: question_id.clone(),
                     questions: questions.clone(),
                     created_at: Utc::now(),
+                    expires_at: *expires_at,
                 });
+            }
+            AcpEvent::QuestionDeadlineChanged {
+                question_id,
+                expires_at,
+            } => {
+                // 只更新仍然匹配的那张卡片：晚到的延长事件不能给已替换/已回答的
+                // 提问重新安上倒计时。单调性（不回退）由发射端保证。
+                if let Some(p) = self.pending_question.as_mut() {
+                    if p.question_id == *question_id {
+                        p.expires_at = *expires_at;
+                    }
+                }
             }
             AcpEvent::QuestionResolved { question_id } => {
                 // Mirror `PermissionResolved`: only clear when the resolved id

@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "Cargando subconversaciones…",
       "forge": "Panel del repositorio",
       "canvas": "Lienzo infinito",
+      "openBrowser": "Abrir navegador",
       "folderGroup": {
         "newGroup": "Nuevo grupo",
         "newGroupTitle": "Nuevo grupo de carpetas",
@@ -4097,6 +4098,9 @@
         "singleSelect": "Única",
         "multiSelect": "Múltiple",
         "skip": "Omitir",
+        "extend": "Ampliar",
+        "extendTooltip": "Ampliar 10 minutos",
+        "extendError": "No se pudo ampliar. Inténtalo de nuevo.",
         "next": "Siguiente",
         "submit": "Enviar",
         "submitError": "No se pudo enviar. Inténtalo de nuevo.",

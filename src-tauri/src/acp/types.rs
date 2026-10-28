@@ -867,11 +867,22 @@ pub enum AcpEvent {
     QuestionRequest {
         question_id: String,
         questions: Vec<crate::acp::question::QuestionSpec>,
+        /// 后端真实的等待截止时间（RFC3339 UTC）。原生 agent 提问没有期限，
+        /// 字段省略；MCP 提问在注册时写入，前端据此显示倒计时。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
     },
     /// A previously-pending question was answered (from any client) or canceled
     /// (the tool call was aborted / the connection drained). Carries only the
     /// `question_id`; clients clear the matching card. Idempotent on apply.
     QuestionResolved { question_id: String },
+    /// 某个待回答提问的等待截止时间被更新：用户每次延长 10 分钟，或最终
+    /// 转为无限等待（`expires_at: None`）。连接号沿用事件 envelope，多窗口 /
+    /// 重连时据此同步同一张提问卡片的倒计时。
+    QuestionDeadlineChanged {
+        question_id: String,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    },
     /// A Grok `exit_plan_mode` call: the agent finished planning and is BLOCKED
     /// on the user's approval of the plan before it leaves plan mode and starts
     /// implementing (Grok's native `_x.ai/exit_plan_mode` ext request). Broadcast

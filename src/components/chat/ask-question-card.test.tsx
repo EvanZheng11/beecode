@@ -1,15 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { useState } from "react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AskQuestionCard } from "./ask-question-card"
 import enMessages from "@/i18n/messages/en.json"
 import type { PendingQuestionState, QuestionAnswer } from "@/lib/types"
 
-function renderCard(question: PendingQuestionState, onAnswer = vi.fn()) {
+function renderCard(
+  question: PendingQuestionState,
+  onAnswer = vi.fn(),
+  onExtend?: (questionId: string) => Promise<string>
+) {
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <AskQuestionCard question={question} onAnswer={onAnswer} />
+      <AskQuestionCard
+        question={question}
+        onAnswer={onAnswer}
+        onExtend={onExtend}
+      />
     </NextIntlClientProvider>
   )
   return onAnswer
@@ -534,6 +543,352 @@ describe("AskQuestionCard", () => {
     // Submit would post an empty affirmative answer instead of a decline.
     const { container } = renderWith({ ...single, questions: [] }, vi.fn())
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe("AskQuestionCard 截止时间", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const withDeadline = (
+    expiresAt: string,
+    base: PendingQuestionState = single
+  ): PendingQuestionState => ({ ...base, expires_at: expiresAt })
+
+  it("按 expires_at 每秒更新，最后一分钟标红，到期后禁止延长", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    const onExtend = vi.fn().mockResolvedValue("2026-01-01T00:10:00.000Z")
+    renderCard(withDeadline("2026-01-01T00:01:05.000Z"), vi.fn(), onExtend)
+
+    expect(screen.getByText("01:05")).toBeInTheDocument()
+    // 倒计时不是 live region：读屏器不该每秒打断用户。
+    expect(document.querySelector("[aria-live]")).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(6_000)
+    })
+    const urgent = screen.getByText("00:59")
+    expect(urgent).toBeInTheDocument()
+    expect(urgent.parentElement).toHaveClass("text-destructive")
+
+    act(() => {
+      vi.advanceTimersByTime(59_000)
+    })
+    expect(screen.getByText("00:00")).toBeInTheDocument()
+    const extend = screen.getByRole("button", { name: "Extend" })
+    expect(extend).toBeDisabled()
+    fireEvent.click(extend)
+    expect(onExtend).not.toHaveBeenCalled()
+  })
+
+  it("失败时显示可重试错误，成功后用返回期限刷新倒计时", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    let rejectOnce = true
+
+    function Harness() {
+      const [question, setQuestion] = useState(
+        withDeadline("2026-01-01T00:05:00.000Z")
+      )
+      return (
+        <AskQuestionCard
+          question={question}
+          onAnswer={vi.fn()}
+          onExtend={async (questionId) => {
+            if (rejectOnce) {
+              rejectOnce = false
+              throw new Error("boom")
+            }
+            const next = "2026-01-01T00:15:00.000Z"
+            setQuestion((prev) => ({
+              ...prev,
+              question_id: questionId,
+              expires_at: next,
+            }))
+            return next
+          }}
+        />
+      )
+    }
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <Harness />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("05:00")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Couldn't extend. Please try again."
+    )
+    expect(screen.getByRole("button", { name: "Extend" })).not.toBeDisabled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(screen.getByText("15:00")).toBeInTheDocument()
+  })
+
+  it("延长成功后由父层回传的 expires_at 刷新倒计时", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    const onExtend = vi.fn().mockResolvedValue("2026-01-01T00:15:00.000Z")
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:05:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(screen.getByText("05:00")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(onExtend).toHaveBeenCalledWith("q-1")
+    // 卡片不缓存命令返回值；新期限只从父层（store 已用返回值刷新）回传。
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:15:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("15:00")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("延长请求进行中时禁用按钮，重复点击只发一次请求", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    let finish!: (value: string) => void
+
+    function Harness() {
+      const [question, setQuestion] = useState(
+        withDeadline("2026-01-01T00:05:00.000Z")
+      )
+      return (
+        <AskQuestionCard
+          question={question}
+          onAnswer={vi.fn()}
+          onExtend={() =>
+            new Promise<string>((resolve) => {
+              finish = (value) => {
+                setQuestion((prev) => ({ ...prev, expires_at: value }))
+                resolve(value)
+              }
+            })
+          }
+        />
+      )
+    }
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <Harness />
+      </NextIntlClientProvider>
+    )
+
+    const extend = screen.getByRole("button", { name: "Extend" })
+    fireEvent.click(extend)
+    expect(extend).toBeDisabled()
+    expect(extend).toHaveAttribute("aria-busy", "true")
+    fireEvent.click(extend)
+    expect(screen.getByRole("button", { name: "Extend" })).toBeDisabled()
+
+    await act(async () => {
+      finish("2026-01-01T00:15:00.000Z")
+      await Promise.resolve()
+    })
+    expect(screen.getByRole("button", { name: "Extend" })).not.toBeDisabled()
+    expect(screen.getByText("15:00")).toBeInTheDocument()
+  })
+
+  it("A 延长过程中换成无期限的 B：A 成功不污染 B", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    let finish!: (value: string) => void
+    const onExtend = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve
+        })
+    )
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:05:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+    expect(onExtend).toHaveBeenCalledWith("q-1")
+
+    // 旧请求尚未结束时换题：B 没有 expires_at。
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={twoSingle}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+
+    await act(async () => {
+      finish("2026-01-01T00:15:00.000Z")
+      await Promise.resolve()
+    })
+    // A 的返回值不能落到 B：B 仍无期限、无延长入口。
+    expect(screen.queryByText("15:00")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Extend" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("A 延长过程中换成无期限的 B：A 失败不污染 B", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    let fail!: (reason: unknown) => void
+    const onExtend = vi.fn(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          fail = reject
+        })
+    )
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:05:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={twoSingle}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+
+    await act(async () => {
+      fail(new Error("boom"))
+      await Promise.resolve()
+    })
+    // A 的失败不能把可重试错误画到 B 上。
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Extend" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("A 的 finally 不会解开 B 正在进行的延长请求", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    const resolvers: Array<(value: string) => void> = []
+    const onExtend = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve)
+        })
+    )
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:05:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+
+    // B 也有期限，可以在 A 的请求尚未结束时开始自己的延长。
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={withDeadline("2026-01-01T00:20:00.000Z", twoSingle)}
+          onAnswer={vi.fn()}
+          onExtend={onExtend}
+        />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Extend" }))
+    expect(resolvers).toHaveLength(2)
+    expect(screen.getByRole("button", { name: "Extend" })).toBeDisabled()
+
+    await act(async () => {
+      resolvers[0]!("2026-01-01T00:15:00.000Z")
+      await Promise.resolve()
+    })
+    // B 的请求仍在进行：按钮保持 busy，不被 A 的 finally 解锁。
+    const extendB = screen.getByRole("button", { name: "Extend" })
+    expect(extendB).toBeDisabled()
+    expect(extendB).toHaveAttribute("aria-busy", "true")
+
+    await act(async () => {
+      resolvers[1]!("2026-01-01T00:30:00.000Z")
+      await Promise.resolve()
+    })
+    expect(screen.getByRole("button", { name: "Extend" })).not.toBeDisabled()
+  })
+
+  it("多题共用一张卡时只显示一个期限和一个延长按钮", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    renderCard(
+      withDeadline("2026-01-01T00:05:00.000Z", twoSingle),
+      vi.fn(),
+      vi.fn().mockResolvedValue("2026-01-01T00:15:00.000Z")
+    )
+    expect(screen.getAllByText("05:00")).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "Extend" })).toHaveLength(1)
+  })
+
+  it("只读历史卡片不显示倒计时或延长入口", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          readOnly
+          question={withDeadline("2026-01-01T00:05:00.000Z")}
+          onAnswer={vi.fn()}
+          onExtend={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.queryByText("05:00")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Extend" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("没有 expires_at 的原生提问不显示倒计时或延长入口", () => {
+    renderCard(single, vi.fn(), vi.fn())
+    expect(
+      screen.queryByRole("button", { name: "Extend" })
+    ).not.toBeInTheDocument()
   })
 })
 

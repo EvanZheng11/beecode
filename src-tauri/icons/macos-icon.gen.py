@@ -22,16 +22,12 @@ il32/is32/l8mk/s8mk masks that carry the 16px and 32px slots for the macOS
 10.13 floor we declare. Feeding a 10-file .iconset to `iconutil` instead writes
 ic04/ic05 as raw ARGB and drops those masks entirely.
 
-Note on diffs: `tauri icon` emits ICNS chunks in whatever order its parallel
-encoders finish, so re-running always produces a different byte order — and so
-a non-empty `git diff` — even when every pixel is identical. To tell whether
-anything actually changed, compare the payload of each chunk rather than the
-whole file. `cargo test --features test-utils macos_icon_geometry` asserts the
-properties that actually matter.
+生成后按槽位名称排序 ICNS 块，使相同素材重复生成时字节完全一致。
+`cargo test --features test-utils --test macos_icon_geometry` 校验平台几何规则。
 """
 
 import re
-import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -130,9 +126,18 @@ def main():
         if not generated.is_file():
             _fail(f"`pnpm tauri icon` produced no icon.icns in {out_dir}")
 
-        shutil.copyfile(generated, OUTPUT_ICNS)
+        # Tauri 并行编码导致块顺序不定；排序保留所有原始槽位及其内容。
+        data = generated.read_bytes()
+        chunks = []
+        offset = 8
+        while offset < len(data):
+            size = struct.unpack_from(">I", data, offset + 4)[0]
+            assert size >= 8 and offset + size <= len(data), "ICNS 槽位长度无效"
+            chunks.append(data[offset : offset + size])
+            offset += size
+        OUTPUT_ICNS.write_bytes(data[:8] + b"".join(sorted(chunks)))
 
-    print(f"wrote {OUTPUT_ICNS} ({BODY}x{BODY} body in {CANVAS}x{CANVAS} canvas)")
+    print(f"已生成 {OUTPUT_ICNS}（{CANVAS}x{CANVAS} 画布，{BODY}x{BODY} 主体）")
 
 
 if __name__ == "__main__":

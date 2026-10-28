@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "하위 대화 로드 중…",
       "forge": "리포지토리 패널",
       "canvas": "무한 캔버스",
+      "openBrowser": "브라우저 열기",
       "folderGroup": {
         "newGroup": "새 그룹",
         "newGroupTitle": "새 폴더 그룹",
@@ -4097,6 +4098,9 @@
         "singleSelect": "단일 선택",
         "multiSelect": "다중 선택",
         "skip": "건너뛰기",
+        "extend": "연장",
+        "extendTooltip": "10분 연장",
+        "extendError": "연장하지 못했습니다. 다시 시도해 주세요.",
         "next": "다음",
         "submit": "제출",
         "submitError": "제출하지 못했습니다. 다시 시도해 주세요.",

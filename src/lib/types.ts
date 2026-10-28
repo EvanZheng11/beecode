@@ -1695,6 +1695,9 @@ export interface PendingQuestionState {
   question_id: string
   questions: QuestionSpec[]
   created_at: string
+  /** 后端等待用户回答的截止时间（RFC3339 UTC）。原生 agent 的提问没有此字段，
+   *  前端据此只对 MCP ask_user_question 显示倒计时和「延长」入口。 */
+  expires_at?: string | null
 }
 
 /** One question's answer submitted to `acp_answer_question`. `labels` carries
@@ -3397,6 +3400,8 @@ export type AcpEvent =
       type: "question_request"
       question_id: string
       questions: QuestionSpec[]
+      /** 后端等待截止时间（RFC3339 UTC）。没有期限的原生提问省略此字段。 */
+      expires_at?: string | null
     }
   /**
    * A pending question was answered (from any client) or canceled (tool call
@@ -3405,6 +3410,16 @@ export type AcpEvent =
   | {
       type: "question_resolved"
       question_id: string
+    }
+  /**
+   * 某个待回答问题的等待截止时间被更新（例如从另一窗口延长成功）。
+   * `expires_at: null` 表示等待已经结束、不再有期限；连接号沿用事件 envelope
+   * 的 `connection_id`，多窗口/重连时也据此同步到对应的提问卡片。
+   */
+  | {
+      type: "question_deadline_changed"
+      question_id: string
+      expires_at: string | null
     }
   /**
    * A Grok `exit_plan_mode` call: the agent finished planning and is blocked on

@@ -2148,6 +2148,7 @@ mod tauri_app {
                 acp_commands::acp_stop_async_task,
                 acp_commands::acp_respond_permission,
                 acp_commands::acp_answer_question,
+                acp_commands::acp_extend_question,
                 acp_commands::acp_answer_plan_approval,
                 acp_commands::acp_disconnect,
                 acp_commands::acp_touch_connection,

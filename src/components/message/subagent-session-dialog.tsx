@@ -41,6 +41,7 @@ import {
   DrawerTitle,
   SIDE_PANEL_CONTENT_CLASS,
 } from "@/components/ui/drawer"
+import { SidePanelResizeHandle } from "@/components/ui/side-panel-resize"
 import {
   adaptMessageTurns,
   type AdaptedMessage,
@@ -122,6 +123,9 @@ export function SubagentSessionDialog({
 }: Props) {
   const t = useTranslations("Folder.chat.contentParts")
   const sharedT = useTranslations("Folder.chat.shared")
+  // 弹框宽度只在本次打开期间临时生效：每次打开（或换一个子会话）都回到
+  // `SIDE_PANEL_CONTENT_CLASS` 的响应式默认宽度，不做持久化。
+  const panelRef = useRef<HTMLDivElement>(null)
   // The dialog is a state toggle, not a route: without a history entry behind
   // it, the back gesture unloads the whole page instead of closing the dialog.
   useHistoryBackDismiss(open, () => onOpenChange(false))
@@ -218,9 +222,15 @@ export function SubagentSessionDialog({
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
       <DrawerContent
+        ref={panelRef}
         closeButtonClassName="top-2.5 right-3"
         className={SIDE_PANEL_CONTENT_CLASS}
       >
+        <SidePanelResizeHandle
+          panelRef={panelRef}
+          open={open}
+          resetKey={sessionId}
+        />
         <DrawerTitle className="sr-only">{t("agentSessionTitle")}</DrawerTitle>
         <DrawerDescription className="sr-only">
           {t("agentSessionTitle")}

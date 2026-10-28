@@ -493,6 +493,29 @@ describe("install", () => {
 })
 
 describe("cache names follow the release", () => {
+  it("同版本品牌更新重新获取图标，不复用旧缓存", async () => {
+    const storage = new FakeCacheStorage(`${ORIGIN}/sw.js`)
+    const old = await storage.open(ASSETS)
+    await old.put(subresource("/icon.svg"), script("旧标志", "image/svg+xml"))
+    const worker = loadWorker(
+      async (input) =>
+        pathOf(input) === "/icon.svg"
+          ? script("蜜蜂标志", "image/svg+xml")
+          : bootNetwork(input),
+      "1.2.3-bee1",
+      storage,
+      `${ORIGIN}/sw.js?v=1.2.3`
+    )
+    await install(worker)
+    await activate(worker)
+    const request = subresource("/icon.svg")
+    const fetched = dispatchFetch(worker, request)
+    expect(await bodyOf(fetched.response)).toBe("蜜蜂标志")
+    await fetched.settled()
+    expect(worker.fetch).toHaveBeenCalledWith(request, { cache: "no-cache" })
+    expect(await storage.body(`${ASSETS}-bee1`, request)).toBe("蜜蜂标志")
+  })
+
   it("names caches after the script URL's version", async () => {
     const worker = loadWorker(bootNetwork, "2.0.0")
     await install(worker)

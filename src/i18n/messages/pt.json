@@ -2257,6 +2257,7 @@
       "loadingSubsessions": "Carregando subconversas…",
       "forge": "Painel do repositório",
       "canvas": "Canvas infinito",
+      "openBrowser": "Abrir navegador",
       "folderGroup": {
         "newGroup": "Novo grupo",
         "newGroupTitle": "Novo grupo de pastas",
@@ -4097,6 +4098,9 @@
         "singleSelect": "Única",
         "multiSelect": "Múltipla",
         "skip": "Pular",
+        "extend": "Prorrogar",
+        "extendTooltip": "Prorrogar por 10 minutos",
+        "extendError": "Não foi possível prorrogar. Tente novamente.",
         "next": "Próxima",
         "submit": "Enviar",
         "submitError": "Falha ao enviar. Tente novamente.",
