@@ -129,10 +129,11 @@ export const ActivityHeader = memo(function ActivityHeader({
   return (
     <div
       ref={ref}
-      // `activity-capsule`: a translucent wash of the steps' secondary grey,
-      // grey in every theme, with a ring over a workspace background image
-      // (globals.css). A block, not inline: no line box around it adds room
-      // under it, so what follows starts at its bottom edge.
+      // `activity-capsule`: filled like the user's message bubble, over a
+      // workspace background image too — translucent there, with its ring —
+      // and a step deeper in the same colour when pointed at (globals.css).
+      // A block, not inline: no line box around it adds room under it, so
+      // what follows starts at its bottom edge.
       className={cn(
         "activity-capsule flex h-8 w-fit max-w-full min-w-0 items-center gap-2 rounded-full bg-activity-capsule px-4 text-xs transition-colors",
         toggle && "group/row cursor-pointer hover:bg-activity-capsule-hover"

@@ -427,12 +427,11 @@ describe("activity timeline: the reference turn", () => {
     expect(header.querySelector("span[aria-hidden='true'].flex-1")).toBeNull()
   })
 
-  it("fills the header with the steps' secondary grey, its words in inks that read on it", () => {
-    // The bubble's `--secondary` is tinted in the coloured presets (pink under
-    // red, peach under orange); the capsule is a translucent wash of the grey
-    // the steps' secondary words are set in, grey in every preset. The
-    // summary and the time take the stronger muted ink and a failure the
-    // stronger red, both keeping 4.5:1 on it.
+  it("fills the header like the user's bubble, its words in inks that read on it", () => {
+    // The capsule takes the bubble's fill, tinted with it in the coloured
+    // presets; pointed at, the same colour a step toward the foreground, not
+    // another grey. The summary and the time take the stronger muted ink and
+    // a failure the stronger red, both keeping 4.5:1 on it, hovered too.
     renderSettled(partsOf(MOCKUP_ASSISTANT_TURN))
     const header = activityHeader()
     const classes = header.className.split(/\s+/)
@@ -461,27 +460,53 @@ describe("activity timeline: the reference turn", () => {
         tokens.set(`${rule.selector} ${decl.prop}`, flat(decl.value))
       })
     })
-    const wash = (share: number) =>
-      `color-mix(in oklab, var(--activity-secondary) ${share}%, transparent)`
-    // A light wash, a deeper one on a dark page; hovered, a step deeper in
-    // either.
-    expect(tokens.get(":root --activity-capsule")).toBe(wash(12))
-    expect(tokens.get(":root --activity-capsule-hover")).toBe(wash(18))
-    expect(tokens.get(".dark --activity-capsule")).toBe(wash(24))
-    expect(tokens.get(".dark --activity-capsule-hover")).toBe(wash(32))
-    // Translucent already: over a background image the same wash, with the
-    // bubble's ring.
-    expect(tokens.has('[data-workspace-bg="on"] --activity-capsule')).toBe(
-      false
+    // The bubble's own fill (`bg-secondary` on it), in either theme — the
+    // dark one has no capsule of its own; hovered, 6% toward the foreground,
+    // which darkens it on a light page and lights it on a dark one.
+    expect(tokens.get(":root --activity-capsule")).toBe("var(--secondary)")
+    expect(tokens.get(":root --activity-capsule-hover")).toBe(
+      "color-mix(in oklab, var(--secondary), var(--foreground) 6%)"
+    )
+    expect(tokens.has(".dark --activity-capsule")).toBe(false)
+    expect(tokens.has(".dark --activity-capsule-hover")).toBe(false)
+    // Over a background image the bubble's translucent tint and ring, word
+    // for word; hovered, the tint a step toward the foreground at the same
+    // translucency, so the image still shows through it.
+    const bubble = (prop: string) =>
+      flat(
+        globalsDecl('[data-workspace-bg="on"] .is-user .ws-msg-secondary', prop)
+      )
+    expect(tokens.get('[data-workspace-bg="on"] --activity-capsule')).toBe(
+      bubble("background-color")
     )
     expect(
-      globalsDecl('[data-workspace-bg="on"] .activity-capsule', "box-shadow")
+      tokens.get('[data-workspace-bg="on"] --activity-capsule-hover')
     ).toBe(
-      globalsDecl(
-        '[data-workspace-bg="on"] .is-user .ws-msg-secondary',
-        "box-shadow"
-      )
+      "color-mix(in oklab, color-mix(in oklab, var(--muted), var(--foreground) 12%) calc(var(--ws-msg-alpha) * 100%), transparent)"
     )
+    expect(
+      flat(
+        globalsDecl('[data-workspace-bg="on"] .activity-capsule', "box-shadow")
+      )
+    ).toBe(bubble("box-shadow"))
+    // An engine with no color-mix drops every mixed fill: the capsule keeps
+    // the bubble's there too (the bubble's own tint is dropped with it), and
+    // holds it under the pointer.
+    const fallback = new Map<string, string>()
+    css.walkAtRules("supports", (at) => {
+      if (!at.params.startsWith("not")) return
+      at.walkRules((rule) =>
+        rule.walkDecls(/^--activity-capsule/, (decl) => {
+          fallback.set(`${rule.selector} ${decl.prop}`, flat(decl.value))
+        })
+      )
+    })
+    expect(Object.fromEntries(fallback)).toEqual({
+      ":root --activity-capsule-hover": "var(--secondary)",
+      ":root --activity-capsule-danger": "var(--tone-danger)",
+      '[data-workspace-bg="on"] --activity-capsule': "var(--secondary)",
+      '[data-workspace-bg="on"] --activity-capsule-hover': "var(--secondary)",
+    })
     expect(tokens.get(":root --activity-capsule-danger")).toBe(
       "color-mix(in oklab, var(--tone-danger) 85%, var(--foreground))"
     )
