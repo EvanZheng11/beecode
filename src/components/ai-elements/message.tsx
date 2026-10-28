@@ -570,7 +570,9 @@ function MessageResponseImpl({
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
+        // `chat-markdown`: while it streams, its blocks keep the spacing they
+        // settle with (globals.css).
+        "chat-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
         // Each block takes the direction of its own text (`dir="auto"`
         // below), so indents and rules go on the logical start side. An item
         // re-states `text-align: start`: the UA gives <li>

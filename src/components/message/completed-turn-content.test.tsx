@@ -499,6 +499,35 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     ).toBeTruthy()
   })
 
+  it("keeps a thought's row while what it says first is still short", () => {
+    // Steps without an id of their own are keyed by an anchor hashed from the
+    // reply's opening words, which change while those are still few.
+    const thinking = (content: string): AdaptedContentPart[] => [
+      { type: "reasoning", content, isStreaming: true },
+    ]
+    const view = renderWithIntl(
+      <CompletedTurnContent
+        parts={thinking("Look")}
+        durationMs={null}
+        completed={false}
+      />
+    )
+    const row = view.container.querySelector("li[data-step-key^='thought']")
+    expect(row).not.toBeNull()
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CompletedTurnContent
+          parts={thinking("Looking at the repository layout first")}
+          durationMs={null}
+          completed={false}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(view.container.querySelector("li[data-step-key^='thought']")).toBe(
+      row
+    )
+  })
+
   it("puts it under a reply with no steps yet, or none at all", () => {
     const view = renderWithIntl(
       <CompletedTurnContent parts={[]} durationMs={null} completed={false} />

@@ -1032,7 +1032,11 @@ export function mergeConsecutiveAssistantTurns(
 
       const merged: AssistantTurnItem = {
         ...last,
-        key: `merged-${first.key}`,
+        // The run is drawn where its first turn was, and it stays that row: a
+        // reply goes from one turn to two the moment the agent answers its
+        // first tool, mid-stream, and a key of its own for the merged run
+        // re-mounted the whole reply right then.
+        key: first.key,
         isResponseComplete: buffer.every((it) => it.isResponseComplete),
         // Concatenate every sub-turn's raw turns so the artifacts card sees all
         // file edits across the merged reply, not just the last sub-turn.

@@ -2618,6 +2618,51 @@
   color: var(--ansi-cyan) !important;
 }
 
+/* A reply's Markdown spaces its blocks with `space-y-4` and drops the outer
+   margins of the first and last (`MessageResponse`, Streamdown's own root).
+   While the text streams, Streamdown wraps each block in a `display:
+   contents` box carrying its direction (`div[dir]` with no `data-streamdown`
+   — settled, a code block is a top-level `div[dir]` too, but one of
+   Streamdown's own, so marked), so those rules land on the boxes —
+   which take no margins — and the blocks ran together until the reply
+   settled, then spread apart all at once. The blocks inside the boxes get
+   the same spacing here, in the same layer and at the same weight as
+   `space-y-4` (none), so a block's own margins win as they do settled.
+   Matched by `dir`, never by the box's inline style: a selector on `style`
+   re-styles the whole subtree of every element whose inline style changes,
+   and the transcript's change on every streamed token. */
+@layer utilities {
+  :where(.chat-markdown > div[dir]:not([data-streamdown]):not(:last-child) > *),
+  :where(
+    .chat-markdown
+      > div[dir]:not([data-streamdown]):last-child
+      > :not(:last-child)
+  ) {
+    margin-block-start: 0;
+    margin-block-end: calc(var(--spacing) * 4);
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):first-child > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > div[dir]:not([data-streamdown]):last-child > :last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Streamdown lays a code block out only once it is scrolled near (inline
+   `content-visibility: auto`), at a 200px stand-in height until then — and
+   "near" is decided a frame late, so even a block in plain view is drawn
+   200px tall for a frame first. In the reply being written, or the one just
+   written (`data-reply-current`), that frame lurched everything under a new
+   code block, the turning ring and the scroll with it, as the block appeared
+   and again as the reply settled. There every code block is laid out at
+   once; history keeps the deferral. */
+[data-reply-current] [data-streamdown="code-block"] {
+  content-visibility: visible !important;
+}
+
 /* Settings → Appearance → "Chat animations" off. <html> carries
    `data-chat-animations="off"` (set by the pre-hydration script and by
    `AppearanceProvider`); `.chat-motion-scope` wraps the conversation view in

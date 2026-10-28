@@ -302,7 +302,14 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     // its row in here. A reply with no steps has none, its answer under the
     // header.
     return (
-      <div ref={turnRef} className="space-y-3">
+      <div
+        ref={turnRef}
+        className="space-y-3"
+        // The newest reply (globals.css): its blocks are laid out at once
+        // rather than when scrolled near, so none of them is drawn first at a
+        // placeholder height while it is written or as it settles.
+        data-reply-current={isStreaming || currentRound ? "" : undefined}
+      >
         <div>
           {header}
           <ActivityParts model={activity} isStreaming={isStreaming} headed />
@@ -319,7 +326,14 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     )
   }
   return (
-    <div ref={turnRef} className="space-y-4">
+    <div
+      ref={turnRef}
+      className="space-y-4"
+      // The newest reply (globals.css): its blocks are laid out at once
+      // rather than when scrolled near, so none of them is drawn first at a
+      // placeholder height while it is written or as it settles.
+      data-reply-current={isStreaming || currentRound ? "" : undefined}
+    >
       <Collapsible
         className="w-full"
         open={open}

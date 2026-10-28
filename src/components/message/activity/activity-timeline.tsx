@@ -4,7 +4,7 @@ import { memo, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
-import { hasVisibleAnswer } from "@/lib/activity/build-activity"
+import { hasVisibleAnswer, rowIdentity } from "@/lib/activity/build-activity"
 import type {
   ActivityItem,
   ActivityModel,
@@ -152,7 +152,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
             </li>
           ) : (
             <ActivityItemView
-              key={item.key}
+              key={rowIdentity(item.key)}
               item={item}
               followed={
                 item.type === "group" && (item.key !== lastKey || answerFollows)
