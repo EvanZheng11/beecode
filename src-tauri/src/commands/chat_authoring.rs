@@ -189,7 +189,7 @@ impl ChatAuthoringAccess for DbChatAuthoring {
         if !self.config.automations_enabled().await {
             return AuthoringOutcome::rejected(
                 KIND_AUTOMATION,
-                "Creating automations from chat is turned off in codeg's settings \
+                "Creating automations from chat is turned off in BeeCode's settings \
                  (Settings → General → Create from chat). Ask the user to enable it.",
             );
         }
@@ -303,7 +303,7 @@ impl ChatAuthoringAccess for DbChatAuthoring {
         if !self.config.work_tasks_enabled().await {
             return AuthoringOutcome::rejected(
                 KIND_WORK_TASK,
-                "Creating board tasks from chat is turned off in codeg's settings \
+                "Creating board tasks from chat is turned off in BeeCode's settings \
                  (Settings → General → Create from chat). Ask the user to enable it.",
             );
         }

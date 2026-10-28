@@ -1,8 +1,8 @@
 services:
-  codeg:
+  beecode:
     build: .
-    # Or use a pre-built image:
-    # image: xintaofei/codeg:latest
+    # 或使用预构建镜像：
+    # image: ghcr.io/evanzheng11/beecode:latest
     ports:
       - "3080:3080"
       # Port bridge for dev servers started by agents inside the container:
@@ -21,11 +21,11 @@ services:
       - CODEG_HOST=0.0.0.0
       # - CODEG_BRIDGE_PORTS=3081-3090   # or `off` to disable the port bridge
       # Name the dev servers by hostname instead of giving each one a port:
-      # `3000.codeg.example.com` reaches the container's port 3000 over the
+      # `3000.beecode.example.com` reaches the container's port 3000 over the
       # published 3080, so nothing above has to be published and no range has
       # to be guessed. Needs a wildcard DNS record for the name and, behind a
       # reverse proxy, a wildcard vhost pointing at this service and passing
-      # `Host` through (Caddy: `*.codeg.example.com { reverse_proxy codeg:3080 }`).
+      # `Host` through (Caddy: `*.beecode.example.com { reverse_proxy beecode:3080 }`).
       # `auto` puts the port one label in front of whatever host the workbench
       # itself was opened at.
       # - CODEG_BRIDGE_HOST_PATTERN=auto

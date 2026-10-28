@@ -335,7 +335,7 @@ pub async fn forge_webhook(headers: HeaderMap, body: Bytes) -> Response {
     let Some(processor) = crate::forge::auto::processor() else {
         return webhook_answer(
             503,
-            "auto-processing is not running in this codeg process".to_string(),
+            "auto-processing is not running in this BeeCode process".to_string(),
         );
     };
     let outcome = processor.handle_webhook(&headers, &body).await;

@@ -100,7 +100,7 @@ pub async fn assistants(global: &GlobalArgs, list: &ListArgs, env: &Env) -> i32 
         return 0;
     }
     if assistants.is_empty() {
-        println!("no assistants yet: create one in Codeg → Settings → Assistants");
+        println!("no assistants yet: create one in BeeCode → Settings → Assistants");
         return 0;
     }
     let width = assistants
@@ -257,7 +257,7 @@ pub async fn open(global: &GlobalArgs, args: &OpenArgs, env: &Env) -> i32 {
                 Subtype::ErrorRuntimeUnavailable,
                 "runtime_unavailable",
                 format!(
-                    "the codeg that started this terminal ({}) is not running; open does not \
+                    "the BeeCode that started this terminal ({}) is not running; open does not \
                      start another one in its place",
                     level.describe()
                 ),

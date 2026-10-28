@@ -247,7 +247,7 @@ fn write_shim(path: &Path, target: &Path) -> Result<(), String> {
         // wrote there (the data directory outlives a change of package).
         if !is_our_shim(path) && !is_our_copy(path) {
             return Err(format!(
-                "{} is not a shim of Codeg's; left as it is",
+                "{} is not a shim of BeeCode's; left as it is",
                 path.display()
             ));
         }
@@ -280,7 +280,7 @@ fn write_copy(path: &Path, source: &Path) -> Result<(), String> {
         // wrote there.
         if !is_our_copy(path) && !is_our_shim(path) {
             return Err(format!(
-                "{} was changed since Codeg wrote it; left as it is",
+                "{} was changed since BeeCode wrote it; left as it is",
                 path.display()
             ));
         }

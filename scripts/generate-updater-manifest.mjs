@@ -8,9 +8,10 @@
 //
 // 资产命名对照 tauri-cli 2.11.4（createUpdaterArtifacts 为 bool true 即 v2
 // 模式，tauri-bundler updater_bundle.rs 只在 "v1Compatible" 下才产 tar.gz/zip
-// 包装）与 tauri-action v0.6.1（getAssetName 对 macOS .app.tar.gz 插入 arch）实测规则：
-// macOS `codeg_{x64,aarch64}.app.tar.gz`；Windows `codeg_<v>_{x64,arm64}-setup.exe`；
-// Linux x64 `codeg_<v>_amd64.AppImage`、`codeg_<v>_amd64.deb`、`codeg-<v>-1.x86_64.rpm`
+// 包装）。tauri-action v0.6.1 使用 assetNamePattern 统一发布名：
+// `beecode_[version]_[arch][setup][ext]`；本地安装包保留 productName 的 BeeCode 大小写。
+// macOS `beecode_<v>_{x64,aarch64}.app.tar.gz`；Windows `beecode_<v>_{x64,arm64}-setup.exe`；
+// Linux x64 `beecode_<v>_amd64.AppImage`、`beecode_<v>_amd64.deb`、`beecode_<v>_x86_64.rpm`
 // （三个安装包都由 createUpdaterArtifacts 直接签出同名 .sig）。预发布（版本号带
 // "-"）的发布工作流只构建 deb + AppImage（RPM 不接受带 "-" 的版本号）。
 //
@@ -33,13 +34,13 @@ import { pathToFileURL } from "node:url"
 // 预发布（版本号带 "-"）的发布工作流只构建 deb + AppImage，不生成 rpm 键，
 // 否则门禁会阻断现有 beta / rc 发布；稳定版 deb / rpm 必须齐全。
 export function expectedAssets(version) {
-  const macX64 = "codeg_x64.app.tar.gz"
-  const macArm = "codeg_aarch64.app.tar.gz"
-  const appImage = `codeg_${version}_amd64.AppImage`
-  const deb = `codeg_${version}_amd64.deb`
-  const rpm = `codeg-${version}-1.x86_64.rpm`
-  const nsisX64 = `codeg_${version}_x64-setup.exe`
-  const nsisArm = `codeg_${version}_arm64-setup.exe`
+  const macX64 = `beecode_${version}_x64.app.tar.gz`
+  const macArm = `beecode_${version}_aarch64.app.tar.gz`
+  const appImage = `beecode_${version}_amd64.AppImage`
+  const deb = `beecode_${version}_amd64.deb`
+  const rpm = `beecode_${version}_x86_64.rpm`
+  const nsisX64 = `beecode_${version}_x64-setup.exe`
+  const nsisArm = `beecode_${version}_arm64-setup.exe`
   const assets = {
     "darwin-x86_64": macX64,
     "darwin-x86_64-app": macX64,
@@ -114,7 +115,7 @@ export function buildManifest({
   // 服务器自更新同样下载 `<包名>.sig`（install.rs），缺签名的包不得发布。
   for (const name of assets.keys()) {
     const isServerPackage =
-      name.startsWith("codeg-server-") &&
+      name.startsWith("beecode-server-") &&
       (name.endsWith(".tar.gz") || name.endsWith(".zip"))
     if (isServerPackage && !assets.has(`${name}.sig`)) {
       fail(`服务器包缺少签名资产：${name}.sig`)

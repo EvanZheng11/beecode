@@ -1,8 +1,8 @@
 # Command line: `codeg-cli`
 
-`codeg-cli` runs one prompt through a Codeg that is already running — the
+`codeg-cli` runs one prompt through a BeeCode that is already running — the
 desktop app or `codeg-server` — and prints the agent's reply. No window opens.
-The run is an ordinary conversation: it is listed in Codeg with the others,
+The run is an ordinary conversation: it is listed in BeeCode with the others,
 where you can read it, answer what the agent asks, and carry it on. A terminal
 mark sets it apart, and the Recent section's filter can show only those.
 
@@ -13,7 +13,7 @@ codeg-cli --assistant code-reviewer "Review the latest commit"
 ```
 
 - [Install](#install)
-- [Which Codeg it talks to](#which-codeg-it-talks-to)
+- [Which BeeCode it talks to](#which-beecode-it-talks-to)
 - [Commands](#commands)
 - [Several agents at once](#several-agents-at-once)
 - [Detached runs](#detached-runs)
@@ -33,8 +33,8 @@ Docker image.
 | Package | `codeg-cli` | On PATH |
 | --- | --- | --- |
 | Linux `.deb` / `.rpm` | `/usr/bin/codeg-cli` | Yes |
-| macOS app | `codeg.app/Contents/MacOS/codeg-cli` | Install command-line tool, below |
-| Windows installer | `%LOCALAPPDATA%\codeg\bin\codeg-cli.exe` | Install command-line tool, below |
+| macOS app | `BeeCode.app/Contents/MacOS/codeg-cli` | Install command-line tool, below |
+| Windows installer | `%LOCALAPPDATA%\BeeCode\bin\codeg-cli.exe` | Install command-line tool, below |
 | AppImage | Inside the image, copied out at every start | Install command-line tool, below |
 | `install.sh` / `install.ps1` | Next to `codeg-server` | Yes |
 | Docker image | `/usr/local/bin/codeg-cli` | Yes |
@@ -48,7 +48,7 @@ not the app's — the one `install.sh` puts there with `codeg-server`, say — i
 left alone: the two are the same program. The steps below do the same by
 hand.
 
-**In Codeg's own terminals and agents**, the app's own `codeg-cli` comes first
+**In BeeCode's own terminals and agents**, the app's own `codeg-cli` comes first
 on PATH, and `CODEG_CLI` names it: a `codeg-cli` typed there is always the
 app's release. A login shell may put its own PATH first; `"$CODEG_CLI"` is the
 app's whatever the PATH. A development build calls its command
@@ -58,7 +58,7 @@ app's whatever the PATH. A development build calls its command
 
 ```bash
 sudo mkdir -p /usr/local/bin
-sudo ln -s /Applications/codeg.app/Contents/MacOS/codeg-cli /usr/local/bin/codeg-cli
+sudo ln -s /Applications/BeeCode.app/Contents/MacOS/codeg-cli /usr/local/bin/codeg-cli
 ```
 
 Without `-f`, `ln` does not replace a `codeg-cli` that is already there — one
@@ -71,12 +71,12 @@ uninstaller beside it. Add that folder to your PATH once, then open a new
 terminal:
 
 ```powershell
-$bin = Join-Path $env:LOCALAPPDATA "codeg\bin"
+$bin = Join-Path $env:LOCALAPPDATA "BeeCode\bin"
 $path = [Environment]::GetEnvironmentVariable("Path", "User")
 [Environment]::SetEnvironmentVariable("Path", "$path;$bin", "User")
 ```
 
-If you installed Codeg in another folder, use its `bin` folder. `codeg-cli.exe`
+If you installed BeeCode in another folder, use its `bin` folder. `codeg-cli.exe`
 is a console program: it behaves the same in PowerShell, `cmd` and Git Bash,
 and a prompt reaches the agent exactly as you wrote it.
 
@@ -89,7 +89,7 @@ over a file you changed; Install command-line tool links that copy into
 with it. Or take it out of the image yourself:
 
 ```bash
-./codeg.AppImage --appimage-extract usr/bin/codeg-cli
+./beecode_0.41.1_amd64.AppImage --appimage-extract usr/bin/codeg-cli
 mkdir -p ~/.local/bin
 mv squashfs-root/usr/bin/codeg-cli ~/.local/bin/
 ```
@@ -115,21 +115,21 @@ docker compose exec codeg codeg-cli -w /projects/app -a claude_code -p "Review t
 ### Turning it on and off
 
 Settings → System → **Command-line access**, on by default, shows the endpoint
-file this Codeg publishes and a command to try. Switched off, no `codeg-cli` on
-this computer can reach this Codeg. `--url` to a server, with the server's
+file this BeeCode publishes and a command to try. Switched off, no `codeg-cli` on
+this computer can reach this BeeCode. `--url` to a server, with the server's
 token, does not depend on it (see [Security](#security)).
 
-## Which Codeg it talks to
+## Which BeeCode it talks to
 
-Every running Codeg, desktop or server, listens on a loopback port of its own
+Every running BeeCode, desktop or server, listens on a loopback port of its own
 for `codeg-cli`, and says where in a private file,
 `<data dir>/cli/endpoint-<pid>.json`. `codeg-cli` looks, in this order:
 
-1. `--url` with `--token` or `--token-file`: a Codeg over HTTP(S), usually a
+1. `--url` with `--token` or `--token-file`: a BeeCode over HTTP(S), usually a
    `codeg-server` on another machine.
-2. `--data-dir DIR`: the Codeg that keeps its data in `DIR`.
-3. `CODEG_CLI_ENDPOINT_FILE`: set by Codeg in its own terminals and for its
-   agents, so that `codeg-cli` typed there reaches the Codeg it runs in —
+2. `--data-dir DIR`: the BeeCode that keeps its data in `DIR`.
+3. `CODEG_CLI_ENDPOINT_FILE`: set by BeeCode in its own terminals and for its
+   agents, so that `codeg-cli` typed there reaches the BeeCode it runs in —
    whatever your shell profile exports.
 4. `CODEG_URL` with `CODEG_TOKEN`.
 5. `CODEG_DATA_DIR`.
@@ -138,12 +138,12 @@ for `codeg-cli`, and says where in a private file,
    `~/Library/Application Support` on macOS, `~/.local/share` on Linux,
    `%APPDATA%` on Windows.
 
-Only the first one given is used. If it fails — that Codeg is not running, or
+Only the first one given is used. If it fails — that BeeCode is not running, or
 cannot prove it is the one in the file — `codeg-cli` stops and says that
-nothing was sent. It never falls back to another Codeg: a conversation there
+nothing was sent. It never falls back to another BeeCode: a conversation there
 would end up in a database nobody is looking at. In a data directory, a file
-that leads to no Codeg that answers and proves itself is skipped. When several
-Codegs answer
+that leads to no BeeCode that answers and proves itself is skipped. When several
+BeeCode instances answer
 there, the desktop app wins, then a debug build of it, then a server, the most
 recently started first. `--runtime desktop|server` picks the kind.
 
@@ -152,10 +152,10 @@ and which one a run would use:
 
 | State | Meaning |
 | --- | --- |
-| `ready` | It answered, and proved it is the Codeg in the file |
+| `ready` | It answered, and proved it is the BeeCode in the file |
 | `stale` | The file is there, its process is gone |
 | `unreachable` | Its process is alive, but nothing answered |
-| `unverified` | Something answered, without the proof only that Codeg can give |
+| `unverified` | Something answered, without the proof only that BeeCode can give |
 | `access_denied` | The operating system refused the connection — a sandbox, most likely |
 | `incompatible` | It speaks another CLI API, or cannot do what this command needs |
 
@@ -165,7 +165,7 @@ until one does (`--wait`, 60 seconds by default).
 **In a sandbox.** An agent's shell often may not use the network at all,
 loopback included. `codeg-cli` then fails with `error_runtime_access_denied`:
 allow the command local network access, or run it outside the sandbox.
-Restarting Codeg does not help. An agent in Codeg is better off with Codeg's
+Restarting BeeCode does not help. An agent in BeeCode is better off with BeeCode's
 own delegation tools, which do not go through its shell.
 
 ## Commands
@@ -192,22 +192,22 @@ or with another command, they are a usage error rather than quietly dropped.
 | Command | |
 | --- | --- |
 | `run` | Run one prompt (below) |
-| `agents` | The agents this Codeg knows, whether each is enabled and installed, and how to install one that is not |
-| `agents install` | Install an agent as Codeg's settings do. See [Installing agents](#installing-agents) |
+| `agents` | The agents this BeeCode knows, whether each is enabled and installed, and how to install one that is not |
+| `agents install` | Install an agent as BeeCode's settings do. See [Installing agents](#installing-agents) |
 | `assistants` | The assistants to run with `--assistant` |
 | `status` | The runtimes this command can reach, and which it would use. Exit code 0 when it would use one |
 | `open` | Start the desktop app unless it is running, and wait until it answers. This computer's desktop app only |
-| `result` | The result of a run: one started with `--detach`, or one whose `codeg-cli` lost its Codeg. See [Detached runs](#detached-runs) |
+| `result` | The result of a run: one started with `--detach`, or one whose `codeg-cli` lost its BeeCode. See [Detached runs](#detached-runs) |
 | `cancel` | Cancel a run |
-| `automations` | The automations saved in Codeg; `automations run ID` runs one now. See [Automations](#automations) |
+| `automations` | The automations saved in BeeCode; `automations run ID` runs one now. See [Automations](#automations) |
 
 Global options:
 
 | Option | |
 | --- | --- |
-| `--url URL` | A Codeg over HTTP(S), e.g. `https://host:3080` |
+| `--url URL` | A BeeCode over HTTP(S), e.g. `https://host:3080` |
 | `--token TOKEN`, `--token-file FILE` | The token for `--url`: the server's `CODEG_TOKEN`. Without either, `CODEG_TOKEN` from the environment |
-| `--data-dir DIR` | The Codeg that keeps its data in `DIR`. With `--standalone`, the data directory of the command's own server |
+| `--data-dir DIR` | The BeeCode that keeps its data in `DIR`. With `--standalone`, the data directory of the command's own server |
 | `--standalone` | Start a `codeg-server` for this command alone, and stop it when the command ends. See [In CI](#in-ci) |
 | `--runtime desktop\|server` | The kind to use when several answer |
 | `-q`, `--quiet` | Errors only: no progress, no heartbeat |
@@ -232,7 +232,7 @@ Global options:
 | `-o`, `--output FILE` | Also write the final reply to `FILE` |
 | `--output-schema FILE` | Have the agent hand in its result as JSON matching the JSON Schema in `FILE`. See [Structured output](#structured-output) |
 | `--title TEXT` | The conversation's title. The agent's own titles do not replace it |
-| `--timeout DUR` | Give up after this long — `90s`, `30m`, `2h` — counted from the start of the command. The run is cancelled in Codeg too, even if this command is gone by then |
+| `--timeout DUR` | Give up after this long — `90s`, `30m`, `2h` — counted from the start of the command. The run is cancelled in BeeCode too, even if this command is gone by then |
 | `--open` | Open the conversation in the desktop app once it exists, and bring it to the front. Desktop app only |
 | `--no-stdin` | Never read stdin |
 | `--detach` | Return once the agent has the prompt, printing the run's id. See [Detached runs](#detached-runs) |
@@ -252,10 +252,10 @@ checked against what the agent offers once it has started, and applied before
 the prompt is sent. A value the agent does not offer ends the run with exit
 code 2, and the message lists the values it does offer; one it offers but does
 not take ends it the same way. The choices are for this run only: the agent's
-defaults in Codeg stay as they are.
+defaults in BeeCode stay as they are.
 `--effort` is not accepted for Kiro, whose answer cannot confirm the change.
 
-**The workspace** becomes a folder in Codeg if it is not one yet. It is not
+**The workspace** becomes a folder in BeeCode if it is not one yet. It is not
 opened in the sidebar.
 
 **A worktree of its own.** `--worktree` gives the run a new git worktree next
@@ -263,35 +263,35 @@ to the repository, on a new branch from its HEAD: `cli/NAME` with
 `--worktree=NAME`, or `cli/` and the start of the run's id. The agent works
 there, in the same subdirectory when the workspace is below the top of the
 repository, and the worktree stays when the run is done, for you to review,
-merge or delete in Codeg. It shows under the repository's folder when that
-folder is open in Codeg. `init` and the result name it:
+merge or delete in BeeCode. It shows under the repository's folder when that
+folder is open in BeeCode. `init` and the result name it:
 `"worktree": {"path": …, "branch": "cli/…"}`. A name already taken gets more
 of the run's id after it. A launch that fails before its conversation exists
 takes its worktree and branch away again: nothing ran in them. The name only
 goes after `=`: `--worktree review` is an unnamed worktree, and the prompt
 `review`. `--worktree` needs git 2.33 or later.
 
-**Interrupting.** Ctrl-C (SIGINT) or SIGTERM cancels the run in Codeg and
+**Interrupting.** Ctrl-C (SIGINT) or SIGTERM cancels the run in BeeCode and
 waits up to 10 seconds for it to wind up. A second one quits within two
 seconds. The exit code is 130 or 143, also when the signal comes before the
 run has started.
 
-**Losing Codeg.** When Codeg stops answering for 30 seconds, `codeg-cli` gives
+**Losing BeeCode.** When BeeCode stops answering for 30 seconds, `codeg-cli` gives
 up with exit code 4. The run may still be going: the result has its link.
 
 ## Installing agents
 
 `codeg-cli agents install claude_code` installs an agent the way Settings →
-Agents does — its npm package, or its download — at the version this Codeg
-pins, or at `--version`. It is installed where Codeg runs: with `--url`, on
-the server. An install can take minutes: it goes on in Codeg whatever becomes
+Agents does — its npm package, or its download — at the version this BeeCode
+pins, or at `--version`. It is installed where BeeCode runs: with `--url`, on
+the server. An install can take minutes: it goes on in BeeCode whatever becomes
 of the command, and asking again while it runs follows the same install.
 `--wait` stops waiting after that long, with exit code 6. Kiro, which comes
 with its own installer, is not installed this way.
 
 ## Automations
 
-`codeg-cli automations` lists the automations saved in Codeg, and
+`codeg-cli automations` lists the automations saved in BeeCode, and
 `codeg-cli automations run ID` runs one now, as its Run now button does. It
 returns once the run is under way and prints its id; `--wait DUR` waits that
 long for it to end instead, then prints the agent's reply and exits 0 when
@@ -304,7 +304,7 @@ run:
 {"v": 1, "type": "automation_run", "automation_id": 3, "run_id": 41, "status": "succeeded", "conversation_id": 214, "link": "codeg://session/214", "summary": "…", "error": null}
 ```
 
-Of the Codegs that share a data directory, only the first to start runs
+Of the BeeCode instances that share a data directory, only the first to start runs
 automations. `run` on another one fails with `automations_elsewhere`: pick the
 right one with `--runtime`. Waiting never cancels a run.
 
@@ -338,7 +338,7 @@ git diff main | codeg-cli -a claude_code -a codex -A reviewer -p "Review this di
 ## Detached runs
 
 `--detach` returns as soon as the agent has the prompt and prints the run's
-id; the run goes on in Codeg. `result` collects it, `cancel` stops it:
+id; the run goes on in BeeCode. `result` collects it, `cancel` stops it:
 
 ```bash
 run=$(codeg-cli --detach -a codex -p "Review the latest commit")
@@ -348,7 +348,7 @@ codeg-cli result "$run" --wait 30m -o review.md
 
 - `--detach` prints the id alone on stdout in `text`, and the run's `init`
   event in both JSON formats. It does not go with `-o`: the reply is not
-  there yet. `--timeout` still counts: Codeg cancels the run when it runs out,
+  there yet. `--timeout` still counts: BeeCode cancels the run when it runs out,
   with no `codeg-cli` left to wait for it.
 - `result RUN` prints the run's result as `run` would have — the reply in
   `text`, the [result object](#the-result-object) in JSON — writes `-o FILE`,
@@ -365,15 +365,15 @@ codeg-cli result "$run" --wait 30m -o review.md
 - `cancel RUN` cancels the run, and says whether it had already finished.
 - A run is named by its id or by at least 8 characters from its start, as
   long as no other run starts the same way.
-- Codeg keeps a finished run's result for 30 minutes, in memory: a Codeg that
-  restarted no longer has it. The conversation itself stays in Codeg.
+- BeeCode keeps a finished run's result for 30 minutes, in memory: a BeeCode that
+  restarted no longer has it. The conversation itself stays in BeeCode.
 
-The same `result` collects a run whose `codeg-cli` gave up on its Codeg —
-exit code 4, `runtime_lost` — once that Codeg answers again.
+The same `result` collects a run whose `codeg-cli` gave up on its BeeCode —
+exit code 4, `runtime_lost` — once that BeeCode answers again.
 
 ## Permissions
 
-No one is watching a headless run, so `--permissions` decides what Codeg
+No one is watching a headless run, so `--permissions` decides what BeeCode
 answers when the agent asks — to run a command, edit a file, use a tool. It
 answers once, never "always": an "always" answer writes a lasting rule into
 your agent's own settings.
@@ -384,9 +384,9 @@ your agent's own settings.
 | `reads` | Allowed once if it only reads or searches, refused otherwise | Declined |
 | `allow` | Allowed, this once | Declined |
 | `fail` | Refused, and the run ends with exit code 5 | Declined |
-| `wait` | Left for you to answer in Codeg | Left for you |
+| `wait` | Left for you to answer in BeeCode | Left for you |
 
-When the agent offers no one-time answer of the kind needed, Codeg does not
+When the agent offers no one-time answer of the kind needed, BeeCode does not
 pick a lasting one instead: `allow` refuses once, and with no one-time refusal
 either, the run ends with exit code 5. A plan the agent wants approved (Grok)
 is approved under `allow`, left for you under `wait`, and abandoned otherwise.
@@ -397,7 +397,7 @@ in the result's `permission_denials`, and under `deny` `codeg-cli` says on
 stderr how many there were.
 
 The agent's own mode is another matter: `--mode bypassPermissions` (Claude
-Code) decides whether the agent asks at all, `--permissions` what Codeg answers
+Code) decides whether the agent asks at all, `--permissions` what BeeCode answers
 when it does.
 
 Under `wait`, the conversation's link goes to stderr. Answer there — in the
@@ -422,7 +422,7 @@ already went through your agent's own permission check.
 | `stream-json` | One [event](#events) per line: `init` first, the result object last | Errors and hints |
 
 In both JSON formats stdout carries JSON only. Every exit after the arguments
-were read prints a result object — a Codeg that could not be reached, a
+were read prints a result object — a BeeCode that could not be reached, a
 timeout and an interrupt included — with `is_error: true` and the reason in
 `subtype` and `error`. Only arguments `codeg-cli` cannot parse print nothing
 but a message on stderr, with exit code 2. Scripts should look at both the
@@ -468,11 +468,11 @@ git show HEAD | codeg-cli -a claude_code --output-schema verdict.json \
 jq -r .verdict result.json
 ```
 
-The agent hands the result in with a tool Codeg gives it, `submit_result`,
+The agent hands the result in with a tool BeeCode gives it, `submit_result`,
 whose input schema is yours. Each result is checked against the schema, and
 one that does not match is refused with where it goes wrong, so the agent can
 fix it and try again; after five refusals no more are taken. The last result
-accepted is the run's. An agent Codeg cannot give the tool to (Pi, Cline,
+accepted is the run's. An agent BeeCode cannot give the tool to (Pi, Cline,
 OpenClaw, a custom agent with MCP turned off) is shown the schema instead and
 asked to reply with the JSON; so is any agent read that way when it ends its
 turn without calling the tool. Its reply is then the result when the whole
@@ -496,7 +496,7 @@ schema the same way.
 - Each result that does not match is a `notice` event.
 - `submit_result` needs no permission. An agent that asks for one before it
   calls the tool — Claude Code asks before any MCP tool — is answered "yes,
-  once" by Codeg whatever `--permissions` says: the tool runs and reads
+  once" by BeeCode whatever `--permissions` says: the tool runs and reads
   nothing, it only hands the run its result.
 - The schema is a JSON object of at most 64 KiB, and its root takes objects
   only — `"type": "object"` — since the result is handed in as a tool's
@@ -515,9 +515,9 @@ schema the same way.
 | 1 | `error_during_execution` | The run failed: the agent reported an error, refused, ran out of tokens or exited; or it is not installed, or not enabled |
 | 2 | `error_usage` | The arguments; an agent, assistant, model, effort, mode or option that does not exist or did not take; a workspace that does not exist; an empty or too large prompt |
 | 3 | `error_timeout` | `--timeout` ran out. The run was cancelled |
-| 4 | `error_runtime_unavailable` | No Codeg to talk to: none is running, its proof or the token failed, it went away during the run, or the run's result is past its 30-minute retention |
+| 4 | `error_runtime_unavailable` | No BeeCode to talk to: none is running, its proof or the token failed, it went away during the run, or the run's result is past its 30-minute retention |
 | 4 | `error_runtime_access_denied` | The operating system refused the connection, a sandbox most likely |
-| 4 | `error_runtime_incompatible` | That Codeg speaks another CLI API, or is too old for what was asked, `--effort` say: update whichever is older |
+| 4 | `error_runtime_incompatible` | That BeeCode speaks another CLI API, or is too old for what was asked, `--effort` say: update whichever is older |
 | 5 | `error_permission_required` | The agent needed a permission the policy does not give: `--permissions fail`, or a request with no one-time answer |
 | 6 | `still_running` | `result`, `automations run` or `agents install`: what it waited for had not ended within `--wait`. It was not cancelled. Not a result: see [Detached runs](#detached-runs) |
 | 7 | `error_max_structured_output_retries` | `--output-schema`: the turn ended without a result that matches the schema. See [Structured output](#structured-output) |
@@ -548,7 +548,7 @@ change. `next_steps` are commands or actions to try, when there are any.
 | `token_file_unreadable` | `error_usage` | `--token-file` cannot be read |
 | `workspace_required` | `error_usage` | `--url` needs `-w` |
 | `no_cwd`, `bad_workspace` | `error_usage` | The workspace cannot be made an absolute path |
-| `workspace_not_absolute`, `workspace_not_found` | `error_usage` | On Codeg's machine, the workspace is not an absolute path to a directory |
+| `workspace_not_absolute`, `workspace_not_found` | `error_usage` | On BeeCode's machine, the workspace is not an absolute path to a directory |
 | `unknown_agent` | `error_usage` | No such agent |
 | `agent_is_an_assistant` | `error_usage` | `--agent` was given an assistant: `next_steps` has the `--assistant` to write |
 | `unknown_assistant` | `error_usage` | No enabled assistant has that name or id |
@@ -573,31 +573,31 @@ change. `next_steps` are commands or actions to try, when there are any.
 | `bad_output_schema` | `error_usage` | `--output-schema` names a file that cannot be read, or is not a JSON Schema whose root takes objects |
 | `output_unwritable` | `error_during_execution` | The reply could not be written to `-o FILE` |
 | `agent_not_installed` | `error_during_execution` | The agent is not installed: `codeg-cli agents` says how to install it |
-| `agent_unavailable` | `error_during_execution` | The agent is disabled in Codeg's settings, or its settings cannot be read |
+| `agent_unavailable` | `error_during_execution` | The agent is disabled in BeeCode's settings, or its settings cannot be read |
 | `agent_spawn_failed` | `error_during_execution` | The agent could not be started |
 | `agent_exited` | `error_during_execution` | The agent ended before its turn did |
 | `selectors_timeout` | `error_during_execution` | The agent did not list its options within 30 seconds, so `--model` and the like could not be checked |
-| `workspace_unavailable`, `conversation_create_failed`, `prompt_failed` | `error_during_execution` | Codeg could not read the workspace, create the conversation, or send the prompt |
+| `workspace_unavailable`, `conversation_create_failed`, `prompt_failed` | `error_during_execution` | BeeCode could not read the workspace, create the conversation, or send the prompt |
 | `worktree_failed` | `error_during_execution` | git could not add the worktree |
 | `automation_busy`, `automation_failed`, `automations_unavailable` | `error_during_execution` | The automation is running already, or could not be started or read |
-| `install_failed`, `agent_not_found_after_install` | `error_during_execution` | The install failed, or what it installed cannot be found where Codeg looks |
-| `cancelled` | `error_during_execution` | The run was cancelled in Codeg |
+| `install_failed`, `agent_not_found_after_install` | `error_during_execution` | The install failed, or what it installed cannot be found where BeeCode looks |
+| `cancelled` | `error_during_execution` | The run was cancelled in BeeCode |
 | `run_stopped`, `run_lost` | `error_during_execution` | The run stopped before its prompt was sent |
 | `stop_<reason>` | `error_during_execution` | The turn ended for another reason than finishing: `stop_max_tokens`, `stop_refusal`, `stop_max_turn_requests`, … |
-| `too_many_reservations` | `error_during_execution` | Too many runs are being set up on that Codeg at once. Try again shortly |
-| `agents_unavailable`, `assistants_unavailable` | `error_during_execution` | Codeg could not list them |
+| `too_many_reservations` | `error_during_execution` | Too many runs are being set up on that BeeCode at once. Try again shortly |
+| `agents_unavailable`, `assistants_unavailable` | `error_during_execution` | BeeCode could not list them |
 | `http_error` | `error_during_execution` | An unexpected HTTP answer |
 | `timeout` | `error_timeout` | `--timeout` ran out |
-| `runtime_unavailable` | `error_runtime_unavailable` | No Codeg is running where `codeg-cli` looked, or the one there does not answer |
-| `unauthorized` | `error_runtime_unavailable` | That Codeg refused the token |
-| `runtime_lost` | `error_runtime_unavailable` | Codeg stopped answering during the run. The run may still be going |
-| `run_not_found`, `result_missing`, `install_not_found` | `error_runtime_unavailable` | That Codeg has no such run or install, or no result for it |
+| `runtime_unavailable` | `error_runtime_unavailable` | No BeeCode is running where `codeg-cli` looked, or the one there does not answer |
+| `unauthorized` | `error_runtime_unavailable` | That BeeCode refused the token |
+| `runtime_lost` | `error_runtime_unavailable` | BeeCode stopped answering during the run. The run may still be going |
+| `run_not_found`, `result_missing`, `install_not_found` | `error_runtime_unavailable` | That BeeCode has no such run or install, or no result for it |
 | `open_failed`, `open_timeout` | `error_runtime_unavailable` | `open` could not start the desktop app, or it did not answer in time |
 | `no_server`, `standalone_failed` | `error_runtime_unavailable` | `--standalone` found no `codeg-server` to start, or the one it started did not come up |
-| `data_dir_in_use` | `error_runtime_unavailable` | `--standalone`: another Codeg is alive on that data directory |
+| `data_dir_in_use` | `error_runtime_unavailable` | `--standalone`: another BeeCode is alive on that data directory |
 | `runtime_access_denied` | `error_runtime_access_denied` | The operating system refused the connection |
-| `runtime_incompatible`, `api_version`, `bad_response`, `run_not_reserved` | `error_runtime_incompatible` | That Codeg and this `codeg-cli` do not understand each other |
-| `automations_elsewhere` | `error_runtime_incompatible` | Another Codeg on the same data directory runs the automations |
+| `runtime_incompatible`, `api_version`, `bad_response`, `run_not_reserved` | `error_runtime_incompatible` | That BeeCode and this `codeg-cli` do not understand each other |
+| `automations_elsewhere` | `error_runtime_incompatible` | Another BeeCode on the same data directory runs the automations |
 | `permission_required` | `error_permission_required` | A permission the policy does not give |
 | `interrupted` | `error_interrupted` | SIGINT or SIGTERM |
 | `output_schema_unmet` | `error_max_structured_output_retries` | The agent handed in no result that matches `--output-schema`: `message` says what it did instead |
@@ -628,7 +628,7 @@ Each carries:
 | `question` | `question_id`, `conversation_id`, `decision` | A question the agent asked. `decision`: `declined`, `waiting` |
 | `notice` | `severity`, `title`, `message?` | Something worth knowing, e.g. a policy that was narrowed, or a result `submit_result` refused |
 | `error` | `message`, `code?` | An error during the run. The result says how the run ended |
-| `gap` | — | Some events were lost: they were older than what Codeg keeps |
+| `gap` | — | Some events were lost: they were older than what BeeCode keeps |
 | `result` | See [below](#the-result-object) | The last event |
 
 A `permission` or `question` whose `conversation_id` is not the run's came
@@ -675,27 +675,27 @@ them reads it too.
 | `launch` | `requested` and `effective`: the `model`, `effort` and `mode` asked for, and those in effect. `unconfirmed` names any the agent accepted without confirming |
 | `pending` | Under `--permissions wait`: `[{request_id, conversation_id?, tool}]`, the requests, questions and plan approvals still waiting when `--timeout` ended the run |
 | `target_index?` | With several `-a` and `-A`: which run this is, from 1 |
-| `conversation_id`, `link` | The conversation in Codeg |
+| `conversation_id`, `link` | The conversation in BeeCode |
 | `agent`, `assistant?` | The agent that ran, and the assistant (`{id, name}`) it ran as. Missing when the run failed before its agent was known |
 | `worktree?` | With `--worktree`: `{path, branch}` of the worktree the run worked in |
 | `structured_output?` | With `--output-schema`: the result the agent handed in, which matches the schema, or `null` when there is none. Missing without `--output-schema` |
 | `error` | When `is_error`: `{code, message, next_steps}`. See [Error codes](#error-codes) |
 
-A run that failed before Codeg took it — no Codeg to reach, or arguments
+A run that failed before BeeCode took it — no BeeCode to reach, or arguments
 `codeg-cli` itself refused — has `null` for `run_id`. One that failed before
 its conversation existed has `null` for `conversation_id` and `link`, and
 `stream-json` then prints the result alone, without `init`.
 
 **Compatibility.** Fields and event types are only ever added. An existing
 field never changes its meaning or its type. Ignore fields and event types you
-do not know: newer Codegs send more.
+do not know: newer BeeCode instances send more.
 
 ## In CI
 
 The shortest way on a fresh runner is a server of the command's own:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh | bash
 export ANTHROPIC_API_KEY="..."   # from the CI system's secrets
 codeg-cli --standalone agents install claude_code
 git show HEAD | codeg-cli --standalone -a claude_code -w "$PWD" --timeout 30m \
@@ -711,13 +711,13 @@ the command's environment, credentials included. Each command starts from
 nothing: an npm agent stays installed (npm keeps it), but settings, assistants
 and downloaded agents do not. `--data-dir DIR` keeps them in `DIR` between
 commands instead. It never starts on its own: when `codeg-cli` cannot reach a
-Codeg it says so, and nothing else happens.
+BeeCode it says so, and nothing else happens.
 
 A data directory is never shared with a `--standalone` server. One that finds
-another Codeg alive on its `--data-dir` — even one that cannot be reached —
+another BeeCode alive on its `--data-dir` — even one that cannot be reached —
 stops before touching anything, with `data_dir_in_use`. A `codeg-server`
 started on a directory a `--standalone` server holds waits for it; the
-desktop app says so and quits. Only a Codeg that ships `codeg-cli` is seen
+desktop app says so and quits. Only a BeeCode that ships `codeg-cli` is seen
 this way: an older desktop app or `codeg-server` on the same directory is
 not, and does not see a `--standalone` server either — keep `--data-dir`
 away from a directory one of them uses. `--standalone` does not go with
@@ -733,7 +733,7 @@ runner:
 set -e
 
 # 1. codeg-server and codeg-cli
-curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh | bash
 
 # 2. A server for this job alone: its own data directory, loopback only. The
 #    agents it starts inherit its environment, credentials included.
@@ -769,7 +769,7 @@ In GitHub Actions:
     CODEG_HOST: 127.0.0.1
     CODEG_PORT: "3080"
   run: |
-    curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh | bash
     export CODEG_TOKEN="$(openssl rand -hex 32)"
     codeg-server > "$RUNNER_TEMP/codeg-server.log" 2>&1 &
     export CODEG_URL="http://127.0.0.1:$CODEG_PORT"
@@ -788,18 +788,18 @@ have it hand in a verdict with `--output-schema`: see
 
 ## Security
 
-- **This computer only.** A Codeg's `codeg-cli` port listens on `127.0.0.1`
+- **This computer only.** A BeeCode's `codeg-cli` port listens on `127.0.0.1`
   and serves nothing but the run API and a health check: no web interface, no
   other API. It
   accepts only `Host: 127.0.0.1` and `localhost`, so a web page cannot reach it
   by DNS rebinding. The desktop app's web service is a different thing, off
   by default.
-- **A key per launch.** Each start of Codeg makes a new key and keeps it in the
+- **A key per launch.** Each start of BeeCode makes a new key and keeps it in the
   endpoint file only — never in the database. The file and its folder are
   readable by your user alone from the moment they exist (`0700`/`0600`, an
   owner-only access list on Windows). A folder found otherwise — another
   user's, one others may read, or on macOS one with an access list (say,
-  inherited from the folder above) — is refused and left as it is: Codeg
+  inherited from the folder above) — is refused and left as it is: BeeCode
   then publishes nothing, and Settings shows why. `codeg-cli` in turn reads
   only an endpoint file that is your own, and that no one else may write.
 - **Proof before anything is sent.** A file left by a crash may name a port
@@ -807,7 +807,7 @@ have it hand in a verdict with `--output-schema`: see
   knows the key, bound to that port, and sends the key and the prompt only to
   one that does.
 - **The same trust as your files.** Any program running as you can read the
-  endpoint file, and so run agents as you. It could as well read Codeg's
+  endpoint file, and so run agents as you. It could as well read BeeCode's
   database or start an agent itself: the boundary is your user account.
 - **Remote.** `--url` uses the server's own token, as the web interface does,
   and is allowed nothing the web interface is not. Prefer HTTPS. A `--url` to

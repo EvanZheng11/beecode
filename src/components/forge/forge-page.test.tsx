@@ -307,7 +307,7 @@ describe("ForgePage list failures", () => {
     // The retry's rows, not the failure.
     expect(await screen.findByText("Login times out")).toBeInTheDocument()
     expect(
-      screen.queryByText(/not the forge codeg had it classified as/)
+      screen.queryByText(/not the forge BeeCode had it classified as/)
     ).not.toBeInTheDocument()
     // Re-derived, so the panel now calls them merge requests. The accessible
     // name carries the count badge too, hence the regex.
@@ -335,7 +335,7 @@ describe("ForgePage list failures", () => {
 
     expect(
       await screen.findByText(
-        "git.corp.com is a GitLab, not the forge codeg had it classified as. The detection has been corrected — reload to retry."
+        "git.corp.com is a GitLab, not the forge BeeCode had it classified as. The detection has been corrected — reload to retry."
       )
     ).toBeInTheDocument()
   })

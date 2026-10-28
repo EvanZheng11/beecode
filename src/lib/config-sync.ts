@@ -175,7 +175,7 @@ export const CONFIG_EXPORT_EXTENSION = "codegcfg.json"
  *  in a downloads folder six months later. */
 export function defaultExportFileName(now: Date = new Date()): string {
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, "-")
-  return `codeg-config-${stamp}.${CONFIG_EXPORT_EXTENSION}`
+  return `BeeCode-config-${stamp}.${CONFIG_EXPORT_EXTENSION}`
 }
 
 /** Where an import's bytes are coming from. A local desktop window names a
@@ -213,7 +213,7 @@ export async function exportConfigToFile(): Promise<ConfigExportSummary | null> 
   const { save } = await import("@tauri-apps/plugin-dialog")
   const destPath = await save({
     defaultPath: fileName,
-    filters: [{ name: "Codeg config", extensions: ["json"] }],
+    filters: [{ name: "BeeCode config", extensions: ["json"] }],
   })
   if (!destPath) return null
   return getTransport().call<ConfigExportSummary>("config_sync_export_file", {
@@ -239,7 +239,7 @@ export async function pickConfigFileToImport(): Promise<PickedConfigImport | nul
   const picked = await open({
     multiple: false,
     directory: false,
-    filters: [{ name: "Codeg config", extensions: ["json"] }],
+    filters: [{ name: "BeeCode config", extensions: ["json"] }],
   })
   const srcPath = typeof picked === "string" ? picked : null
   if (!srcPath) return null

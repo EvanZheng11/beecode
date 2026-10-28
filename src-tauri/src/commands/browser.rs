@@ -2941,7 +2941,7 @@ pub async fn agent_open_tab_core(
         }
         Ok(Err(_)) | Err(_) => {
             return Err(open_failed(
-                "no codeg workspace window answered. There has to be one open to put a tab in",
+                "no BeeCode workspace window answered. There has to be one open to put a tab in",
             ))
         }
     };

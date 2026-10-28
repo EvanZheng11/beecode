@@ -25,7 +25,7 @@ const ReleaseNotes = dynamic(
   { ssr: false }
 )
 
-const RELEASES_URL = "https://github.com/EvanZheng11/codeg/releases/latest"
+const RELEASES_URL = "https://github.com/EvanZheng11/beecode/releases/latest"
 
 function Spinner({ className }: { className?: string }) {
   return (

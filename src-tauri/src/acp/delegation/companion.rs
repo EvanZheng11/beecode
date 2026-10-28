@@ -398,7 +398,7 @@ impl ResultSchemaProbe {
 
 /// `submit_result`'s description. The input schema is the run's own.
 pub(crate) const SUBMIT_RESULT_DESCRIPTION: &str = "Hand in the result of this run. The person \
-who started it from Codeg's command line asked for the result as JSON matching this tool's input \
+who started it from BeeCode's command line asked for the result as JSON matching this tool's input \
 schema: call this once you are done, with the result as the arguments. A result that does not \
 match is refused with what to fix; call again with the fixed result. The last result accepted is \
 the one that counts.";
@@ -933,16 +933,16 @@ async fn build_tools_call_spawn(
                         AssistantSupport::Unsupported => {
                             return Ok(local_delegation_refusal(
                                 "assistants_unsupported",
-                                "This Codeg has not finished upgrading, so it cannot \
+                                "This BeeCode has not finished upgrading, so it cannot \
                                  delegate to assistants yet. Ask the user to restart \
-                                 Codeg, then try again. Do not delegate this to another \
+                                 BeeCode, then try again. Do not delegate this to another \
                                  agent instead.",
                             ));
                         }
                         AssistantSupport::Unknown => {
                             return Ok(local_delegation_refusal(
                                 "assistant_support_unknown",
-                                "Codeg did not answer in time, so the assistant was not \
+                                "BeeCode did not answer in time, so the assistant was not \
                                  called. Try the same call again shortly.",
                             ));
                         }
@@ -3356,7 +3356,7 @@ pub fn render_computer_capture_result(outcome: &Value) -> Value {
     let text = if s("targetId") == crate::computer::targets::SCREEN_TARGET_ID {
         format!(
             "Screenshot of the entire screen ({}) — a {}×{} px image of the screen, {:.0}×{:.0} \
-             in desktop coordinates. What is never shared — codeg's own windows, the \
+             in desktop coordinates. What is never shared — BeeCode's own windows, the \
              applications on the user's never-share list, the system's own views of other \
              windows (an overview of every window, previews, notifications), and parts of the \
              screen no application the user could share owns — is painted over, and a point on \
@@ -7966,7 +7966,7 @@ mod tests {
                   "level": "none" },
                 { "targetId": "w3", "app": { "key": "app.codeg", "name": "codeg", "pid": 7 },
                   "bounds": { "x": 0, "y": 0, "width": 800, "height": 600 }, "onScreen": true,
-                  "level": "none", "note": "codeg's own window" }
+                  "level": "none", "note": "BeeCode's own window" }
             ]
         }));
         let text = out["content"][0]["text"].as_str().unwrap();
@@ -7974,7 +7974,7 @@ mod tests {
         assert!(text.contains("[shared: read]  notes.txt"), "{text}");
         assert!(text.contains("w2  Mail (pid 6)"), "{text}");
         assert!(text.contains("[not shared]"), "{text}");
-        assert!(text.contains("[never shareable: codeg's own window]"), "{text}");
+        assert!(text.contains("[never shareable: BeeCode's own window]"), "{text}");
         assert!(text.contains("Share a window"), "{text}");
         assert!(!text.contains("Input:"), "{text}");
     }

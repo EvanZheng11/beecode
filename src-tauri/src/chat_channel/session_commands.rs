@@ -1495,7 +1495,7 @@ fn owner_label_for(channel_id: i32, sender_id: &str, target: &ChannelMessageTarg
 
 fn truncate_topic_title(task_description: &str) -> String {
     let title = truncate_title(task_description);
-    format!("Codeg: {title}").chars().take(128).collect()
+    format!("BeeCode: {title}").chars().take(128).collect()
 }
 
 async fn build_chat_session_runtime_env(

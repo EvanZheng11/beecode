@@ -145,7 +145,7 @@ fn status_of(plan: &Plan, command: &str) -> CommandToolStatus {
 pub fn install() -> Result<CommandToolStatus, String> {
     let plan = this_plan();
     match &plan {
-        Plan::Nothing => return Err("this build of Codeg has no codeg-cli to install".into()),
+        Plan::Nothing => return Err("this build of BeeCode has no codeg-cli to install".into()),
         Plan::Package { .. } => {}
         Plan::Link { link, target } => match link_state(link, target) {
             LinkState::Ours { current: true } => {}
@@ -190,15 +190,15 @@ fn link_state(link: &Path, target: &Path) -> LinkState {
     if points_to == target {
         return LinkState::Ours { current: true };
     }
-    // Into a codeg.app bundle somewhere else: this app, moved, or a copy
-    // of it — the link install.sh also keeps as the desktop's.
+    // 兼容新旧桌面包的链接；应用移动后也允许重新指向当前安装。
     let tail: Vec<_> = points_to
         .components()
         .rev()
         .take(4)
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    let ours = tail == ["codeg-cli", "MacOS", "Contents", "codeg.app"];
+    let ours = tail == ["codeg-cli", "MacOS", "Contents", "codeg.app"]
+        || tail == ["codeg-cli", "MacOS", "Contents", "BeeCode.app"];
     if ours {
         LinkState::Ours { current: false }
     } else {
@@ -250,7 +250,7 @@ fn make_link_as_admin(link: &Path, target: &Path) -> Result<(), String> {
     let dir = link.parent().unwrap_or(Path::new("/usr/local/bin"));
     let script = format!(
         "do shell script \"/bin/mkdir -p \" & {} & \" && /bin/ln -sfn \" & {} & \" \" & {} \
-         with prompt \"Codeg wants to put codeg-cli on your PATH.\" with administrator privileges",
+         with prompt \"BeeCode wants to put codeg-cli on your PATH.\" with administrator privileges",
         quoted(dir),
         quoted(target),
         quoted(link)
@@ -557,13 +557,17 @@ mod tests {
         );
 
         // The app moved: the old link is still ours, to point at it anew.
-        let moved = root.path().join("new/codeg.app/Contents/MacOS/codeg-cli");
+        let moved = root.path().join("new/BeeCode.app/Contents/MacOS/codeg-cli");
         assert_eq!(
             link_state(&link, &moved),
             LinkState::Ours { current: false }
         );
         make_link(&link, &moved).unwrap();
         assert_eq!(std::fs::read_link(&link).unwrap(), moved);
+        assert_eq!(
+            link_state(&link, &target),
+            LinkState::Ours { current: false }
+        );
 
         // The server package's own file: same program, never replaced.
         std::fs::remove_file(&link).unwrap();

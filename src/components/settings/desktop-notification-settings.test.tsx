@@ -273,7 +273,7 @@ describe("the permission card", () => {
 
     await waitFor(() =>
       expect(sendTest).toHaveBeenCalledWith(
-        "Codeg",
+        "BeeCode",
         "Desktop notifications are working."
       )
     )

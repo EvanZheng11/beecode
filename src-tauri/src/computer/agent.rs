@@ -172,15 +172,15 @@ impl NotGrantable {
     pub fn note(self) -> &'static str {
         match self {
             NotGrantable::Codeg => {
-                "codeg's own window: it can never be shared with an agent. For web pages use \
+                "BeeCode's own window: it can never be shared with an agent. For web pages use \
                  the browser_* tools."
             }
             NotGrantable::Blocklisted => {
                 "on the user's list of applications never shared with agents: it cannot be \
-                 shared unless they take it off that list in codeg's settings."
+                 shared unless they take it off that list in BeeCode's settings."
             }
             NotGrantable::Unidentified => {
-                "codeg cannot tell which application owns this window, so it cannot be shared \
+                "BeeCode cannot tell which application owns this window, so it cannot be shared \
                  with an agent."
             }
         }

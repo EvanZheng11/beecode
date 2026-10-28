@@ -345,7 +345,7 @@ impl OutputSchema {
     /// Without the tool, the schema itself.
     pub fn instructions(&self, tool_offered: bool) -> String {
         if tool_offered {
-            return "The person who started this run from Codeg's command line wants its result \
+            return "The person who started this run from BeeCode's command line wants its result \
                     as JSON. When you are done, call the `submit_result` tool with the result as \
                     its arguments. It checks them against its input schema: a result that does \
                     not match is refused with what to fix, and you call it again. Your reply \
@@ -354,7 +354,7 @@ impl OutputSchema {
         }
         let schema = serde_json::to_string_pretty(&self.schema).unwrap_or_default();
         format!(
-            "The person who started this run from Codeg's command line wants its result as \
+            "The person who started this run from BeeCode's command line wants its result as \
              JSON. When you are done, reply with the result: one JSON object matching the JSON \
              Schema below, as the whole reply or in a single ```json code block.\n\n```json\n\
              {schema}\n```"

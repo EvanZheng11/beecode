@@ -397,7 +397,7 @@ pub struct BridgeGrant {
 pub enum BridgeError {
     #[error("the port bridge is off on this server")]
     Disabled,
-    #[error("port {0} is codeg's own listener")]
+    #[error("port {0} is BeeCode's own listener")]
     Reserved(u16),
     #[error("no bridge port is free: {0}")]
     NoPort(String),
@@ -1058,7 +1058,7 @@ fn bounce_page(to: &str) -> String {
     let script = json_for_script(to);
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
-         <meta http-equiv=\"refresh\" content=\"0;url={attribute}\"><title>codeg</title></head>\
+         <meta http-equiv=\"refresh\" content=\"0;url={attribute}\"><title>BeeCode</title></head>\
          <body><script>location.replace({script})</script></body></html>"
     )
 }
@@ -1563,7 +1563,7 @@ fn forbidden_page() -> Response {
     html_page(
         StatusCode::FORBIDDEN,
         "This preview is no longer valid",
-        "Reopen the page from codeg to start a new preview session.",
+        "Reopen the page from BeeCode to start a new preview session.",
     )
 }
 
@@ -1571,7 +1571,7 @@ fn cross_origin_page() -> Response {
     html_page(
         StatusCode::FORBIDDEN,
         "This request did not come from the page itself",
-        "A dev server shown through codeg only answers its own page. Open the address from codeg to view it.",
+        "A dev server shown through BeeCode only answers its own page. Open the address from BeeCode to view it.",
     )
 }
 
@@ -1579,7 +1579,7 @@ fn bad_gateway_page(target: u16, err: &dyn std::fmt::Display) -> Response {
     let detail = escape_html(&err.to_string());
     html_page(
         StatusCode::BAD_GATEWAY,
-        &format!("codeg cannot reach port {target} on its host"),
+        &format!("BeeCode cannot reach port {target} on its host"),
         &format!("Is the server still running there? Reload to try again. ({detail})"),
     )
 }

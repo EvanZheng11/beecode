@@ -31,7 +31,7 @@ Everything fails closed:
 
 ### Who gets in
 
-Codeg does not choose users in this mode. It admits every request the proxy
+BeeCode does not choose users in this mode. It admits every request the proxy
 vouches for with a valid assertion for this application, including requests
 made with a service token the application's policy allows. The proxy's policy
 is the user list: keep it to the people who should use this server, such as
@@ -44,9 +44,9 @@ proxy does not get in.
 The assertion rides on the proxy's session cookie, and the browser attaches
 that cookie to requests that pages on other origins make as well (Cloudflare
 sets its application cookie `SameSite=None` unless you change it). Without a
-further check, any page the signed-in user opens could use Codeg's WebSockets
+further check, any page the signed-in user opens could use BeeCode's WebSockets
 or upload endpoints in their name. So a request admitted by an assertion must
-come from Codeg's own page: the server refuses it when the browser marks it as
+come from BeeCode's own page: the server refuses it when the browser marks it as
 sent from another origin (`Sec-Fetch-Site`), or, in a browser that does not
 send that header, when its `Origin` names a host other than the one the
 request was sent to (`Host`, or `X-Forwarded-Host` from a proxy that rewrites
@@ -54,7 +54,7 @@ request was sent to (`Host`, or `X-Forwarded-Host` from a proxy that rewrites
 
 `SameSite` does not make this check optional. Browsers apply it by site, which
 means the scheme and the registrable domain (`https://example.com`), not by
-origin. A page on `wiki.example.com` is same-site with Codeg on
+origin. A page on `wiki.example.com` is same-site with BeeCode on
 `codeg.example.com`, so its requests carry the cookie even when the cookie is
 `Lax` or `Strict`.
 Setting `Lax` still keeps the cookie off requests from unrelated sites, but
@@ -62,7 +62,7 @@ when anything else is served on a subdomain of the same domain, this check is
 what turns its pages away.
 
 Chrome sends no `Sec-Fetch-Site` on a WebSocket handshake, so for the event
-socket the `Origin` always decides. A proxy between the browser and Codeg must
+socket the `Origin` always decides. A proxy between the browser and BeeCode must
 therefore pass on the browser's `Host`, or put it in `X-Forwarded-Host`.
 Cloudflare Tunnel does: it keeps the `Host` unless `httpHostHeader` is set, and
 then moves the original to `X-Forwarded-Host`. Otherwise the socket is refused
@@ -101,7 +101,7 @@ Bind the server to loopback (`CODEG_HOST=127.0.0.1`) and reach it only through
 the tunnel, so every browser request passes Access. In the application's
 cookie settings, setting **SameSite Attribute** to `Lax` keeps the cookie off
 requests from unrelated sites, apart from top-level `GET` navigations such as a
-link the user follows into Codeg. It does not hold back pages on other
+link the user follows into BeeCode. It does not hold back pages on other
 subdomains of the same domain; see
 [Requests from other origins](#requests-from-other-origins).
 

@@ -115,7 +115,7 @@ pub const NO_DESKTOP_NOTE: &str =
     "Computer use is not available in this session: there are no windows to read.";
 
 /// How to share a window, for every refusal that ends in "ask the user".
-const SHARE_HOW: &str = "Ask the user to share it: in codeg's status bar they open Computer use \
+const SHARE_HOW: &str = "Ask the user to share it: in BeeCode's status bar they open Computer use \
                          and press \"Share a window…\". Sharing is theirs to give — there is no \
                          way to take it, and no point retrying until they have.";
 
@@ -273,7 +273,7 @@ pub fn blocked_note(target_id: &str, why: &str) -> String {
 pub fn permission_missing_note(permission: &str) -> String {
     format!(
         "codeg-computer-helper has not been granted {permission} by macOS. Ask the user to grant \
-         it: in codeg's status bar they open Computer use and follow the permission guide \
+         it: in BeeCode's status bar they open Computer use and follow the permission guide \
          (System Settings → Privacy & Security → {permission}). Only they can, and retrying will \
          not help until they have."
     )
@@ -282,7 +282,7 @@ pub fn permission_missing_note(permission: &str) -> String {
 pub fn control_required_note(target_id: &str) -> String {
     format!(
         "Window {target_id} is shared with you for reading only. Ask the user to let you act on \
-         it: in codeg's status bar they open Computer use and set that window to \"Read and \
+         it: in BeeCode's status bar they open Computer use and set that window to \"Read and \
          act\". Only they can; retrying will not change it. You can still read the window."
     )
 }
@@ -339,14 +339,14 @@ pub const SESSION_CHORD_NOTE: &str = "That key locks the screen, logs out, or sh
 pub const SCREEN_GRANT_REQUIRED_NOTE: &str =
     "The entire screen (d1) is not shared with agents, or \
      no longer is (that sharing ends after a while unused, or when the user takes it back or \
-     switches it off). Ask the user to share it: in codeg's status bar they open Computer use, \
+     switches it off). Ask the user to share it: in BeeCode's status bar they open Computer use, \
      press \"Share a window…\" and choose the entire screen — only they can, and it is offered \
-     only where they have switched it on in codeg's Computer use settings. Meanwhile, read the \
+     only where they have switched it on in BeeCode's Computer use settings. Meanwhile, read the \
      windows shared with you one by one.";
 
 /// Said when the entire screen is shared for reading and an action is asked.
 pub const SCREEN_CONTROL_REQUIRED_NOTE: &str = "The entire screen (d1) is shared with you for \
-     reading only. Ask the user to let you act on it: in codeg's Computer use panel they set the \
+     reading only. Ask the user to let you act on it: in BeeCode's Computer use panel they set the \
      entire screen to \"Read and act\". Only they can; retrying will not change it.";
 
 /// Said when a point on the entire screen is not from its latest picture.
@@ -365,7 +365,7 @@ pub const SCREEN_POINTER_ONLY_NOTE: &str = "The entire screen (d1) takes compute
 /// does not allow the front.
 pub const SCREEN_NEEDS_FRONT_NOTE: &str = "An action on the entire screen moves the user's own \
      pointer and goes to whatever is in front at that point, and the user has switched off \
-     bringing windows to the front in codeg's Computer use settings (\"Let agents bring windows \
+     bringing windows to the front in BeeCode's Computer use settings (\"Let agents bring windows \
      to the front\"), so nothing was sent. Act on a window in the background instead, or ask the \
      user whether to switch it back on — only they can.";
 
@@ -386,7 +386,7 @@ pub const SCREEN_RULES_CHANGED_NOTE: &str = "The user's never-share list changed
 pub fn app_grant_required_note(target_id: &str) -> String {
     format!(
         "Menus act on the whole application, and window {target_id} is shared on its own. Ask \
-         the user to share its application as a whole, for \"Read and act\", in codeg's Computer \
+         the user to share its application as a whole, for \"Read and act\", in BeeCode's Computer \
          use panel — only they can."
     )
 }
@@ -398,20 +398,20 @@ pub const MENUS_UNAVAILABLE_NOTE: &str = "Menus cannot be chosen by title on Win
 /// Said when a menu command is asked for and the person does not allow
 /// bringing windows to the front.
 pub const MENU_NEEDS_FRONT_NOTE: &str = "Choosing a menu command can bring its application, or a \
-     window of it, to the front, and the user has switched that off in codeg's Computer use \
+     window of it, to the front, and the user has switched that off in BeeCode's Computer use \
      settings (\"Let agents bring windows to the front\"), so nothing was sent. Ask the user \
      whether to switch it back on — only they can.";
 
 /// Said when starting an application, or moving a window, is asked for and
 /// the person has not switched it on.
 pub const LAUNCH_OFF_NOTE: &str = "Starting applications and moving or sizing windows is \
-     switched off in codeg's Computer use settings (\"Let agents open applications and move \
+     switched off in BeeCode's Computer use settings (\"Let agents open applications and move \
      windows\"), so nothing was done. Ask the user whether to switch it on — only they can.";
 
 /// Said when the clipboard tools are asked for and the person has not
 /// switched them on.
 pub const CLIPBOARD_OFF_NOTE: &str = "Reading and writing the clipboard is switched off in \
-     codeg's Computer use settings (\"Let agents use the clipboard\"), so nothing was done. Ask \
+     BeeCode's Computer use settings (\"Let agents use the clipboard\"), so nothing was done. Ask \
      the user whether to switch it on — only they can.";
 
 /// Said when the clipboard does not hold what an agent put there.
@@ -494,12 +494,12 @@ pub fn no_pointing_note(target_id: &str) -> String {
     )
 }
 
-pub const STOPPED_NOTE: &str = "The user pressed Stop in codeg's Computer use panel: every \
+pub const STOPPED_NOTE: &str = "The user pressed Stop in BeeCode's Computer use panel: every \
      window stopped being shared, and whatever was under way was cut off. Do not retry on your \
      own — tell the user, and go on only once they share a window with you again.";
 
 pub const FOREGROUND_NOT_ALLOWED_NOTE: &str = "Bringing a window to the front for an action is \
-     not allowed: the user has switched it off in codeg's Computer use settings (\"Let agents \
+     not allowed: the user has switched it off in BeeCode's Computer use settings (\"Let agents \
      bring windows to the front\"), so nothing was sent. Leave `delivery` out to act in the \
      background; if only the front will do, ask the user whether to switch it back on — only \
      they can.";
@@ -507,7 +507,7 @@ pub const FOREGROUND_NOT_ALLOWED_NOTE: &str = "Bringing a window to the front fo
 /// Said when a window is to be restored on Linux — which takes bringing it
 /// to the front — and the person does not allow that.
 pub const RESTORE_NEEDS_FRONT_NOTE: &str = "On Linux a minimized window comes back on the screen \
-     only by being brought to the front, and the user has switched that off in codeg's Computer \
+     only by being brought to the front, and the user has switched that off in BeeCode's Computer \
      use settings (\"Let agents bring windows to the front\"), so nothing was sent. Ask the user \
      to restore the window, or whether to switch that back on — only they can.";
 
@@ -521,7 +521,7 @@ pub fn background_next_step(allow_foreground: bool) -> &'static str {
          back to the window the user was in (on Linux it stays in front). They will see it \
          happen, and a click may move their pointer."
     } else {
-        "The user has switched off bringing windows to the front in codeg's Computer use \
+        "The user has switched off bringing windows to the front in BeeCode's Computer use \
          settings; if nothing else will do, ask them whether to switch it back on."
     }
 }
@@ -974,7 +974,7 @@ mod tests {
         let note = no_such_target_note("w9");
         assert!(note.contains("computer_list_windows"));
 
-        let note = blocked_note("w3", "codeg's own window: it can never be shared.");
+        let note = blocked_note("w3", "BeeCode's own window: it can never be shared.");
         assert!(note.contains("cannot be done"));
 
         let note = permission_missing_note("Screen Recording");

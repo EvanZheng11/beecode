@@ -4226,7 +4226,7 @@ export function buildAcpAdapterCheck(
       status: installed && sawNative ? "pass" : "warn",
       message: acpText(
         "zcode.adapterInfo",
-        "Codeg runs {adapterPackage} as an ACP bridge. Install and sign in to the official ZCode runtime first; the bridge uses its existing configuration.",
+        "BeeCode runs {adapterPackage} as an ACP bridge. Install and sign in to the official ZCode runtime first; the bridge uses its existing configuration.",
         values
       ),
       fixes: [
@@ -4238,17 +4238,17 @@ export function buildAcpAdapterCheck(
       ],
     }
   }
-  const split = `Codeg drives agents over ACP and the ${adapter.native_label} does not speak ACP, so Codeg needs a separate adapter package, ${adapter.adapter_package}.`
+  const split = `BeeCode drives agents over ACP and the ${adapter.native_label} does not speak ACP, so BeeCode needs a separate adapter package, ${adapter.adapter_package}.`
   const coexist = `It ships its own runtime, never modifies or replaces your ${adapter.native_cmd} command, and reads the same ${adapter.shared_config_dir} — your existing sign-in and settings carry over.`
   const [key, fallback] = installed
     ? sawNative
       ? [
           "adapter.readyWithNative",
-          `Adapter ${adapter.adapter_cmd} is installed — that is what Codeg launches, not your own ${adapter.native_cmd} at ${adapter.native_path}. They are separate packages that coexist, and both read ${adapter.shared_config_dir}.`,
+          `Adapter ${adapter.adapter_cmd} is installed — that is what BeeCode launches, not your own ${adapter.native_cmd} at ${adapter.native_path}. They are separate packages that coexist, and both read ${adapter.shared_config_dir}.`,
         ]
       : [
           "adapter.ready",
-          `Adapter ${adapter.adapter_cmd} is installed — that is what Codeg launches. It ships its own runtime, so the ${adapter.native_label} is not required.`,
+          `Adapter ${adapter.adapter_cmd} is installed — that is what BeeCode launches. It ships its own runtime, so the ${adapter.native_label} is not required.`,
         ]
     : sawNative
       ? [
@@ -4342,7 +4342,7 @@ export function buildVersionCheck(
             : "version.systemInstalled",
           agent.supports_self_update
             ? "{versionText}. Installed with the official installer; Upgrade runs its own updater."
-            : "{versionText}. Installed and updated by its own installer; Codeg launches it as-is.",
+            : "{versionText}. Installed and updated by its own installer; BeeCode launches it as-is.",
           {
             versionText: installed
               ? acpText("version.localOnly", "Local: {localVersion}", {

@@ -2104,7 +2104,7 @@ impl CliRunService {
                     &mut inner,
                     EventBody::Notice {
                         severity: "info".into(),
-                        title: "the agent's plan is waiting for approval in Codeg".into(),
+                        title: "the agent's plan is waiting for approval in BeeCode".into(),
                         message: None,
                     },
                 );
@@ -2307,7 +2307,7 @@ impl CliRunService {
                     Subtype::ErrorDuringExecution,
                     Some(ErrorInfo {
                         code: "cancelled".into(),
-                        message: "the turn was cancelled in Codeg".into(),
+                        message: "the turn was cancelled in BeeCode".into(),
                         next_steps: Vec::new(),
                     }),
                 ),
@@ -2835,7 +2835,7 @@ fn stop_outcome(cause: &StopCause) -> (Subtype, Option<ErrorInfo>) {
                 message: format!("{tool} needed a permission the run's policy does not give"),
                 next_steps: vec![
                     "--permissions allow   (allow every request, once each)".into(),
-                    "--permissions wait    (answer it yourself in Codeg)".into(),
+                    "--permissions wait    (answer it yourself in BeeCode)".into(),
                 ],
             }),
         ),
@@ -3103,8 +3103,8 @@ fn install_hint(agent: AgentType, available: bool, install_url: Option<&str>) ->
             format!("npm install -g {package}")
         }
         _ => match install_url {
-            Some(url) => format!("see {url}, or install it in Codeg → Settings → Agents"),
-            None => "install it in Codeg → Settings → Agents".to_string(),
+            Some(url) => format!("see {url}, or install it in BeeCode → Settings → Agents"),
+            None => "install it in BeeCode → Settings → Agents".to_string(),
         },
     }
 }

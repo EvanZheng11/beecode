@@ -553,11 +553,11 @@ describe("ComputerWindowPicker", () => {
     ])
     mount()
     await levelsOf("TextEdit")
-    expect(screen.queryByText("codeg's window")).toBeNull()
+    expect(screen.queryByText("BeeCode's window")).toBeNull()
     fireEvent.click(
       screen.getByRole("button", { name: "1 window can't be shared" })
     )
-    expect(await screen.findByText("codeg's window")).toBeInTheDocument()
+    expect(await screen.findByText("BeeCode's window")).toBeInTheDocument()
     expect(
       screen.getByText(/could approve its own requests/)
     ).toBeInTheDocument()

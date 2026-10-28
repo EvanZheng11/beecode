@@ -21,7 +21,7 @@ const SCRIPT = fileURLToPath(
   new URL("./generate-updater-manifest.mjs", import.meta.url)
 )
 const VERSION = "0.35.1-beta.1"
-const SERVER = "codeg-server-linux-x64.tar.gz"
+const SERVER = "beecode-server-linux-x64.tar.gz"
 // 生成器只做 base64 形态门禁；密码学校验在客户端（桌面插件 / verify.rs）。
 const SIG = Buffer.from("untrusted comment: signature\nAAAA\n").toString(
   "base64"
@@ -66,7 +66,7 @@ test("生成全部平台键、URL 与签名", (t) => {
   )
   assert.equal(
     manifest.platforms["windows-aarch64-nsis"].url,
-    `https://example.test/releases/download/v${VERSION}/codeg_${VERSION}_arm64-setup.exe`
+    `https://example.test/releases/download/v${VERSION}/beecode_${VERSION}_arm64-setup.exe`
   )
   assert.equal(manifest.platforms["darwin-x86_64"].signature, SIG)
 })
@@ -76,11 +76,15 @@ test("桌面产物缺少 .sig 资产时拒绝生成", (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   const broken = assets.filter(
-    (asset) => asset.name !== `codeg_${VERSION}_x64-setup.exe.sig`
+    (asset) => asset.name !== `beecode_${VERSION}_x64-setup.exe.sig`
   )
   writeFileSync(
     releaseJson,
-    JSON.stringify({ body: "发布说明", tag_name: `v${VERSION}`, assets: broken })
+    JSON.stringify({
+      body: "发布说明",
+      tag_name: `v${VERSION}`,
+      assets: broken,
+    })
   )
 
   assert.throws(
@@ -96,7 +100,11 @@ test("服务器包缺少 .sig 资产时拒绝生成", (t) => {
   const broken = assets.filter((asset) => asset.name !== `${SERVER}.sig`)
   writeFileSync(
     releaseJson,
-    JSON.stringify({ body: "发布说明", tag_name: `v${VERSION}`, assets: broken })
+    JSON.stringify({
+      body: "发布说明",
+      tag_name: `v${VERSION}`,
+      assets: broken,
+    })
   )
 
   assert.throws(
@@ -109,7 +117,7 @@ test("未下载到签名文件时拒绝生成", (t) => {
   const { dir, releaseJson, sigDir } = fixture()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
-  rmSync(join(sigDir, "codeg_x64.app.tar.gz.sig"))
+  rmSync(join(sigDir, `beecode_${VERSION}_x64.app.tar.gz.sig`))
   assert.throws(
     () => buildManifest({ releaseJson, sigDir, version: VERSION }),
     /未下载到签名文件/
@@ -120,7 +128,10 @@ test("签名文件内容不是 base64 时拒绝生成", (t) => {
   const { dir, releaseJson, sigDir } = fixture()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
-  writeFileSync(join(sigDir, "codeg_x64.app.tar.gz.sig"), "not@@base64")
+  writeFileSync(
+    join(sigDir, `beecode_${VERSION}_x64.app.tar.gz.sig`),
+    "not@@base64"
+  )
   assert.throws(
     () => buildManifest({ releaseJson, sigDir, version: VERSION }),
     /签名文件不是 base64 文本/
@@ -167,13 +178,13 @@ test("CLI 入口写出完整的 latest.json", (t) => {
 // v2 模式下发布页上的真实资产名（字面量，不经 expectedAssets 推导）。
 function literalNames(version) {
   return [
-    `codeg_${version}_amd64.AppImage`,
-    `codeg_${version}_amd64.deb`,
-    `codeg-${version}-1.x86_64.rpm`,
-    `codeg_${version}_x64-setup.exe`,
-    `codeg_${version}_arm64-setup.exe`,
-    "codeg_x64.app.tar.gz",
-    "codeg_aarch64.app.tar.gz",
+    `beecode_${version}_amd64.AppImage`,
+    `beecode_${version}_amd64.deb`,
+    `beecode_${version}_x86_64.rpm`,
+    `beecode_${version}_x64-setup.exe`,
+    `beecode_${version}_arm64-setup.exe`,
+    `beecode_${version}_x64.app.tar.gz`,
+    `beecode_${version}_aarch64.app.tar.gz`,
   ]
 }
 
@@ -279,37 +290,37 @@ const GATE_CASES = [
     title: "稳定版缺少 deb 安装包",
     version: "0.40.4",
     options: { omit: [".deb"] },
-    error: "缺少平台 linux-x86_64-deb 的产物：codeg_0.40.4_amd64.deb",
+    error: "缺少平台 linux-x86_64-deb 的产物：beecode_0.40.4_amd64.deb",
   },
   {
     title: "稳定版缺少 rpm 安装包",
     version: "0.40.4",
     options: { omit: [".rpm"] },
-    error: "缺少平台 linux-x86_64-rpm 的产物：codeg-0.40.4-1.x86_64.rpm",
+    error: "缺少平台 linux-x86_64-rpm 的产物：beecode_0.40.4_x86_64.rpm",
   },
   {
     title: "稳定版 deb 缺少同名签名",
     version: "0.40.4",
     options: { omitSig: [".deb"] },
-    error: "产物缺少同名签名资产：codeg_0.40.4_amd64.deb.sig",
+    error: "产物缺少同名签名资产：beecode_0.40.4_amd64.deb.sig",
   },
   {
     title: "稳定版 rpm 缺少同名签名",
     version: "0.40.4",
     options: { omitSig: [".rpm"] },
-    error: "产物缺少同名签名资产：codeg-0.40.4-1.x86_64.rpm.sig",
+    error: "产物缺少同名签名资产：beecode_0.40.4_x86_64.rpm.sig",
   },
   {
     title: "预发布缺少 deb 安装包",
     version: "0.41.0-beta.1",
     options: { omit: [".rpm", ".deb"] },
-    error: "缺少平台 linux-x86_64-deb 的产物：codeg_0.41.0-beta.1_amd64.deb",
+    error: "缺少平台 linux-x86_64-deb 的产物：beecode_0.41.0-beta.1_amd64.deb",
   },
   {
     title: "预发布 deb 缺少同名签名",
     version: "0.41.0-beta.1",
     options: { omit: [".rpm"], omitSig: [".deb"] },
-    error: "产物缺少同名签名资产：codeg_0.41.0-beta.1_amd64.deb.sig",
+    error: "产物缺少同名签名资产：beecode_0.41.0-beta.1_amd64.deb.sig",
   },
 ]
 
@@ -509,9 +520,9 @@ function runSignGate({ prerelease, files }) {
   }
 }
 
-const APPIMAGE_SIG = "appimage/codeg_0.41.0_amd64.AppImage.sig"
-const DEB_SIG = "deb/codeg_0.41.0_amd64.deb.sig"
-const RPM_SIG = "rpm/codeg-0.41.0-1.x86_64.rpm.sig"
+const APPIMAGE_SIG = "appimage/beecode_0.41.0_amd64.AppImage.sig"
+const DEB_SIG = "deb/beecode_0.41.0_amd64.deb.sig"
+const RPM_SIG = "rpm/beecode_0.41.0_x86_64.rpm.sig"
 
 // 签名门禁与构建步骤共用同一个版本判断：稳定版必须查到 rpm 签名，预发布不查；
 // AppImage / deb 签名两边都必须查。
@@ -557,6 +568,58 @@ test("build-tauri 不使用 GITHUB_REF_NAME 判断发布通道", () => {
     assert.match(
       stepBy("name", name).with.args,
       /steps\.version\.outputs\.prerelease/
+    )
+  }
+})
+
+test("BeeCode 0.41.1 模拟发布覆盖 12 平台键和五服务器签名门禁", (t) => {
+  const version = "0.41.1"
+  const { releaseJson, sigDir } = literalRelease(t, version)
+  const release = JSON.parse(readFileSync(releaseJson, "utf8"))
+  const names = [
+    "linux-x64.tar.gz",
+    "linux-arm64.tar.gz",
+    "darwin-x64.tar.gz",
+    "darwin-arm64.tar.gz",
+    "windows-x64.zip",
+  ].map((suffix) => `beecode-server-${suffix}`)
+  for (const name of names) {
+    for (const asset of [name, `${name}.sig`]) {
+      release.assets.push({
+        name: asset,
+        browser_download_url: `https://github.com/EvanZheng11/beecode/releases/download/v${version}/${asset}`,
+      })
+    }
+    writeFileSync(join(sigDir, `${name}.sig`), signatureOf(name))
+  }
+  for (const asset of release.assets) {
+    asset.browser_download_url = `https://github.com/EvanZheng11/beecode/releases/download/v${version}/${asset.name}`
+  }
+  writeFileSync(releaseJson, JSON.stringify(release))
+  const manifest = buildManifest({ releaseJson, sigDir, version })
+  assert.equal(Object.keys(manifest.platforms).length, 12)
+  assert.equal(
+    manifest.platforms["windows-aarch64-nsis"].url,
+    `https://github.com/EvanZheng11/beecode/releases/download/v${version}/beecode_${version}_arm64-setup.exe`
+  )
+  for (const [platform, entry] of Object.entries(manifest.platforms)) {
+    assert.ok(entry.url.endsWith(expectedAssets(version)[platform]))
+    assert.equal(
+      entry.signature,
+      signatureOf(expectedAssets(version)[platform])
+    )
+  }
+  for (const name of names) {
+    writeFileSync(
+      releaseJson,
+      JSON.stringify({
+        ...release,
+        assets: release.assets.filter((asset) => asset.name !== `${name}.sig`),
+      })
+    )
+    assert.throws(
+      () => buildManifest({ releaseJson, sigDir, version }),
+      /服务器包缺少签名资产/
     )
   }
 })

@@ -173,7 +173,7 @@ pub(crate) fn bridge_entry(command: &Path) -> Option<PathBuf> {
 
 pub(crate) fn bridge_entry_missing_message(command: &str) -> String {
     format!(
-        "The ZCode ACP bridge found at {command} does not lead to its JavaScript entry, which Codeg runs with the validated Node. Remove that installation from PATH or reinstall the bridge with npm."
+        "The ZCode ACP bridge found at {command} does not lead to its JavaScript entry, which BeeCode runs with the validated Node. Remove that installation from PATH or reinstall the bridge with npm."
     )
 }
 

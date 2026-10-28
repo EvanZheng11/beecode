@@ -1,6 +1,6 @@
 {
-  "name": "codeg",
-  "short_name": "codeg",
+  "name": "BeeCode",
+  "short_name": "BeeCode",
   "description": "AI Coding Agent Conversation Manager",
   "id": "/",
   "start_url": "/",

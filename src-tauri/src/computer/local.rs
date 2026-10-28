@@ -2139,7 +2139,7 @@ mod tests {
         // The name System Settings lists it by, as the settings page names it.
         assert_eq!(
             value("CFBundleName").as_deref(),
-            Some("codeg-computer-helper")
+            Some("BeeCode 电脑助手")
         );
         assert_eq!(value("CFBundlePackageType").as_deref(), Some("APPL"));
         // No Dock icon for a process that never shows a window.

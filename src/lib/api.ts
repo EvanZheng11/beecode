@@ -5988,8 +5988,8 @@ export async function exportBackupDesktop(
   const ext = encrypted ? "codegbak" : "codeg.zip"
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
   const destPath = await save({
-    defaultPath: `codeg-backup-${stamp}.${ext}`,
-    filters: [{ name: "Codeg backup", extensions: [ext] }],
+    defaultPath: `BeeCode-backup-${stamp}.${ext}`,
+    filters: [{ name: "BeeCode backup", extensions: [ext] }],
   })
   if (!destPath) return null
   return getTransport().call<BackupManifest>("backup_create", {

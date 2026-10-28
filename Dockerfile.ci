@@ -1,6 +1,8 @@
 # CI-only Dockerfile: uses pre-built binaries from build-server job
 # For local builds, use the standard Dockerfile instead
 FROM node:24-bookworm-slim
+LABEL org.opencontainers.image.title="BeeCode" \
+      org.opencontainers.image.source="https://github.com/EvanZheng11/beecode"
 
 ARG TARGETARCH
 

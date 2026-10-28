@@ -1663,7 +1663,7 @@ fn pi_runtime_is_outdated(err: &agent_client_protocol::Error, agent_type: AgentT
 /// The explanation [`AcpError::AgentRuntimeOutdated`] carries for pi.
 fn pi_runtime_outdated_message() -> String {
     format!(
-        "Pi is too old for this version of Codeg: opening a session needs Pi {} or newer. \
+        "Pi is too old for this version of BeeCode: opening a session needs Pi {} or newer. \
          Update it with npm install -g @earendil-works/pi-coding-agent, or choose a newer \
          custom command in Agent Settings → Pi → Runtime.",
         registry::PI_MIN_RUNTIME_VERSION

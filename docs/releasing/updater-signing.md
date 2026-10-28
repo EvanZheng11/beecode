@@ -1,12 +1,12 @@
 # 自动更新签名密钥（Tauri/minisign）
 
-本仓库（`EvanZheng11/codeg`）的桌面自动更新与服务器自更新共用同一把
+本仓库（`EvanZheng11/beecode`）的桌面自动更新与服务器自更新共用同一把
 minisign 密钥：签名只在 CI 产出，验证只在客户端。
 
 - 桌面：Tauri 打包器（`bundle.createUpdaterArtifacts`）在打包时签出 updater
   包与同名 `.sig`；客户端用 `tauri.conf.json` 内嵌公钥验签。
 - 服务器：`build-server` 用 `tauri signer sign` 签
-  `codeg-server-<os>-<arch>.tar.gz|.zip`；客户端用
+  `beecode-server-<os>-<arch>.tar.gz|.zip`；客户端用
   `src-tauri/src/update/verify.rs` 的 `TAURI_PUBKEY_B64` 验签。
 - 缺 `.sig`、签名不匹配一律拒绝安装；SHA256 只做完整性校验，不是身份
   认证。
@@ -16,14 +16,14 @@ macOS 代码签名与公证限制见 [macos-self-signed.md](./macos-self-signed.
 ## 一、更新源
 
 桌面 endpoint 与服务器常量都指向
-`https://github.com/EvanZheng11/codeg/releases/latest/download/`：
+`https://github.com/EvanZheng11/beecode/releases/latest/download/`：
 
 - `src-tauri/tauri.conf.json` → `plugins.updater.endpoints[0]`
   （`latest.json`）；
 - `src-tauri/src/update/version.rs` → `UPDATE_MANIFEST_URL` 与
   `RELEASE_DOWNLOAD_BASE`；
 - Rust 测试 `update::version::tests::endpoint_matches_version` 强制两边一致；
-  服务器在下载基址上再拼 `codeg-server-<os>-<arch>.tar.gz|.zip` 与同名
+  服务器在下载基址上再拼 `beecode-server-<os>-<arch>.tar.gz|.zip` 与同名
   `.sig`。
 
 ## 二、生成与保管密钥（仓库外）
@@ -48,7 +48,7 @@ chmod 600 ~/.tauri/codeg-updater.key
 
 ## 三、GitHub Actions Secrets
 
-在 `EvanZheng11/codeg` 的仓库页面配置（Settings → Secrets and variables →
+在 `EvanZheng11/beecode` 的仓库页面配置（Settings → Secrets and variables →
 Actions → Repository secrets → New repository secret）。只需要下面两个，
 **文档、命令输出与仓库都不得出现 Secret 的值**：
 
@@ -73,16 +73,16 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # 交互输入，不回显
 
 - 桌面 updater 包 + 同名 `.sig`（Linux arm64 桌面只打 deb/rpm，不产出
   updater 资产）：
-  - macOS：`codeg_{x64,aarch64}.app.tar.gz`；
-  - Windows：`codeg_<version>_{x64,arm64}-setup.exe`；
-  - Linux x64：`codeg_<version>_amd64.AppImage`、`codeg_<version>_amd64.deb`、
-    `codeg-<version>-1.x86_64.rpm`，三种安装包各签出同名 `.sig`（清单的
+  - macOS：`beecode_<version>_{x64,aarch64}.app.tar.gz`；
+  - Windows：`beecode_<version>_{x64,arm64}-setup.exe`；
+  - Linux x64：`beecode_<version>_amd64.AppImage`、`beecode_<version>_amd64.deb`、
+    `beecode_<version>_x86_64.rpm`，三种安装包各签出同名 `.sig`（清单的
     `linux-x86_64-deb` / `linux-x86_64-rpm` 键取自后两份签名；缺键时 deb/rpm
     安装版会回退到 AppImage 并安装失败）。
   （`createUpdaterArtifacts` 为 bool true 时 tauri-cli 直接签原包；
   `.AppImage.tar.gz` / `.nsis.zip` 包装只在 `"v1Compatible"` 模式下产出。）
-- 服务器：`codeg-server-{linux,darwin}-{x64,arm64}.tar.gz` 与
-  `codeg-server-windows-{x64,arm64}.zip` + 同名 `.sig`。
+- 服务器：`beecode-server-{linux,darwin}-{x64,arm64}.tar.gz` 与
+  `beecode-server-windows-{x64,arm64}.zip` + 同名 `.sig`。
 - `latest.json`：由独立 job `generate-updater-manifest` 在 `build-tauri` 与
   `build-server` 全部成功、且所有 `.sig` 已上传到 draft release 之后统一
   生成并上传；平台键稳定版 12 个、预发布 11 个（预发布不产 rpm，无
@@ -100,7 +100,7 @@ tag 含 `-` 的版本是 prerelease，GitHub 的 `releases/latest`（以及
 得到 404。这是接受的行为，不绕过（不把 beta 设为非 prerelease）。
 
 - `.sig` 与 `latest.json` 照常生成，可用直链手动安装或验证：
-  `https://github.com/EvanZheng11/codeg/releases/download/<beta tag>/latest.json`；
+  `https://github.com/EvanZheng11/beecode/releases/download/<beta tag>/latest.json`；
 - 首个 stable（例如 `v0.35.1`）发布后 `releases/latest` 立即生效；semver
   保证已装新密钥 beta 的客户端能自动更新到该 stable。
 

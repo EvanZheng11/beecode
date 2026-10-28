@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Codeg Server installer
+# BeeCode 服务器安装器
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/EvanZheng11/codeg/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/EvanZheng11/codeg/main/install.sh | bash -s -- --version v0.5.0
+#   curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh | bash -s -- --version v0.5.0
 #
 
 set -euo pipefail
 
-REPO="EvanZheng11/codeg"
+REPO="EvanZheng11/beecode"
 INSTALL_DIR="${CODEG_INSTALL_DIR:-/usr/local/bin}"
 WEB_DIR="${CODEG_WEB_DIR:-/usr/local/share/codeg/web}"
 VERSION=""
@@ -74,7 +74,7 @@ case "$ARCH" in
   *)              echo "Error: unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ARTIFACT="codeg-server-${PLATFORM}-${ARCH_SUFFIX}"
+ARTIFACT="beecode-server-${PLATFORM}-${ARCH_SUFFIX}"
 
 # ── Resolve version ──
 
@@ -182,7 +182,7 @@ is_desktop_file() {
   local real
   real="$(canon_path "$1")"
   case "$real" in
-    */codeg.app/Contents/MacOS/*) return 0 ;;
+    */codeg.app/Contents/MacOS/*|*/BeeCode.app/Contents/MacOS/*) return 0 ;;
   esac
   if command -v dpkg >/dev/null 2>&1 && dpkg -S "$real" >/dev/null 2>&1; then
     return 0
@@ -322,7 +322,7 @@ if [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" = "$TARGET_VER" ]; then
 elif [ -n "$CURRENT_VERSION" ]; then
   echo "Upgrading codeg-server: ${CURRENT_VERSION} -> ${TARGET_VER}..."
 else
-  echo "Installing codeg-server ${VERSION} (${PLATFORM}/${ARCH_SUFFIX})..."
+  echo "安装 BeeCode 服务器 ${VERSION} (${PLATFORM}/${ARCH_SUFFIX})..."
 fi
 
 # ── Warn about codeg-server binaries shadowing the target install ──
@@ -709,7 +709,7 @@ echo "codeg-server installed to ${INSTALL_DIR}/codeg-server"
 echo "codeg-mcp    installed to ${INSTALL_DIR}/codeg-mcp"
 case "$CLI_STATUS" in
   installed) echo "codeg-cli    installed to ${CLI_DST}" ;;
-  desktop) echo "codeg-cli    kept: ${CLI_DST} is the codeg desktop app's (the same program; remove it first to use this release's)" ;;
+  desktop) echo "codeg-cli    kept: ${CLI_DST} is BeeCode 桌面应用的 (the same program; remove it first to use this release's)" ;;
   removed) echo "codeg-cli    removed: this release has none" ;;
 esac
 INSTALLED_VER=$("${INSTALL_DIR}/codeg-server" --version 2>/dev/null || echo "${TARGET_VER}")

@@ -1,7 +1,7 @@
 #
-# Codeg Server installer for Windows
+# BeeCode 服务器安装器 for Windows
 # Usage:
-#   irm https://raw.githubusercontent.com/EvanZheng11/codeg/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.ps1 | iex
 #   .\install.ps1 -Version v0.5.0
 #
 
@@ -12,8 +12,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "EvanZheng11/codeg"
-$Artifact = "codeg-server-windows-x64"
+$Repo = "EvanZheng11/beecode"
+$Artifact = "beecode-server-windows-x64"
 
 # Where the server goes when no -InstallDir is given. Not
 # $env:LOCALAPPDATA\codeg: the codeg desktop app installs itself there for
@@ -53,11 +53,11 @@ function Test-DesktopBinDir([string]$Dir) {
     }
 }
 if (Test-Path -LiteralPath (Join-Path $InstallDir "codeg.exe") -PathType Leaf) {
-    Write-Error "$InstallDir holds the codeg desktop app, whose codeg-mcp.exe, codeg-computer-helper.exe, codeg-cli.exe and web\ the server's would replace. Install codeg-server in a folder of its own (by default $DefaultDir)."
+    Write-Error "$InstallDir holds BeeCode 桌面应用， whose codeg-mcp.exe, codeg-computer-helper.exe, codeg-cli.exe and web\ the server's would replace. Install codeg-server in a folder of its own (by default $DefaultDir)."
     exit 1
 }
 if (Test-DesktopBinDir $InstallDir) {
-    Write-Error "$InstallDir is the codeg desktop app's bin\ folder, whose codeg-cli.exe the server's would replace. Install codeg-server in a folder of its own (by default $DefaultDir)."
+    Write-Error "$InstallDir is BeeCode 桌面应用的 bin\ folder, whose codeg-cli.exe the server's would replace. Install codeg-server in a folder of its own (by default $DefaultDir)."
     exit 1
 }
 
@@ -229,7 +229,7 @@ if ($CurrentVersion -and ($CurrentVersion -eq $TargetVer) `
 if ($CurrentVersion) {
     Write-Host "Upgrading codeg-server: $CurrentVersion -> $TargetVer..."
 } else {
-    Write-Host "Installing codeg-server $Version (windows/x64)..."
+    Write-Host "安装 BeeCode 服务器 $Version (windows/x64)..."
 }
 
 # ── Warn about codeg-server binaries shadowing the target install ──
@@ -518,7 +518,7 @@ if ($Cleanup -and $PathConflicts.Count -gt 0) {
 
 if ($CliStatus -eq "installed" -and $DesktopShadows.Count -gt 0) {
     Write-Host ""
-    Write-Host "Kept (they belong to the codeg desktop app, and come before $InstallDir on PATH):"
+    Write-Host "Kept (they belong to BeeCode 桌面应用， and come before $InstallDir on PATH):"
     foreach ($c in $DesktopShadows) {
         Write-Host "  $c  (typing 'codeg-cli' runs this one, the same program)"
     }
@@ -555,7 +555,7 @@ if ($MoveFrom) {
         Write-Host "Keeping $OldBin (-NoCleanup); remove it so 'codeg-server' runs the new install."
     }
     Write-Host ""
-    Write-Host "codeg-server moved from $MoveFrom to ${InstallDir}: the codeg desktop app is installed"
+    Write-Host "codeg-server moved from $MoveFrom to ${InstallDir}: BeeCode 桌面应用已安装"
     Write-Host "in $MoveFrom, and the two would keep replacing each other's files."
     Write-Host "If a service, scheduled task or shortcut starts $OldBin, or CODEG_STATIC_DIR"
     Write-Host "points to $MoveFrom\web, point it at $InstallDir instead."

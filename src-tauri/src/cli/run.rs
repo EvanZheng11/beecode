@@ -166,7 +166,7 @@ pub(super) async fn prepare(
         .count();
     if ready > 1 || global.verbose {
         out.note(&format!(
-            "codeg-cli: using the {:?} {:?} codeg {} ({})",
+            "codeg-cli: using the {:?} {:?} BeeCode {} ({})",
             conn.hello.build, conn.hello.runtime, conn.hello.version, conn.source
         ));
     }
@@ -355,7 +355,7 @@ async fn drive_loop(
         }
         if args.permissions == super::args::PolicyArg::Wait {
             out.note(&format!(
-                "codeg-cli: --permissions wait: answer the agent's requests in Codeg at {}",
+                "codeg-cli: --permissions wait: answer the agent's requests in BeeCode at {}",
                 started.link
             ));
         }
@@ -668,7 +668,7 @@ fn incompatible(conn: &Connection, capability: &str, what: &str) -> Failure {
         Subtype::ErrorRuntimeIncompatible,
         "runtime_incompatible",
         format!(
-            "the codeg at {} ({} {}) does not support {what} (capability {capability:?}). \
+            "the BeeCode at {} ({} {}) does not support {what} (capability {capability:?}). \
              Nothing was sent.",
             conn.source,
             match conn.hello.runtime {
@@ -678,7 +678,7 @@ fn incompatible(conn: &Connection, capability: &str, what: &str) -> Failure {
             conn.hello.version
         ),
     )
-    .with_next_steps(["upgrade codeg on that machine".to_string()])
+    .with_next_steps(["upgrade BeeCode on that machine".to_string()])
 }
 
 /// `--open` brings the conversation up in this computer's desktop app: with a
@@ -709,9 +709,9 @@ fn lost(failure: Failure, run_id: &str) -> Failure {
         format!("lost the runtime mid-run: {}", failure.message),
     )
     .with_next_steps([
-        "the run may still be going: open its conversation in Codeg to watch or cancel it"
+        "the run may still be going: open its conversation in BeeCode to watch or cancel it"
             .to_string(),
-        format!("codeg-cli result {run_id} --wait 30m   (once that codeg answers again)"),
+        format!("codeg-cli result {run_id} --wait 30m   (once that BeeCode answers again)"),
     ])
 }
 

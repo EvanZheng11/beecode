@@ -266,7 +266,7 @@ impl Output {
             _ => "",
         };
         self.note(&format!(
-            "codeg-cli: the run goes on in Codeg ({link}); collect it with `codeg-cli result \
+            "codeg-cli: the run goes on in BeeCode ({link}); collect it with `codeg-cli result \
              {run_id}`"
         ));
     }
@@ -400,7 +400,7 @@ fn describe(body: &EventBody) -> Option<String> {
         } => {
             let by = match decided_by {
                 Some(DecidedBy::Policy) => " by --permissions",
-                Some(DecidedBy::User) => " in Codeg",
+                Some(DecidedBy::User) => " in BeeCode",
                 _ => "",
             };
             match decision {
@@ -410,7 +410,7 @@ fn describe(body: &EventBody) -> Option<String> {
                     format!("▸ permission for {tool}: needed, and --permissions fail ends the run")
                 }
                 PermissionVerdict::Waiting => {
-                    format!("▸ permission for {tool}: waiting for you in Codeg")
+                    format!("▸ permission for {tool}: waiting for you in BeeCode")
                 }
                 PermissionVerdict::Withdrawn => format!("▸ permission for {tool}: withdrawn"),
             }
@@ -418,7 +418,7 @@ fn describe(body: &EventBody) -> Option<String> {
         EventBody::Question { decision, .. } => match decision {
             QuestionVerdict::Declined => "▸ the agent asked a question; declined".to_string(),
             QuestionVerdict::Waiting => {
-                "▸ the agent asked a question; waiting for you in Codeg".to_string()
+                "▸ the agent asked a question; waiting for you in BeeCode".to_string()
             }
         },
         EventBody::Notice {

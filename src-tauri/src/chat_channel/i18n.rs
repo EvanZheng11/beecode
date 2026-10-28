@@ -175,16 +175,16 @@ pub fn permission_request_title(lang: Lang) -> &'static str {
 
 pub fn permission_request_body(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "智能体正在请求权限，请在 Codeg 中查看并批准。",
-        Lang::ZhTw => "智慧代理正在請求權限，請在 Codeg 中查看並批准。",
-        Lang::Ja => "エージェントが権限を要求しています。Codeg で確認して承認してください。",
-        Lang::Ko => "에이전트가 권한을 요청하고 있습니다. Codeg에서 확인하고 승인하세요.",
-        Lang::Es => "Un agente solicita permiso. Revísalo y apruébalo en Codeg.",
-        Lang::De => "Ein Agent fordert eine Berechtigung an. Bitte in Codeg prüfen und genehmigen.",
-        Lang::Fr => "Un agent demande une autorisation. Vérifiez-la et approuvez-la dans Codeg.",
-        Lang::Pt => "Um agente está solicitando permissão. Revise e aprove no Codeg.",
-        Lang::Ar => "يطلب أحد الوكلاء إذنًا. يرجى مراجعته والموافقة عليه في Codeg.",
-        Lang::En => "An agent is requesting permission. Review and approve it in Codeg.",
+        Lang::ZhCn => "智能体正在请求权限，请在 BeeCode 中查看并批准。",
+        Lang::ZhTw => "智慧代理正在請求權限，請在 BeeCode 中查看並批准。",
+        Lang::Ja => "エージェントが権限を要求しています。BeeCode で確認して承認してください。",
+        Lang::Ko => "에이전트가 권한을 요청하고 있습니다. BeeCode에서 확인하고 승인하세요.",
+        Lang::Es => "Un agente solicita permiso. Revísalo y apruébalo en BeeCode.",
+        Lang::De => "Ein Agent fordert eine Berechtigung an. Bitte in BeeCode prüfen und genehmigen.",
+        Lang::Fr => "Un agent demande une autorisation. Vérifiez-la et approuvez-la dans BeeCode.",
+        Lang::Pt => "Um agente está solicitando permissão. Revise e aprove no BeeCode.",
+        Lang::Ar => "يطلب أحد الوكلاء إذنًا. يرجى مراجعته والموافقة عليه في BeeCode.",
+        Lang::En => "An agent is requesting permission. Review and approve it in BeeCode.",
     }
 }
 
@@ -239,16 +239,16 @@ pub fn question_request_title(lang: Lang) -> &'static str {
 
 pub fn question_request_body(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "智能体正在向你提问，请在 Codeg 中回答。",
-        Lang::ZhTw => "智慧代理正在向你提問，請在 Codeg 中回答。",
-        Lang::Ja => "エージェントが質問しています。Codeg で回答してください。",
-        Lang::Ko => "에이전트가 질문하고 있습니다. Codeg에서 답변하세요.",
-        Lang::Es => "Un agente te hace una pregunta. Respóndela en Codeg.",
-        Lang::De => "Ein Agent stellt eine Frage. Bitte in Codeg beantworten.",
-        Lang::Fr => "Un agent vous pose une question. Répondez-y dans Codeg.",
-        Lang::Pt => "Um agente está fazendo uma pergunta. Responda no Codeg.",
-        Lang::Ar => "يطرح أحد الوكلاء سؤالاً. يرجى الإجابة عليه في Codeg.",
-        Lang::En => "An agent is asking a question. Answer it in Codeg.",
+        Lang::ZhCn => "智能体正在向你提问，请在 BeeCode 中回答。",
+        Lang::ZhTw => "智慧代理正在向你提問，請在 BeeCode 中回答。",
+        Lang::Ja => "エージェントが質問しています。BeeCode で回答してください。",
+        Lang::Ko => "에이전트가 질문하고 있습니다. BeeCode에서 답변하세요.",
+        Lang::Es => "Un agente te hace una pregunta. Respóndela en BeeCode.",
+        Lang::De => "Ein Agent stellt eine Frage. Bitte in BeeCode beantworten.",
+        Lang::Fr => "Un agent vous pose une question. Répondez-y dans BeeCode.",
+        Lang::Pt => "Um agente está fazendo uma pergunta. Responda no BeeCode.",
+        Lang::Ar => "يطرح أحد الوكلاء سؤالاً. يرجى الإجابة عليه في BeeCode.",
+        Lang::En => "An agent is asking a question. Answer it in BeeCode.",
     }
 }
 
@@ -556,16 +556,16 @@ pub fn channel_status_title(lang: Lang) -> &'static str {
 
 pub fn help_title(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "Codeg Bot 帮助",
-        Lang::ZhTw => "Codeg Bot 幫助",
-        Lang::Ja => "Codeg Bot ヘルプ",
-        Lang::Ko => "Codeg Bot 도움말",
-        Lang::Es => "Ayuda de Codeg Bot",
-        Lang::De => "Codeg Bot Hilfe",
-        Lang::Fr => "Aide Codeg Bot",
-        Lang::Pt => "Ajuda do Codeg Bot",
-        Lang::Ar => "مساعدة Codeg Bot",
-        Lang::En => "Codeg Bot Help",
+        Lang::ZhCn => "BeeCode Bot 帮助",
+        Lang::ZhTw => "BeeCode Bot 幫助",
+        Lang::Ja => "BeeCode Bot ヘルプ",
+        Lang::Ko => "BeeCode Bot 도움말",
+        Lang::Es => "Ayuda de BeeCode Bot",
+        Lang::De => "BeeCode Bot Hilfe",
+        Lang::Fr => "Aide BeeCode Bot",
+        Lang::Pt => "Ajuda do BeeCode Bot",
+        Lang::Ar => "مساعدة BeeCode Bot",
+        Lang::En => "BeeCode Bot Help",
     }
 }
 
@@ -1325,31 +1325,31 @@ pub fn no_pending_permission(lang: Lang) -> &'static str {
 
 pub fn no_allow_once_option(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "这个请求没有「只允许这一次」的选项，聊天里不会替你永久放行。请在 Codeg 中处理。",
-        Lang::ZhTw => "這個請求沒有「只允許這一次」的選項，聊天裡不會替你永久放行。請在 Codeg 中處理。",
-        Lang::Ja => "このリクエストには「今回のみ許可」の選択肢がなく、チャットから恒久的に許可することはしません。Codeg で応答してください。",
-        Lang::Ko => "이 요청에는 '이번만 허용' 옵션이 없으며, 채팅에서는 영구 허용을 하지 않습니다. Codeg에서 처리하세요.",
-        Lang::Es => "Esta solicitud no ofrece permitir solo esta vez, y desde el chat no se concede un permiso permanente. Respóndela en Codeg.",
-        Lang::De => "Diese Anfrage bietet kein einmaliges Erlauben, und aus dem Chat wird keine dauerhafte Erlaubnis erteilt. Bitte in Codeg beantworten.",
-        Lang::Fr => "Cette demande ne propose pas d'autoriser une seule fois, et le chat n'accorde pas d'autorisation permanente. Répondez-y dans Codeg.",
-        Lang::Pt => "Esta solicitação não oferece permitir só desta vez, e pelo chat não se concede permissão permanente. Responda no Codeg.",
-        Lang::Ar => "لا يتضمن هذا الطلب خيار السماح لمرة واحدة، ولا تمنح الدردشة إذنًا دائمًا. يرجى الرد عليه في Codeg.",
-        Lang::En => "This request has no allow-once option, and chat won't grant a standing permission. Answer it in Codeg.",
+        Lang::ZhCn => "这个请求没有「只允许这一次」的选项，聊天里不会替你永久放行。请在 BeeCode 中处理。",
+        Lang::ZhTw => "這個請求沒有「只允許這一次」的選項，聊天裡不會替你永久放行。請在 BeeCode 中處理。",
+        Lang::Ja => "このリクエストには「今回のみ許可」の選択肢がなく、チャットから恒久的に許可することはしません。BeeCode で応答してください。",
+        Lang::Ko => "이 요청에는 '이번만 허용' 옵션이 없으며, 채팅에서는 영구 허용을 하지 않습니다. BeeCode에서 처리하세요.",
+        Lang::Es => "Esta solicitud no ofrece permitir solo esta vez, y desde el chat no se concede un permiso permanente. Respóndela en BeeCode.",
+        Lang::De => "Diese Anfrage bietet kein einmaliges Erlauben, und aus dem Chat wird keine dauerhafte Erlaubnis erteilt. Bitte in BeeCode beantworten.",
+        Lang::Fr => "Cette demande ne propose pas d'autoriser une seule fois, et le chat n'accorde pas d'autorisation permanente. Répondez-y dans BeeCode.",
+        Lang::Pt => "Esta solicitação não oferece permitir só desta vez, e pelo chat não se concede permissão permanente. Responda no BeeCode.",
+        Lang::Ar => "لا يتضمن هذا الطلب خيار السماح لمرة واحدة، ولا تمنح الدردشة إذنًا دائمًا. يرجى الرد عليه في BeeCode.",
+        Lang::En => "This request has no allow-once option, and chat won't grant a standing permission. Answer it in BeeCode.",
     }
 }
 
 pub fn no_reject_once_option(lang: Lang) -> &'static str {
     match lang {
-        Lang::ZhCn => "这个请求没有「只拒绝这一次」的选项，聊天里不会替你设永久规则。请在 Codeg 中处理。",
-        Lang::ZhTw => "這個請求沒有「只拒絕這一次」的選項，聊天裡不會替你設永久規則。請在 Codeg 中處理。",
-        Lang::Ja => "このリクエストには「今回のみ拒否」の選択肢がなく、チャットから恒久的なルールは設定しません。Codeg で応答してください。",
-        Lang::Ko => "이 요청에는 '이번만 거부' 옵션이 없으며, 채팅에서는 영구 규칙을 만들지 않습니다. Codeg에서 처리하세요.",
-        Lang::Es => "Esta solicitud no ofrece rechazar solo esta vez, y desde el chat no se crea una regla permanente. Respóndela en Codeg.",
-        Lang::De => "Diese Anfrage bietet kein einmaliges Ablehnen, und aus dem Chat wird keine dauerhafte Regel angelegt. Bitte in Codeg beantworten.",
-        Lang::Fr => "Cette demande ne propose pas de refuser une seule fois, et le chat ne crée pas de règle permanente. Répondez-y dans Codeg.",
-        Lang::Pt => "Esta solicitação não oferece recusar só desta vez, e pelo chat não se cria regra permanente. Responda no Codeg.",
-        Lang::Ar => "لا يتضمن هذا الطلب خيار الرفض لمرة واحدة، ولا تنشئ الدردشة قاعدة دائمة. يرجى الرد عليه في Codeg.",
-        Lang::En => "This request has no reject-once option, and chat won't set a standing rule. Answer it in Codeg.",
+        Lang::ZhCn => "这个请求没有「只拒绝这一次」的选项，聊天里不会替你设永久规则。请在 BeeCode 中处理。",
+        Lang::ZhTw => "這個請求沒有「只拒絕這一次」的選項，聊天裡不會替你設永久規則。請在 BeeCode 中處理。",
+        Lang::Ja => "このリクエストには「今回のみ拒否」の選択肢がなく、チャットから恒久的なルールは設定しません。BeeCode で応答してください。",
+        Lang::Ko => "이 요청에는 '이번만 거부' 옵션이 없으며, 채팅에서는 영구 규칙을 만들지 않습니다. BeeCode에서 처리하세요.",
+        Lang::Es => "Esta solicitud no ofrece rechazar solo esta vez, y desde el chat no se crea una regla permanente. Respóndela en BeeCode.",
+        Lang::De => "Diese Anfrage bietet kein einmaliges Ablehnen, und aus dem Chat wird keine dauerhafte Regel angelegt. Bitte in BeeCode beantworten.",
+        Lang::Fr => "Cette demande ne propose pas de refuser une seule fois, et le chat ne crée pas de règle permanente. Répondez-y dans BeeCode.",
+        Lang::Pt => "Esta solicitação não oferece recusar só desta vez, e pelo chat não se cria regra permanente. Responda no BeeCode.",
+        Lang::Ar => "لا يتضمن هذا الطلب خيار الرفض لمرة واحدة، ولا تنشئ الدردشة قاعدة دائمة. يرجى الرد عليه في BeeCode.",
+        Lang::En => "This request has no reject-once option, and chat won't set a standing rule. Answer it in BeeCode.",
     }
 }
 

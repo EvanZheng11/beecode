@@ -105,7 +105,7 @@ jobs:
             const tag = process.env.TAG;
             const { owner, repo } = context.repo;
             const prerelease = process.env.PRERELEASE === "true";
-            const releaseName = `codeg ${tag}`;
+            const releaseName = `BeeCode ${tag}`;
             const { data: commit } = await github.rest.repos.getCommit({
               owner,
               repo,
@@ -118,8 +118,8 @@ jobs:
               "本发布不提供 Apple Developer ID 签名或 Apple 公证。macOS 使用仓库 Secrets 导入的自签名代码签名证书签名；该证书不在 Apple 信任链内，首次打开可能被 Gatekeeper 阻止，请仅在确认来源后手动允许。",
               "macOS 保留 computer-use：主程序、codeg-server 与 computer-helper 用同一张自签名证书做双向验签（按证书 SHA-1 指纹匹配），不回退到无验签模式。",
               "## 自动更新",
-              "本版本起桌面与服务器均支持签名自动更新：桌面向 releases/latest/download/latest.json 查询，服务器下载 codeg-server-<os>-<arch>.tar.gz|.zip 并校验同名 .sig；缺签名或验签失败一律拒绝安装。",
-              "从旧签名密钥版本升级的客户端无法验证新签名，需要手动下载并安装本版本一次，之后即可恢复自动更新。",
+              "本版本起桌面与服务器均支持签名自动更新：桌面向 releases/latest/download/latest.json 查询，服务器下载 beecode-server-<os>-<arch>.tar.gz|.zip 并校验同名 .sig；缺签名或验签失败一律拒绝安装。",
+              "BeeCode 已迁移至 EvanZheng11/beecode；旧版用户请手动下载安装一次，此后从新仓库获取签名更新。",
               prerelease
                 ? "本版本是 beta（预发布）：GitHub 的 releases/latest 只指向最新 stable，因此 beta 期间自动更新检查会失败（404）。beta 的 .sig 与 latest.json 仍完整发布，可手动下载安装或用直链验证。"
                 : "本版本是 stable：releases/latest 通道立即生效。",
@@ -687,6 +687,7 @@ jobs:
           # RPM 不接受版本号里的 "-"，rc 版本（x.y.z-rc.N）只出 deb。
           # Linux arm64 按设计不产出 updater 资产，因此关闭 createUpdaterArtifacts。
           args: --target ${{ matrix.target }} --bundles ${{ steps.version.outputs.prerelease == 'true' && 'deb' || 'deb,rpm' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          assetNamePattern: "beecode_[version]_[arch][setup][ext]"
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -714,6 +715,7 @@ jobs:
           # createUpdaterArtifacts 由 tauri.conf.json 打开并签名原包；latest.json
           # 等全部矩阵完成后由 generate-updater-manifest 统一生成。
           args: --target ${{ matrix.target }} --bundles nsis
+          assetNamePattern: "beecode_[version]_[arch][setup][ext]"
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -757,6 +759,7 @@ jobs:
           # latest.json 等全部矩阵完成后由 generate-updater-manifest 统一生成，
           # 所以这里 includeUpdaterJson 保持 false。
           args: --target ${{ matrix.target }}${{ steps.version.outputs.prerelease == 'true' && ' --bundles deb,appimage' || '' }}
+          assetNamePattern: "beecode_[version]_[arch][setup][ext]"
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -775,7 +778,7 @@ jobs:
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # updater 签名密钥：tauri CLI 用它给 createUpdaterArtifacts 产出的
-          # codeg.app.tar.gz 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
+          # BeeCode.app.tar.gz 生成 .sig；createUpdaterArtifacts 由 tauri.conf.json 打开。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -786,6 +789,7 @@ jobs:
           prerelease: ${{ needs.create-draft-release.outputs.prerelease }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --config '{"bundle":{"macOS":{"hardenedRuntime":true}}}'
+          assetNamePattern: "beecode_[version]_[arch][setup][ext]"
           includeUpdaterJson: false
           retryAttempts: 2
 
@@ -793,7 +797,7 @@ jobs:
       # 必须在这里就看到非空的 updater .sig，避免未签名包走到发布。
       # 产物名对照 tauri-cli 2.11.4 / tauri-action v0.6.1：createUpdaterArtifacts
       # 为 bool true 即 v2 模式，直接签原包——macOS 在 bundle/macos 签
-      # codeg.app.tar.gz，Linux 在 bundle/appimage 签 *.AppImage、bundle/deb 签
+      # BeeCode.app.tar.gz，Linux 在 bundle/appimage 签 *.AppImage、bundle/deb 签
       # *.deb、bundle/rpm 签 *.rpm（deb/rpm 的 -deb / -rpm 平台键依赖这两份签名），
       # Windows 在 bundle/nsis 签 *-setup.exe；tar.gz/zip 包装只在 "v1Compatible" 模式下产出。
       # 预发布（版本号带 "-"）只构建 deb + AppImage，没有 rpm 签名可查。
@@ -808,7 +812,7 @@ jobs:
           set -euo pipefail
           bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
           case "${{ matrix.target }}" in
-            *apple-darwin) candidates=("$bundle/macos/codeg.app.tar.gz.sig") ;;
+            *apple-darwin) candidates=("$bundle/macos/BeeCode.app.tar.gz.sig") ;;
             x86_64-unknown-linux-gnu)
               candidates=("$bundle"/appimage/*.AppImage.sig "$bundle"/deb/*.deb.sig)
               # 预发布不构建 rpm（与上方 --bundles 判断保持一致）。
@@ -835,7 +839,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/codeg.app"
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/BeeCode.app"
           if [ ! -d "$app" ]; then
             echo "FATAL: $app not found"
             exit 1
@@ -946,6 +950,11 @@ jobs:
             count=0
             while IFS= read -r -d '' file; do
               name="${file##*/}"
+              # 对齐 tauri-action 的 assetNamePattern；RPM 原生名使用连字符与 release。
+              name="${name/#BeeCode/beecode}"
+              if [ "$kind" = rpm ]; then
+                name="$(printf '%s' "$name" | sed -E 's/^beecode-(.+)-1\.([^.]+)\.rpm$/beecode_\1_\2.rpm/')"
+              fi
               if [ -e "installers/$name" ]; then
                 echo "::error::安装包文件名重复：$name"
                 exit 1
@@ -974,11 +983,12 @@ jobs:
           $stage = "$bundle/installers"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           $lines = foreach ($file in $files) {
-            $destination = Join-Path $stage $file.Name
+            $name = $file.Name -creplace '^BeeCode_', 'beecode_'
+            $destination = Join-Path $stage $name
             if (Test-Path -LiteralPath $destination) { throw "安装包文件名重复：$($file.Name)" }
             Copy-Item -LiteralPath $file.FullName -Destination $destination
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLower()
-            "$hash  $($file.Name)"
+            "$hash  $name"
           }
           $lines | Set-Content -Encoding ascii -LiteralPath "$stage/SHA256SUMS-$env:TARGET.txt"
           Write-Host 'SHA256 仅为完整性校验，不是身份认证签名。'
@@ -986,7 +996,7 @@ jobs:
       - name: 上传桌面安装包与完整性校验文件
         uses: actions/upload-artifact@v4
         with:
-          name: codeg-desktop-${{ matrix.target }}
+          name: beecode-desktop-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/installers
           if-no-files-found: error
 
@@ -1019,23 +1029,23 @@ jobs:
           - name: "Linux x64"
             runner: "ubuntu-22.04"
             target: "x86_64-unknown-linux-gnu"
-            artifact: "codeg-server-linux-x64"
+            artifact: "beecode-server-linux-x64"
           - name: "Linux arm64"
             runner: "ubuntu-22.04"
             target: "aarch64-unknown-linux-gnu"
-            artifact: "codeg-server-linux-arm64"
+            artifact: "beecode-server-linux-arm64"
           - name: "macOS x64"
             runner: "macos-latest"
             target: "x86_64-apple-darwin"
-            artifact: "codeg-server-darwin-x64"
+            artifact: "beecode-server-darwin-x64"
           - name: "macOS arm64"
             runner: "macos-latest"
             target: "aarch64-apple-darwin"
-            artifact: "codeg-server-darwin-arm64"
+            artifact: "beecode-server-darwin-arm64"
           - name: "Windows x64"
             runner: "windows-2022"
             target: "x86_64-pc-windows-msvc"
-            artifact: "codeg-server-windows-x64"
+            artifact: "beecode-server-windows-x64"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -1467,13 +1477,13 @@ jobs:
       - name: Download Linux x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: codeg-server-linux-x64
+          name: beecode-server-linux-x64
           path: artifacts/linux-x64
 
       - name: Download Linux arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: codeg-server-linux-arm64
+          name: beecode-server-linux-arm64
           path: artifacts/linux-arm64
 
       - name: Prepare Docker build context
@@ -1555,9 +1565,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
             ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
-            ${{ env.DOCKERHUB_ENABLED == 'true' && format('{0}/codeg:{1}', secrets.DOCKERHUB_USERNAME, steps.version.outputs.version) || '' }}
+            ${{ env.DOCKERHUB_ENABLED == 'true' && format('{0}/beecode:{1}', secrets.DOCKERHUB_USERNAME, steps.version.outputs.version) || '' }}
             ${{ needs.create-draft-release.outputs.prerelease != 'true' && format('{0}:latest', steps.version.outputs.image) || '' }}
-            ${{ env.DOCKERHUB_ENABLED == 'true' && needs.create-draft-release.outputs.prerelease != 'true' && format('{0}/codeg:latest', secrets.DOCKERHUB_USERNAME) || '' }}
+            ${{ env.DOCKERHUB_ENABLED == 'true' && needs.create-draft-release.outputs.prerelease != 'true' && format('{0}/beecode:latest', secrets.DOCKERHUB_USERNAME) || '' }}
 
   publish-release:
     needs:

@@ -56,13 +56,13 @@ const LIVENESS_INTERVAL: Duration = Duration::from_secs(2);
 /// Claude's entire system prompt on a one-shot session, in place of Claude
 /// Code's own: the session has no tools for that prompt to describe, and the
 /// request carries every instruction that matters.
-const SYSTEM_PROMPT: &str = "You write text for Codeg, a coding workbench, when it asks you to. \
+const SYSTEM_PROMPT: &str = "You write text for BeeCode, a coding workbench, when it asks you to. \
 Answer with exactly the text requested: no preamble, no commentary, no sign-off. \
 You have no tools; everything you need is in the request.";
 
 /// The title a one-shot Claude session is given so that it never asks the
 /// model for one; nobody sees it.
-const SESSION_TITLE: &str = "Codeg text generation";
+const SESSION_TITLE: &str = "BeeCode text generation";
 
 /// Whether a connection was started by [`run`].
 pub fn is_one_shot_owner(owner_window_label: &str) -> bool {

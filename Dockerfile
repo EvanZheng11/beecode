@@ -23,6 +23,8 @@ RUN cargo build --release --bin codeg-server --no-default-features --features se
 
 # Stage 3: Runtime
 FROM node:24-bookworm-slim
+LABEL org.opencontainers.image.title="BeeCode" \
+      org.opencontainers.image.source="https://github.com/EvanZheng11/beecode"
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     git \

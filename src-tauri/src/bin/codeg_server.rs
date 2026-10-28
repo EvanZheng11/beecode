@@ -496,7 +496,7 @@ async fn async_main(
     #[cfg(windows)]
     if std::env::current_exe().is_ok_and(|exe| beside_the_desktop_app(&exe)) {
         eprintln!(
-            "[SERVER] This codeg-server is in the codeg desktop app's folder, where each \
+            "[SERVER] This codeg-server is in the BeeCode desktop app's folder, where each \
              replaces the other's codeg-mcp.exe, codeg-computer-helper.exe and web\\. Re-run \
              install.ps1 to move it to %LOCALAPPDATA%\\codeg-server."
         );

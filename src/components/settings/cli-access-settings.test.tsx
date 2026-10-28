@@ -72,7 +72,7 @@ describe("CliAccessSettings", () => {
     renderSection()
     await user.click(await screen.findByRole("switch"))
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith(false))
-    expect(await screen.findByText(/cannot reach Codeg/)).toBeInTheDocument()
+    expect(await screen.findByText(/cannot reach BeeCode/)).toBeInTheDocument()
     expect(screen.queryByText(FILE)).not.toBeInTheDocument()
   })
 

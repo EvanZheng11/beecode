@@ -5,7 +5,7 @@ export function AppIcon({ className }: { className?: string }) {
       viewBox="0 0 512 512"
       className={className}
       role="img"
-      aria-label="Codeg 蜜蜂标志"
+      aria-label="BeeCode 蜜蜂标志"
     >
       <image href="/icon.svg" width="512" height="512" />
     </svg>

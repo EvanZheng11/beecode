@@ -90,7 +90,7 @@ export function sessionNotificationPayload(
     connectionConversationId,
     activeFolderName
   )
-  const folderTitle = folderName ? `${folderName} - Codeg` : "Codeg"
+  const folderTitle = folderName ? `${folderName} - BeeCode` : "BeeCode"
   if (!sessionTitle) return { title: folderTitle, ...content }
   return {
     title: sessionTitle,

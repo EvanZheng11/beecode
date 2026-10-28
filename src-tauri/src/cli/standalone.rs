@@ -61,7 +61,7 @@ impl Standalone {
                  PATH",
             )
             .with_next_steps([
-                "curl -fsSL https://raw.githubusercontent.com/spacering-net/codeg/main/install.sh \
+                "curl -fsSL https://raw.githubusercontent.com/EvanZheng11/beecode/main/install.sh \
                  | bash"
                     .to_string(),
             ])
@@ -180,7 +180,7 @@ impl Standalone {
                         Subtype::ErrorRuntimeUnavailable,
                         "data_dir_in_use",
                         format!(
-                            "{} is in use by another codeg, so --standalone cannot have it to \
+                            "{} is in use by another BeeCode, so --standalone cannot have it to \
                              itself. Nothing was sent.",
                             self.data_dir.display()
                         ),
@@ -188,7 +188,7 @@ impl Standalone {
                     .with_next_steps([
                         "leave out --data-dir, for a data directory of the command's own"
                             .to_string(),
-                        "or drop --standalone, to use the codeg that is running".to_string(),
+                        "or drop --standalone, to use the BeeCode that is running".to_string(),
                     ]),
                     _ => Failure::new(
                         Subtype::ErrorRuntimeUnavailable,

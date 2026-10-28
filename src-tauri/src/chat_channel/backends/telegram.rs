@@ -773,7 +773,7 @@ fn json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
 fn telegram_topic_title(title: &str) -> String {
     let title = title.trim();
     let title = if title.is_empty() {
-        "Codeg session"
+        "BeeCode session"
     } else {
         title
     };

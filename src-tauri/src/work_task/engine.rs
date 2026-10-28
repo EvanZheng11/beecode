@@ -6599,7 +6599,7 @@ fn pull_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
         .unwrap_or(&meta.owner_repo);
     crate::forge::normalize_repo(recorded).ok_or_else(|| {
         format!(
-            "{} #{} comes from a fork whose repository codeg cannot see (it may be private or \
+            "{} #{} comes from a fork whose repository BeeCode cannot see (it may be private or \
              deleted), so there is nowhere to push the work back to — its commits stay on the \
              task's local branch",
             meta.provider.change_noun(),

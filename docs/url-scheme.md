@@ -1,7 +1,7 @@
 # URL scheme
 
 The desktop app registers the custom URL scheme `codeg://` so another program
-can bring Codeg forward and open a specific conversation.
+can bring BeeCode forward and open a specific conversation.
 
 This is the OS handler for the same `codeg://session/<id>` form already used
 as an in-app markdown mention. Mention badges (`codeg://agent/…`,
@@ -12,7 +12,7 @@ in-process and are **not** OS navigation.
 
 | URL | Effect |
 | --- | --- |
-| `codeg://session/214` | Open conversation **214** (Codeg's numeric id) |
+| `codeg://session/214` | Open conversation **214** (BeeCode's numeric id) |
 | `codeg://session/<external-id>` | Open by the agent's own session id (Grok UUID, Codex thread id, …) |
 | `codeg://workspace?conversationId=214` | Same lookup. `folderId` and `agent` are optional; when omitted they are read from the row |
 | `codeg://workspace?folderId=3&conversationId=214&agent=grok` | Same, but rejected if folder or agent do not match the row |
@@ -80,7 +80,7 @@ the scheme owner and then started empty.
   portals skip `NoDisplay` entries, which is why the packaged entry above still
   has to be right. On Windows it adds the `HKCU` class key a portable/zip copy
   never gets from the installer. Debug builds are skipped so a dev run cannot
-  take the scheme away from an installed Codeg.
+  take the scheme away from an installed BeeCode.
 
 Not available in `codeg-server` / browser-only mode — use the
 `/workspace?folderId=&conversationId=&agent=` query string there.

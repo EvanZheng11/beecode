@@ -365,7 +365,7 @@ async fn examine_file(path: &Path) -> Candidate {
             detail: Some(if path.exists() {
                 format!("unreadable: {e}")
             } else {
-                "no such file: the codeg that started this terminal has exited, or has \
+                "no such file: the BeeCode that started this terminal has exited, or has \
                  command-line access off"
                     .into()
             }),
@@ -462,13 +462,13 @@ async fn probe(
     }
     let Ok(answer) = serde_json::from_str::<HelloResponse>(&text) else {
         candidate.state = CandidateState::Unverified;
-        candidate.detail = Some(format!("not a codeg answer (HTTP {status})"));
+        candidate.detail = Some(format!("not a BeeCode answer (HTTP {status})"));
         return candidate;
     };
     if !hello::verify(&token, &nonce, port, &answer.proof) {
         candidate.state = CandidateState::Unverified;
         candidate.detail = Some(if remote {
-            "the answer does not prove the token: wrong token, or not that codeg".into()
+            "the answer does not prove the token: wrong token, or not that BeeCode".into()
         } else {
             "the answer does not prove this file's token: something else holds its port".into()
         });
@@ -600,14 +600,14 @@ fn no_runtime(level: &Level, candidates: &[Candidate]) -> Failure {
                 old.detail.as_deref().unwrap_or("incompatible")
             ),
         )
-        .with_next_steps(["use a codeg-cli from the same release as that codeg".to_string()]);
+        .with_next_steps(["use a codeg-cli from the same release as that BeeCode".to_string()]);
     }
     let pinned = matches!(level, Level::EndpointFile(_) | Level::Url { .. });
     let mut message = if pinned {
         format!("{} is not available. Nothing was sent.", level.describe())
     } else {
         format!(
-            "no codeg is running for {}. Nothing was sent.",
+            "no BeeCode is running for {}. Nothing was sent.",
             level.describe()
         )
     };

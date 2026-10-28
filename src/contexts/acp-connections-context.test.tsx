@@ -884,7 +884,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
         "turn_complete",
         expect.objectContaining({
           title: "Fix the flaky upload test",
-          redactedTitle: "api - Codeg",
+          redactedTitle: "api - BeeCode",
           body: "api · notificationTurnComplete",
         })
       )

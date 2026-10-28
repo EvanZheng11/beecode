@@ -240,7 +240,7 @@ describe("StatusBarComputer", () => {
     )
     mount()
     fireEvent.click(await screen.findByRole("button", { name: "Computer use" }))
-    await screen.findByText(/codeg itself has Accessibility/)
+    await screen.findByText(/BeeCode itself has Accessibility/)
     expect(
       screen.getByRole("button", { name: "Share a window…" })
     ).toBeEnabled()

@@ -355,7 +355,7 @@ describe("ForgeAutoActivity", () => {
     forgeAutoStatus.mockResolvedValue(status({ available: false }))
     mountActivity()
     expect(
-      await screen.findByText(/Another codeg process runs the task board/)
+      await screen.findByText(/Another BeeCode process runs the task board/)
     ).toBeInTheDocument()
     expect(scanNowButton()).toBeDisabled()
   })

@@ -94,7 +94,7 @@ describe("WebVersionNotice", () => {
 
     expect(mocks.toast).toHaveBeenCalledTimes(1)
     const [title, options] = mocks.toast.mock.calls[0]
-    expect(title).toBe("The server is now running Codeg 0.38.0")
+    expect(title).toBe("The server is now running BeeCode 0.38.0")
     expect(options).toMatchObject({
       id: WEB_VERSION_TOAST_ID,
       description:
@@ -135,7 +135,7 @@ describe("WebVersionNotice", () => {
 
     expect(mocks.serverVersion).toHaveBeenCalledTimes(2)
     expect(mocks.toast).toHaveBeenCalledWith(
-      "The server is now running Codeg 0.38.0",
+      "The server is now running BeeCode 0.38.0",
       expect.objectContaining({ id: WEB_VERSION_TOAST_ID })
     )
   })

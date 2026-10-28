@@ -167,7 +167,7 @@ describe("ComputerUseSettings", () => {
     api.computerDriverInfo.mockResolvedValue(driver({ installed: ["0.27.0"] }))
     mount()
     expect(
-      await screen.findByText("0.27.0 is installed; this codeg runs 0.28.2.")
+      await screen.findByText("0.27.0 is installed; this BeeCode runs 0.28.2.")
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Upgrade to 0.28.2" })
@@ -246,7 +246,7 @@ describe("ComputerUseSettings", () => {
       )
     )
     expect(
-      screen.getByText(/codeg itself has Accessibility/)
+      screen.getByText(/BeeCode itself has Accessibility/)
     ).toBeInTheDocument()
   })
 

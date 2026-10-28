@@ -50,11 +50,11 @@ pub struct InstallOutcome {
 pub fn asset_basename() -> Option<&'static str> {
     use std::env::consts::{ARCH, OS};
     Some(match (OS, ARCH) {
-        ("linux", "x86_64") => "codeg-server-linux-x64",
-        ("linux", "aarch64") => "codeg-server-linux-arm64",
-        ("macos", "x86_64") => "codeg-server-darwin-x64",
-        ("macos", "aarch64") => "codeg-server-darwin-arm64",
-        ("windows", "x86_64") => "codeg-server-windows-x64",
+        ("linux", "x86_64") => "beecode-server-linux-x64",
+        ("linux", "aarch64") => "beecode-server-linux-arm64",
+        ("macos", "x86_64") => "beecode-server-darwin-x64",
+        ("macos", "aarch64") => "beecode-server-darwin-arm64",
+        ("windows", "x86_64") => "beecode-server-windows-x64",
         _ => return None,
     })
 }
@@ -1772,8 +1772,8 @@ mod tests {
 
     #[test]
     fn sanitize_keeps_normal_paths() {
-        let p = sanitize_entry_path(Path::new("codeg-server-linux-x64/web/index.html")).unwrap();
-        assert_eq!(p, PathBuf::from("codeg-server-linux-x64/web/index.html"));
+        let p = sanitize_entry_path(Path::new("beecode-server-linux-x64/web/index.html")).unwrap();
+        assert_eq!(p, PathBuf::from("beecode-server-linux-x64/web/index.html"));
     }
 
     /// Build a gzip'd tar with the given (path, bytes) regular-file entries.

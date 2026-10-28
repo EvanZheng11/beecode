@@ -369,7 +369,7 @@ fn read_models(raw: &str) -> Result<Option<Vec<DeepSeekCatalogModel>>, String> {
             if unknown {
                 let rendered = serde_yaml::to_string(key).unwrap_or_default();
                 return Err(format!(
-                    "`{SECTION_KEY}.{MODELS_KEY}` uses a field codeg does not know \
+                    "`{SECTION_KEY}.{MODELS_KEY}` uses a field BeeCode does not know \
                      ({}); edit the document by hand so nothing is lost",
                     rendered.trim()
                 ));

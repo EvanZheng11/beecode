@@ -16,12 +16,12 @@ use crate::app_error::AppCommandError;
 /// Update manifest URL — mirrors the `endpoints` entry in `tauri.conf.json`
 /// so desktop and server modes consult the same source of truth.
 pub const UPDATE_MANIFEST_URL: &str =
-    "https://github.com/EvanZheng11/codeg/releases/latest/download/latest.json";
+    "https://github.com/EvanZheng11/beecode/releases/latest/download/latest.json";
 
 /// Deterministic base for "latest" release assets (server tarballs + their
 /// `.sig` detached signatures). Same channel as the manifest.
 pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/EvanZheng11/codeg/releases/latest/download";
+    "https://github.com/EvanZheng11/beecode/releases/latest/download";
 
 /// Short-timeout client for the small manifest fetch. Proxy env vars are
 /// sampled at build time, so `init_proxy_from_db` must run before the first
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn constants_target_the_fork_repo() {
-        assert!(UPDATE_MANIFEST_URL.starts_with("https://github.com/EvanZheng11/codeg/"));
-        assert!(RELEASE_DOWNLOAD_BASE.starts_with("https://github.com/EvanZheng11/codeg/"));
+        assert!(UPDATE_MANIFEST_URL.starts_with("https://github.com/EvanZheng11/beecode/"));
+        assert!(RELEASE_DOWNLOAD_BASE.starts_with("https://github.com/EvanZheng11/beecode/"));
     }
 }

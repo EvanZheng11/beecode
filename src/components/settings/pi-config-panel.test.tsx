@@ -426,7 +426,7 @@ describe("Pi runtime minimum", () => {
     await renderPanel({ PI_ACP_PI_COMMAND: "/tmp/old-pi" })
     expect(api.acpValidatePiCommand).toHaveBeenCalledWith("/tmp/old-pi")
     expect(
-      await screen.findByText(/Codeg needs Pi 0\.81\.0 or newer/)
+      await screen.findByText(/BeeCode needs Pi 0\.81\.0 or newer/)
     ).toBeInTheDocument()
   })
 

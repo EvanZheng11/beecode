@@ -1700,7 +1700,7 @@ fn render_plain_text(
         DiagLevel::Info => "--  ",
     };
     let mut out = String::new();
-    out.push_str("===== Codeg environment diagnostics =====\n");
+    out.push_str("===== BeeCode environment diagnostics =====\n");
     out.push_str(&format!("generated: {generated_at}\n"));
     if let Some(at) = agent_type {
         out.push_str(&format!("agent: {at:?}\n"));
@@ -2105,7 +2105,7 @@ mod diagnostics_tests {
         let inp = base_inputs();
         let r = build_report(&inp, "FIXED-TS".to_string(), None);
         assert_eq!(r.generated_at, "FIXED-TS");
-        assert!(r.plain_text.contains("Codeg environment diagnostics"));
+        assert!(r.plain_text.contains("BeeCode environment diagnostics"));
         assert!(r.plain_text.contains("verdict [ok]"));
         assert!(!r.sections.is_empty());
     }
@@ -6542,7 +6542,7 @@ async fn pi_runtime_env_from_db(db: &AppDatabase) -> Result<BTreeMap<String, Str
         .await
         .map_err(|error| {
             AcpError::protocol(format!(
-                "Cannot read Pi agent settings from the Codeg database: {error}. Check database access and retry; Pi profile files were not changed."
+                "Cannot read Pi agent settings from the BeeCode database: {error}. Check database access and retry; Pi profile files were not changed."
             ))
         })?;
     let local_config_json = load_agent_local_config_json(AgentType::Pi);

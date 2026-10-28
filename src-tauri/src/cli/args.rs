@@ -25,8 +25,7 @@ use crate::cli_run::PermissionPolicy;
     // docs do whatever the file is called (`codeg-cli.exe`, a symlink, …).
     bin_name = "codeg-cli",
     version,
-    about = "Run one prompt through a running codeg — the desktop app or codeg-server — \
-             without opening its window.",
+    about = "通过运行中的 BeeCode 桌面应用或 codeg-server 执行提示词，无需打开窗口。",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -204,7 +203,7 @@ fn run_options_given(matches: &clap::ArgMatches) -> bool {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct GlobalArgs {
-    /// A codeg reachable over HTTP(S), e.g. a codeg-server: https://host:3080.
+    /// 可通过 HTTP(S) 访问的 BeeCode，例如 https://host:3080 上的 codeg-server。
     #[arg(long, global = true, value_name = "URL")]
     pub url: Option<String>,
 
@@ -258,7 +257,7 @@ pub enum RuntimeChoice {
 pub enum Command {
     /// Run one prompt (what `codeg-cli` does without a command).
     Run(Box<RunArgs>),
-    /// The agents this codeg knows, and whether each is enabled and installed;
+    /// BeeCode 中已知的智能体，以及各自的启用和安装状态；
     /// `agents install SLUG` installs one.
     Agents(AgentsArgs),
     /// The assistants (named roles) to run with --assistant.
@@ -271,7 +270,7 @@ pub enum Command {
     Result(ResultArgs),
     /// Cancel a run.
     Cancel(CancelArgs),
-    /// The automations saved in Codeg; `automations run ID` runs one now.
+    /// BeeCode 中保存的自动化；使用 `automations run ID` 立即运行。
     Automations(AutomationsArgs),
 }
 
@@ -288,8 +287,7 @@ pub struct AgentsArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum AgentsAction {
-    /// Install an agent the way Codeg's settings do: its npm package, or its
-    /// download.
+    /// 按照 BeeCode 设置中的方式安装智能体（npm 包或直接下载）。
     Install(AgentInstallArgs),
 }
 
@@ -299,12 +297,11 @@ pub struct AgentInstallArgs {
     #[arg(value_name = "SLUG")]
     pub agent: String,
 
-    /// A version other than the one this codeg pins.
+    /// 指定不同于此 BeeCode 默认固定版本的版本。
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
 
-    /// How long to wait for the install (default: until it ends). It goes
-    /// on in Codeg either way.
+    /// 等待安装的时长（默认等待结束）；超时后 BeeCode 仍继续安装。
     #[arg(long, value_name = "DUR", value_parser = parse_duration)]
     pub wait: Option<Duration>,
 
@@ -326,7 +323,7 @@ pub struct AutomationsArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum AutomationsAction {
-    /// The automations saved in Codeg (what `codeg-cli automations` prints).
+    /// BeeCode 中保存的自动化（与 `codeg-cli automations` 输出一致）。
     List(ListArgs),
     /// Run an automation now, as its Run now button does.
     Run(AutomationRunArgs),
@@ -405,7 +402,7 @@ pub struct CancelArgs {
 
 #[derive(Args, Debug, Clone, Default, PartialEq)]
 pub struct RunArgs {
-    /// The working directory of the run. On this machine's codeg: default the
+    /// 本次运行的工作目录。在本机 BeeCode 上，默认采用
     /// current directory, relative paths taken from it. With --url: a path on
     /// the server's machine, required, sent as written.
     #[arg(
@@ -536,7 +533,7 @@ pub enum PolicyArg {
     Allow,
     /// Refuse, and end the run with exit code 5.
     Fail,
-    /// Leave every request to a person in the Codeg window.
+    /// 将所有请求交给用户在 BeeCode 窗口中处理。
     Wait,
 }
 
