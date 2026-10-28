@@ -407,8 +407,14 @@ describe("long replies", () => {
   })
 
   it("folds a streaming reply's rows away one at a time as it grows", () => {
+    // At work on its latest call: no prose after it yet, which would be one
+    // more row on the rail.
+    const running = (count: number): MessageTurn => {
+      const done = edits(count)
+      return { ...done, blocks: done.blocks.slice(0, -1) }
+    }
     const live = (count: number) => (
-      <Round parts={parts(edits(count), true)} completed={false} />
+      <Round parts={parts(running(count), true)} completed={false} />
     )
     const view = renderUi(live(150))
     expect(screen.getAllByText("Edited")).toHaveLength(150)

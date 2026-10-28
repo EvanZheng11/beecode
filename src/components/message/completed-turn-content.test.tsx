@@ -411,7 +411,7 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     expect(fold(container)).toBeNull()
   })
 
-  it("keeps it at the foot of the rail above the answer being written", () => {
+  it("hangs it under the prose being written after the last step, on the rail", () => {
     const { container } = renderWithIntl(
       <CompletedTurnContent
         parts={freshCompletedParts()}
@@ -420,13 +420,82 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
       />
     )
 
-    // Not a second mark under the answer: the ring at the foot of the steps,
-    // where the fold row will stand once the reply is done.
+    // Until the reply ends there is no telling an aside from its closing
+    // words: the prose is a step, the last on the rail, with the one ring
+    // under it — not an answer under the steps with the ring turning above
+    // the words being written.
     expect(marks(container)).toHaveLength(1)
     const mark = onRail(container)!
-    const answer = screen.getByText("The fix is complete.")
+    expect(screen.getAllByText("The fix is complete.")).toHaveLength(1)
+    const prose = screen
+      .getByText("The fix is complete.")
+      .closest(".activity-timeline > li")
+    expect(prose).toHaveAttribute("data-marker", "dot")
+    expect(prose!.nextElementSibling).toBe(mark)
+  })
+
+  it("keeps the next step's row under that prose, where it was written", () => {
+    // The call that follows goes in under the prose, above the ring; the
+    // prose's row stays the same element.
+    const parts = freshCompletedParts()
+    const view = renderWithIntl(
+      <CompletedTurnContent parts={parts} durationMs={null} completed={false} />
+    )
+    const prose = screen
+      .getByText("The fix is complete.")
+      .closest(".activity-timeline > li")!
+
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <CompletedTurnContent
+          parts={[
+            ...parts,
+            {
+              type: "tool-call",
+              toolCallId: "call-2",
+              toolName: "Read",
+              input: '{"file_path":"src/next.tsx"}',
+              state: "input-available",
+            },
+          ]}
+          durationMs={null}
+          completed={false}
+        />
+      </NextIntlClientProvider>
+    )
+
     expect(
-      mark.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING
+      screen
+        .getByText("The fix is complete.")
+        .closest(".activity-timeline > li")
+    ).toBe(prose)
+    const next = screen
+      .getByText("src/next.tsx")
+      .closest(".activity-timeline > li")!
+    expect(prose.nextElementSibling).toBe(next)
+    expect(next.nextElementSibling).toBe(onRail(view.container))
+  })
+
+  it("keeps the prose under the header, the mark under it, while the reply is folded", () => {
+    // Folded there is no rail to put it on: the words being written stay in
+    // view as the answer does.
+    const { container } = renderWithIntl(
+      <CompletedTurnContent
+        parts={freshCompletedParts()}
+        durationMs={null}
+        completed={false}
+      />
+    )
+
+    fireEvent.click(toggle())
+
+    const prose = screen.getByText("The fix is complete.")
+    expect(prose.closest(".activity-timeline")).toBeNull()
+    expect(marks(container)).toHaveLength(1)
+    expect(onRail(container)).toBeNull()
+    expect(
+      prose.compareDocumentPosition(marks(container)[0]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
   })
 
@@ -505,6 +574,42 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     }
   })
 
+  it("shows the prose being written once while the folding steps slide shut", () => {
+    // The steps stay mounted until the fold's exit ends; the words being
+    // written leave the rail at once for their place under the header, not
+    // drawn in both for the length of the slide.
+    const computed = window.getComputedStyle
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) =>
+        element.classList.contains("reply-fold-body") &&
+        element.getAttribute("data-state") === "closed"
+          ? ({
+              animationName: "reply-fold-close",
+              animationDuration: "0.16s",
+              animationDelay: "0s",
+            } as CSSStyleDeclaration)
+          : computed(element, pseudo)
+      )
+    try {
+      const { container } = renderWithIntl(
+        <CompletedTurnContent
+          parts={freshCompletedParts()}
+          durationMs={null}
+          completed={false}
+        />
+      )
+      fireEvent.click(toggle())
+      expect(container.querySelector(".activity-timeline > li")).not.toBeNull()
+      expect(screen.getAllByText("The fix is complete.")).toHaveLength(1)
+      expect(
+        screen.getByText("The fix is complete.").closest(".activity-timeline")
+      ).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it.each([
     ["a permission request about one of its calls", "call-run"],
     ["a question or a plan to approve", null],
@@ -558,5 +663,13 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     const row = fold(view.container)!
     expect(row).toHaveAccessibleName("Collapse 1 step · 4s")
     expect(row.querySelector("svg.lucide-chevron-up")).toBeTruthy()
+    // The closing prose, a step while it was written, is lifted out under
+    // the steps as the answer — once, not left on the rail as well.
+    expect(screen.getAllByText("The fix is complete.")).toHaveLength(1)
+    const answer = screen.getByText("The fix is complete.")
+    expect(answer.closest(".activity-timeline")).toBeNull()
+    expect(
+      row.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
   })
 })

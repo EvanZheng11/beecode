@@ -443,7 +443,9 @@ export function buildActivity(
   opts: {
     isStreaming: boolean
     /** Keep closing prose as steps instead of splitting it off as the
-     *  answer — for a sub-agent's own timeline, which has no answer slot. */
+     *  answer — for a sub-agent's own timeline, which has no answer slot,
+     *  and for a reply still being written, whose closing prose is not
+     *  known yet. */
     keepAnswer?: boolean
   }
 ): ActivityModel {

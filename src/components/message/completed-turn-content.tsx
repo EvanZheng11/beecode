@@ -183,11 +183,22 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // turn, so they all get the same answer.
   const isStreaming = !completed
 
+  // While the agent is still at it, the prose after its last step is one more
+  // step, not yet the answer: on the rail, as prose between steps is, with the
+  // turning ring under it. Until the reply ends there is no telling an aside
+  // ("Checking the tests next.") from its closing words; drawn as the answer,
+  // the words being written sat under the ring, cut off from the steps they
+  // follow, until the next call pulled them up into the steps. Once the reply
+  // is done its closing prose is lifted out under the steps as the answer.
+  // Folded, there is no rail to put it on: it stays under the header, as the
+  // answer does.
+  const proseOnRail = isStreaming && foldable && open
+
   const bodyId = useId()
   const turnRef = useRef<HTMLDivElement | null>(null)
   const activity = useMemo(
-    () => buildActivity(parts, { isStreaming }),
-    [parts, isStreaming]
+    () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
+    [parts, isStreaming, proseOnRail]
   )
   // The header's red "N failed": open the turn at the first failure nothing
   // redid — the row, and the group it is folded into.
@@ -210,10 +221,10 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
 
   // An open fold's steps end on a foot. While its agent is at work — not
   // while it waits on the user to answer a permission request — that is the
-  // turning ring; otherwise a row that folds the steps away, saying what it
-  // folds: `Collapse 14 steps · 3m 34s`. A live reply with no foot in view
-  // (its steps folded, none yet, or none it can fold) ends on the turning
-  // mark under whatever does end it instead.
+  // turning ring, under whatever it is writing; otherwise a row that folds
+  // the steps away, saying what it folds: `Collapse 14 steps · 3m 34s`. A
+  // live reply with no foot in view (its steps folded, none yet, or none it
+  // can fold) ends on the turning mark under whatever does end it instead.
   const { awaitingUser } = useActivityLive()
   const working = isStreaming && !awaitingUser
   const footShown = foldable && open && activity.items.length > 0
@@ -347,7 +358,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
           </div>
         </CollapsibleContent>
       </Collapsible>
-      {split.answer.length > 0 && (
+      {split.answer.length > 0 && !proseOnRail && (
         <ContentPartsRenderer
           parts={split.answer}
           role="assistant"
