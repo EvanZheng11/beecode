@@ -22,7 +22,7 @@ import type { StepStatus } from "@/lib/activity/types"
 import { describeStdinChars } from "@/lib/shell-session-tool"
 import { cn } from "@/lib/utils"
 import { useActivityRender } from "../activity-context"
-import { ActivityMembers, ActivityRow, useGroupGoing } from "../activity-row"
+import { ActivityMembers, ActivityRow, useGroupPlace } from "../activity-row"
 import { CopyAction, DetailBox, DetailScroll } from "../detail-box"
 import { useDisclosure } from "../disclosure-store"
 import { SlideSlot } from "../../slide-slot"
@@ -631,9 +631,12 @@ export const CommandRow = memo(function CommandRow({
  * is still going. A reply that is done folds them all. A failed member keeps
  * it open no more than a passing one does — the header counts the failures in
  * red — and what the reader chose stands. Open, its commands end on a foot
- * that turns while the group is still going, then folds it (`Collapse 3
- * commands`). Folded while live, the member waiting on the user or running
- * shows under the header.
+ * that turns while more may join the group, then folds it (`Collapse 3
+ * commands`) — even with a command moved to the background still running in
+ * it, which its own row shows. Folded, the member waiting on the user shows
+ * under the header, and so does the one running while the group is the
+ * reply's last row; once the reply has moved past, a member still running
+ * stays inside.
  */
 export const CommandGroupRow = memo(function CommandGroupRow({
   groupKey,
@@ -657,16 +660,17 @@ export const CommandGroupRow = memo(function CommandGroupRow({
   const status = awaited ? "awaiting" : given
   const live = status === "running" || status === "pending"
   const ended = followed && !live && !awaited
-  const going = useGroupGoing(live, followed)
+  const { current, going } = useGroupPlace(followed)
   const [open, setOpen] = useDisclosure(`group:${groupKey}`, {
     defaultOpen: isStreaming && !ended,
   })
-  // Folded, the member that needs the user — or else the one running — shows
-  // under the header, so the current step is never hidden.
+  // Folded, the member that needs the user — or else, while the group is the
+  // reply's current row, the one running — shows under the header, so the
+  // current step is never hidden.
   const liveStep = open
     ? null
     : (awaited ??
-      (live
+      (current && live
         ? ([...steps]
             .reverse()
             .find(

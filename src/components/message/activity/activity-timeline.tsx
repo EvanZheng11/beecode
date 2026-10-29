@@ -211,7 +211,7 @@ const ActivityItemView = memo(function ActivityItemView({
   tail,
 }: {
   item: ActivityItem
-  /** A group with something after it in the reply (see `useGroupGoing`). */
+  /** A group with something after it in the reply (see `useGroupPlace`). */
   followed: boolean
   /** The last step of a list still being written. */
   tail: boolean

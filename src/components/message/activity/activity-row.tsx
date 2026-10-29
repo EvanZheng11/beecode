@@ -267,15 +267,26 @@ export function RowChevron({
 }
 
 /**
- * Whether a group is still going, for its foot: a member runs, or the reply
- * is still being written with the group its last row, where the next step may
- * join it — the foot turns from the group's first command to its last rather
- * than flickering between commands. Not while the agent waits on the user.
+ * Where a group stands in its reply. `current`: the reply is still being
+ * written with the group its last row, where the next step may join it.
+ * `going`: its foot turns — while it is current and the agent is not waiting
+ * on the user — from the group's first command to its last rather than
+ * flickering between commands. Folded while current, its running member shows
+ * under its header, so the step under way is never hidden.
+ *
+ * Once the reply has moved past it — a row follows, or the answer does — or
+ * is done, nothing joins it: a member still running there (a command moved to
+ * the background, a call going on beside the steps after it) says so on its
+ * own row, inside the group, and the foot is the row that folds the group.
  */
-export function useGroupGoing(live: boolean, followed: boolean): boolean {
+export function useGroupPlace(followed: boolean): {
+  current: boolean
+  going: boolean
+} {
   const { isStreaming } = useActivityRender()
   const { awaitingUser } = useActivityLive()
-  return !awaitingUser && (live || (isStreaming && !followed))
+  const current = isStreaming && !followed
+  return { current, going: current && !awaitingUser }
 }
 
 /** The foot an open group's members end on (see `TimelineFoot`). */
