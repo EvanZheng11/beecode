@@ -1274,8 +1274,9 @@ pub enum SteerOutcome {
     /// `idleBehavior = "promptRequired"` opt-in — NOT consumed, still
     /// host-owned. The caller reroutes it through `session/prompt`.
     PromptRequired,
-    /// The adapter ignored the opt-in (pre-0.64 claude adapter, codex-acp)
-    /// and spun up a detached turn no host request owns — consumed. The
+    /// The adapter ignored the opt-in (pre-0.64 claude adapter, codex-acp
+    /// before 2.4.0) and spun up a detached turn no host request owns —
+    /// consumed. The
     /// manager records it delivered, warns, and downgrades
     /// `native_steering_available` for the rest of the session.
     StartedNewTurn,
@@ -5901,9 +5902,10 @@ fn build_grok_set_model_params(
 /// has no typed request for. Always opts into the 0.64.0
 /// `promptRequired` idle contract; codeg only enables native steering for
 /// adapters proven to honor it AND to keep the owning prompt in flight across
-/// the steered work (claude-agent-acp 0.65.0 / #958 — see
-/// [`synthesize_native_steering`] and `registry::steering_prompt_required_min_version`),
-/// but the caller still handles every outcome in case the proof was wrong.
+/// the steered work (claude-agent-acp 0.65.0 / #958, codex-acp 2.4.0 / #593 —
+/// see [`synthesize_native_steering`] and
+/// `registry::steering_prompt_required_min_version`), but the caller still
+/// handles every outcome in case the proof was wrong.
 async fn send_steer_request(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
@@ -8817,8 +8819,9 @@ async fn run_connection(
             // alone can't vouch for the process on the other end of the pipe.
             // The raw advertisement is deliberately NOT stored: exposing it
             // would tempt the frontend to re-derive eligibility and show the
-            // instant channel for adapters (codex) that advertise steering but
-            // would detach a turn on the idle race.
+            // instant channel for adapters that advertise steering but would
+            // detach a turn on the idle race (codex-acp before 2.4.0, which a
+            // PATH install can still be).
             let steering_advertised = init_advertises_steering(init_resp.meta.as_ref());
             let native_steering_available = synthesize_native_steering(
                 agent_type,
@@ -28256,12 +28259,40 @@ mod tests {
             Some(&advertised),
             Some(&proven)
         ));
-        // Registry policy gate: codex advertises steering but has no
-        // promptRequired minimum — never native, whatever it reports.
+        // Registry policy gate: an agent with no promptRequired minimum is
+        // never native, whatever it reports.
+        assert!(!synthesize_native_steering(
+            AgentType::Gemini,
+            Some(&advertised),
+            Some(&proven)
+        ));
+        // codex-acp honors the opt-in from 2.4.0 (#593). Its versions are
+        // read against its own floor: 2.3.0 ignored the opt-in, and a
+        // prerelease of 2.4.0 may predate it.
+        for (version, native) in [
+            ("2.4.0", true),
+            ("2.5.1", true),
+            ("2.3.0", false),
+            ("2.3.1-preview.12", false),
+            ("2.4.0-preview.1", false),
+        ] {
+            assert_eq!(
+                synthesize_native_steering(
+                    AgentType::Codex,
+                    Some(&advertised),
+                    Some(&Implementation::new(
+                        "@agentclientprotocol/codex-acp",
+                        version
+                    )),
+                ),
+                native,
+                "codex-acp {version}"
+            );
+        }
         assert!(!synthesize_native_steering(
             AgentType::Codex,
             Some(&advertised),
-            Some(&proven)
+            None
         ));
         // Runtime proof gate: 0.64.1 advertises steering identically but still
         // settles the owning prompt on a mid-generation `injected` (#934, fixed

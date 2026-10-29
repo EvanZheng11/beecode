@@ -1980,18 +1980,19 @@ function codexListIsManaged(list: CodexModelConfig): boolean {
 }
 
 /**
- * Provider ids codex builds in (codex 0.160.1, `built_in_model_providers` in
+ * Provider ids codex builds in (codex 0.165.0, `built_in_model_providers` in
  * the `model-provider-info` crate); `openai` is the one an Official
  * Subscription (ChatGPT login) session runs on. A `[model_providers.<id>]`
  * table for one of them does not change it: `merge_configured_model_providers`
- * keeps the built-in entry, except that the two Bedrock ids accept a few
- * fields — and reject the whole config if any other field,
- * `supports_websockets` included, is set.
+ * keeps the built-in entry, except that the two Bedrock ids and `gcp` (Google
+ * Cloud Vertex AI, new in 0.165) accept a few fields — and reject the whole
+ * config if any other field, `supports_websockets` included, is set.
  */
 const CODEX_BUILT_IN_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "openai",
   "amazon-bedrock",
   "amazon-bedrock-runtime",
+  "gcp",
   "ollama",
   "lmstudio",
 ])

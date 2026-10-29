@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.164.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.165.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -484,10 +484,8 @@ pub const CLAUDE_AGENT_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-ac
 /// `_meta.steering.supported`: an adapter that ignores the opt-in falls back
 /// to `startedNewTurn` on the turn-end race — a detached turn no host request
 /// owns, which codeg's turn-scoped runtime must never trigger. codex-acp
-/// ships `_session/steering` but not `promptRequired` — re-verified against
-/// the published 1.3.0 tarball (zero hits, same as 1.1.9) — so it stays
-/// `None` until a release implements the opt-in — then this is a one-line
-/// flip plus tests.
+/// shipped `_session/steering` without the opt-in from 1.1.6 through 2.3.0;
+/// 2.4.0 implements it (see the codex arm below).
 ///
 /// Honoring the opt-in is necessary but not sufficient: the ACTIVE path must
 /// also keep the owning `session/prompt` in flight across the steered work
@@ -520,8 +518,52 @@ pub fn steering_prompt_required_min_version(agent_type: AgentType) -> Option<&'s
         // answers the steer — measured live; see the claude entry's (qq) for
         // what moving the tool cost codeg.
         AgentType::ClaudeCode => Some("0.65.0"),
+        // 2.4.0 (#593) adds the opt-in: when no turn can take the steer, the
+        // adapter answers `{outcome:"promptRequired", reason:"noRunningTurn"}`
+        // at once, consumes nothing and starts no turn. That includes the
+        // window where the prompt waits on its plan-review card. Up to 2.3.0
+        // the opt-in was ignored: an idle steer started a detached turn
+        // (`startedNewTurn`), and one sent during plan review was answered only
+        // after the prompt ended, which wedged codeg's connection loop (the
+        // card's answer queues behind the inline await).
+        //
+        // The ACTIVE path keeps the owning prompt in flight on 2.3.0 and
+        // 2.4.0 alike: `turn/steer` answers `injected` within a few ms, the
+        // steer preempts the streaming response (codex 0.164 turned
+        // `instant_interrupt` on by default), the steered work runs in the
+        // same turn, and the prompt answers after it. A steer sent before
+        // codex reports the prompt's turn waits for the turn to start (about
+        // 40 ms) and is injected. Measured live over stdio with codeg's
+        // `clientCapabilities` against a scripted Responses server: idle,
+        // plan review, a running turn, the instant after a prompt, and an
+        // open approval. The floor is 2.4.0 itself; 2.3.1-preview.* builds
+        // stay on the pull channel. An open approval needs one more rule,
+        // see [`steering_waits_out_open_permission`].
+        AgentType::Codex => Some("2.4.0"),
         _ => None,
     }
+}
+
+/// Whether a live-feedback note that would be steered natively goes to the
+/// next-turn queue instead while a permission card is open on the session
+/// (`ConnectionManager::submit_feedback_native` answers `NoActiveTurn`, the
+/// reroute the composer already handles).
+///
+/// codex holds a steer injected during an approval as the turn's pending
+/// input until the model's next step. Its command and file-change approvals
+/// offer `cancel` ("No, and tell Codex what to do differently"), which aborts
+/// the turn and drops that input unseen. Measured on codex-acp 2.4.0 with
+/// codex 0.165.0: a steer during an exec approval came back `injected` in
+/// 4 ms. After "Yes" the note reached the next model request. After the
+/// `cancel` answer the prompt ended `cancelled`, and neither the rollout nor
+/// any later request carried the note, which codeg had already recorded as
+/// delivered. Queued, the note becomes the next prompt, which is what that
+/// button asks the user for. The pull channel needs no such rule: an unread
+/// note outlives its turn and offers to be resent.
+///
+/// Only codex is known to drop an injected note this way, so only codex waits.
+pub fn steering_waits_out_open_permission(agent_type: AgentType) -> bool {
+    matches!(agent_type, AgentType::Codex)
 }
 
 /// Whether this adapter's goal-control request reaches the agent OUT OF BAND —
@@ -3977,9 +4019,87 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // sends parses identically under both SDKs' v1 schemas; 2.0 is
             // stricter only about a null or missing `mcpServers` and a bad
             // `additionalDirectories`, which codeg never sends.
+            //
+            // 2.4.0 moves `@openai/codex` ^0.164.0 → **^0.165.0** (a fresh
+            // install resolves 0.165.0); `@agentclientprotocol/sdk` stays
+            // ~2.0.2 and `engines` is still absent. The 20.3.0 floor stands:
+            // the new code reaches for no Node API past 20.3, and live on
+            // 20.3.0 a session runs a plain, a shell, a steered and a citing
+            // turn. Under codeg's exact `clientCapabilities` the adapter's
+            // 33-scenario harness replays byte for byte as on 2.3.0, and so do
+            // `initialize` (bar the version) and a live plain and shell turn,
+            // bar the model list of (pp). Live runs show the rest, below.
+            //
+            // (oo) **#593 honors the steering `promptRequired` opt-in**, so
+            // codex steers natively from this release
+            // (`steering_prompt_required_min_version`, measured there). A
+            // note sent while an approval card is open goes to the queue
+            // instead (`steering_waits_out_open_permission`).
+            //
+            // (pp) codex 0.165 adds **GPT-6.1 Terra** (`gpt-6.1-terra`,
+            // priority 7: listed after 5.6 Sol, ahead of 5.6 Terra; 500K
+            // context window). It is not the default, which stays GPT-6.1
+            // Sol. The offline snapshot is regenerated (12 slugs, no
+            // `ModelInfo` field added; `codex_model_catalog.rs` has the
+            // re-probe), and `CODEX_NESTED_VERSION_FALLBACK` moves with it.
+            //
+            // (qq) #698 rewrites the model's file citations,
+            // `:codex-file-citation{path="…" purpose="…"}`, as Markdown links
+            // for every client, live and on replay: a relative path resolves
+            // against the session cwd, and citations in code or escaped with
+            // `\` stay as written. No setting turns the directive off. Live
+            // text is held back while a directive or a backtick run may still
+            // continue, and flushed when the message completes. The rollout
+            // keeps the directive, so `parsers::codex` applies the same
+            // rewrite (`parsers::codex_file_citations`).
+            //
+            // (rr) #697: a turn whose ChatGPT login cannot reach chatgpt.com
+            // to look up its workspace ("workspace routing discovery failed" /
+            // "… timed out") gets an explanation for its `sessionFailure`
+            // title, and the record's category moves from `service` to
+            // `connection` (actions retry and new session). codeg shows the
+            // record as sent, and `acp::service_error` ports the title rule
+            // for the reloaded failure line and the compaction card.
+            //
+            // (ss) codex 0.165 itself, as codeg meets it:
+            //   * `gcp` (Google Cloud Vertex AI) is a new built-in provider id.
+            //     A `[model_providers.gcp]` table may now set only `base_url`,
+            //     `auth` and `http_headers`; any other field fails the whole
+            //     config. codeg's provider binding treats it like the other
+            //     built-ins (`codex_catalog_commit::BUILT_IN_PROVIDERS`), and
+            //     so does the panel's WebSocket switch.
+            //   * `reasoning_effort_override` is on by default: a mid-thread
+            //     effort change reaches a Responses-Lite model as a
+            //     `configuration_update` input item, which the rollout
+            //     records as a `response_item`. It applies to the built-in
+            //     OpenAI provider only (`is_openai()`), so a bound provider
+            //     gets none, and `parsers::codex` renders nothing for it.
+            //   * A model-not-found provider error ends the turn at once
+            //     (`codexErrorInfo: "modelNotFound"`) instead of retrying.
+            //     The adapter's error table has no entry for the new value,
+            //     so the record is a `service` failure offering Retry.
+            //   * Not read by codeg: attached forks (`session_meta
+            //     .attached_thread`, behind an experimental `thread/fork`
+            //     flag the adapter does not send), the Guardian review timeout
+            //     (`[auto_review] timeout_ms`), memory v2 defaults, and the
+            //     new nested catalog members (`model_messages
+            //     .permissions.writable_root(s)`, `tools.history` / `notes` /
+            //     `context_management`).
+            //
+            // (tt) Inert or not adopted. #682, #684–#688 bring standard ACP
+            // subagent sessions (a child session id per sub-agent, its
+            // history replayed under it, permissions routed through it, a
+            // cancel capability). The adapter serves them only to a client
+            // that is not AIR (v1 opts in with `clientCapabilities.subagents`,
+            // v2 gets them unasked); an AIR client keeps the
+            // `nativeSubagentSessions` contract, which codeg does not declare
+            // (see `build_client_capabilities` in connection.rs), so codeg
+            // gets the same tool-call fallback as on 2.3.0. #669 (batch
+            // session lookup) and #689 (a faster session list) shape
+            // `session/list`, which codeg does not send.
             distribution: AgentDistribution::Npx {
-                version: "2.3.0",
-                package: "@agentclientprotocol/codex-acp@2.3.0",
+                version: "2.4.0",
+                package: "@agentclientprotocol/codex-acp@2.4.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -6793,21 +6913,25 @@ mod tests {
     }
 
     #[test]
-    fn steering_prompt_required_min_version_gates_claude_only() {
+    fn steering_prompt_required_min_version_gates_claude_and_codex_only() {
         // The native-steering policy bit: only an adapter that honors the
         // `promptRequired` opt-in AND keeps the owning prompt in flight across
         // a steered turn gets a minimum version. The floor is the release that
         // fixed the latter (claude-agent-acp 0.65.0 / #958), NOT the one that
         // introduced the opt-in — every 0.64.x settles the prompt early (#934).
-        // Everyone else stays None and rides the MCP pull channel; codex-acp
-        // ships steering without the opt-in at all (re-verified on the 1.3.0
-        // tarball). Flipping an agent on here without the runtime
-        // `agent_info.version` proof is not enough by design.
+        // codex-acp's active path always kept the prompt in flight, and 2.4.0
+        // (#593) is the first release with the opt-in. Everyone else stays
+        // None and rides the MCP pull channel. Flipping an agent on here
+        // without the runtime `agent_info.version` proof is not enough by
+        // design.
         assert_eq!(
             steering_prompt_required_min_version(AgentType::ClaudeCode),
             Some("0.65.0")
         );
-        assert_eq!(steering_prompt_required_min_version(AgentType::Codex), None);
+        assert_eq!(
+            steering_prompt_required_min_version(AgentType::Codex),
+            Some("2.4.0")
+        );
         for agent in [
             AgentType::Gemini,
             AgentType::OpenClaw,
@@ -6816,6 +6940,22 @@ mod tests {
             AgentType::Custom("acme"),
         ] {
             assert_eq!(steering_prompt_required_min_version(agent), None);
+        }
+    }
+
+    #[test]
+    fn only_codex_steering_waits_out_an_open_permission_card() {
+        // codex drops a note injected during an approval when the answer is
+        // `cancel`, so its notes queue while a card is open. Claude keeps
+        // steering through one, as it always has.
+        assert!(steering_waits_out_open_permission(AgentType::Codex));
+        for agent in [
+            AgentType::ClaudeCode,
+            AgentType::Gemini,
+            AgentType::Grok,
+            AgentType::Custom("acme"),
+        ] {
+            assert!(!steering_waits_out_open_permission(agent), "{agent:?}");
         }
     }
 
@@ -6920,8 +7060,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.3.0",
-            "@agentclientprotocol/codex-acp@2.3.0",
+            "2.4.0",
+            "@agentclientprotocol/codex-acp@2.4.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
