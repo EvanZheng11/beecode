@@ -221,7 +221,7 @@
       "imageBlur": "Bildunschärfe",
       "panelOpacity": "Panel-Deckkraft",
       "panelOpacityHint": "Wie deckend Seitenleiste, Panels und Tab-Leisten sind. Niedriger lässt mehr vom Bild durchscheinen.",
-      "errorTooLarge": "Bild ist zu groß (max. 16 MB).",
+      "errorTooLarge": "Bild ist zu groß (max. 64 MB).",
       "errorUnsupportedFormat": "Nicht unterstütztes Bildformat. Wähle ein PNG, JPEG, WebP oder GIF.",
       "errorUploadFailed": "Hintergrundbild konnte nicht festgelegt werden.",
       "market": {

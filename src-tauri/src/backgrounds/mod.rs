@@ -29,9 +29,12 @@ pub mod marketplace;
 /// Smallest plausible image payload; rejecting tiny inputs early avoids
 /// decoding random files.
 const MIN_BG_BYTES: usize = 64;
-/// Cap raw uploads at 16 MiB. A reasonable background is well under this; the
-/// cap is purely a guardrail (matches the pet spritesheet ceiling).
-const MAX_BG_BYTES: usize = 16 * 1024 * 1024;
+/// Cap raw uploads at 64 MiB. Most backgrounds are well under this; the cap is
+/// purely a guardrail, sized to admit large photos and long animated images.
+/// The file travels base64-encoded in one request and one response, so raising
+/// it also means raising the server route's body limit and the transport
+/// timeouts on `background_set` / `background_read`.
+pub(crate) const MAX_BG_BYTES: usize = 64 * 1024 * 1024;
 /// Upper bound on decoded pixel count, checked from the header *before* any
 /// full decode, so a decompression bomb cannot force a huge allocation.
 /// 40M px ≈ an 8K image (7680×4320 ≈ 33M), generous for a wallpaper.
@@ -325,6 +328,30 @@ mod tests {
         // A wide banner and a tall strip both pass — no fixed-geometry rule.
         assert!(validate_background(&encode_png(1920, 200)).is_ok());
         assert!(validate_background(&encode_png(200, 1920)).is_ok());
+    }
+
+    /// A real PNG padded with trailing bytes to `len`. Only the header is read,
+    /// so the padding exercises the byte cap without a huge encode.
+    fn png_padded_to(len: usize) -> Vec<u8> {
+        let mut bytes = encode_png(64, 64);
+        bytes.resize(len, 0);
+        bytes
+    }
+
+    #[test]
+    fn validate_accepts_a_file_up_to_the_byte_cap() {
+        // Past the old 16 MiB ceiling, so a large photo is no longer refused.
+        validate_background(&png_padded_to(20 * 1024 * 1024))
+            .expect("a 20 MiB image is within the cap");
+        validate_background(&png_padded_to(MAX_BG_BYTES))
+            .expect("exactly at the cap is still accepted");
+    }
+
+    #[test]
+    fn validate_rejects_a_file_past_the_byte_cap() {
+        let err = validate_background(&png_padded_to(MAX_BG_BYTES + 1))
+            .expect_err("one byte past the cap must be refused");
+        assert!(err.to_string().contains("64 MiB"), "{err}");
     }
 
     #[test]

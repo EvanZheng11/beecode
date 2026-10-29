@@ -221,7 +221,7 @@
       "imageBlur": "تمويه الصورة",
       "panelOpacity": "عتامة اللوحات",
       "panelOpacityHint": "مدى عتامة الشريط الجانبي واللوحات وأشرطة التبويب. الأقل يُظهر المزيد من الصورة.",
-      "errorTooLarge": "الصورة كبيرة جدًا (16 ميجابايت كحد أقصى).",
+      "errorTooLarge": "الصورة كبيرة جدًا (64 ميجابايت كحد أقصى).",
       "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF.",
       "errorUploadFailed": "فشل تعيين صورة الخلفية.",
       "market": {

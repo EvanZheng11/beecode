@@ -221,7 +221,7 @@
       "imageBlur": "画像のぼかし",
       "panelOpacity": "パネルの不透明度",
       "panelOpacityHint": "サイドバー・パネル・タブバーの不透明度です。低いほど画像が透けて見えます。",
-      "errorTooLarge": "画像が大きすぎます（最大 16 MB）。",
+      "errorTooLarge": "画像が大きすぎます（最大 64 MB）。",
       "errorUnsupportedFormat": "対応していない画像形式です。PNG・JPEG・WebP・GIF から選んでください。",
       "errorUploadFailed": "背景画像の設定に失敗しました。",
       "market": {

@@ -221,7 +221,7 @@
       "imageBlur": "Desenfoque de la imagen",
       "panelOpacity": "Opacidad de los paneles",
       "panelOpacityHint": "Cuán opacos son la barra lateral, los paneles y las barras de pestañas. Más bajo deja ver más la imagen.",
-      "errorTooLarge": "La imagen es demasiado grande (máx. 16 MB).",
+      "errorTooLarge": "La imagen es demasiado grande (máx. 64 MB).",
       "errorUnsupportedFormat": "Formato de imagen no admitido. Elige un PNG, JPEG, WebP o GIF.",
       "errorUploadFailed": "No se pudo establecer la imagen de fondo.",
       "market": {
