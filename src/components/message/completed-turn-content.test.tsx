@@ -1,4 +1,4 @@
-import { type ReactElement } from "react"
+import { StrictMode, type ReactElement } from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
@@ -614,6 +614,47 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     expect(view.container.querySelector(".activity-capsule")).toHaveTextContent(
       /^Working$/
     )
+  })
+
+  it("grows the rail down to the first words of the reply that takes the pending reply's place", () => {
+    // The pending reply stood as that list, its ring alone. The reply in its
+    // place mounts with its first words, and they join the list as words
+    // that came later would; a reply that mounts on its own (opened
+    // mid-stream) draws its rail as it stands. In Strict Mode, as in
+    // development: the effects run over again once the reply has taken the
+    // pending reply's place.
+    const thread = (pending: boolean) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <div className="chat-motion-scope">
+          {pending ? (
+            <CompletedTurnContent
+              key="pending"
+              parts={[]}
+              completed={false}
+              pending
+            />
+          ) : (
+            <CompletedTurnContent
+              key="reply"
+              parts={[{ type: "text", text: "Let me look." }]}
+              durationMs={null}
+              completed={false}
+            />
+          )}
+        </div>
+      </NextIntlClientProvider>
+    )
+    const words = () =>
+      screen
+        .getByText(writing("Let me look."))
+        .closest(".activity-timeline > li")
+    const view = render(thread(true), { wrapper: StrictMode })
+    view.rerender(thread(false))
+    expect(words()).toHaveAttribute("data-rail-enter")
+    view.unmount()
+
+    render(thread(false), { wrapper: StrictMode })
+    expect(words()).not.toHaveAttribute("data-rail-enter")
   })
 
   it("keeps those words where they were written as the first step joins under them", () => {
