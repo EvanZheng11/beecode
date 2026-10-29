@@ -1573,7 +1573,9 @@
       "disableNonessentialTrafficAria": "Telemetrie oder überflüssige Netzwerkanfragen von Claude Code deaktivieren",
       "gatewayDiscovery": "Claude die Claude-Modelle des Gateways auflisten lassen",
       "gatewayDiscoveryAria": "Claude Code die Claude-Modelle des Gateways auflisten lassen",
-      "gatewayDiscoveryHint": "Claude fragt die API-URL selbst nach Modellen und behält nur IDs, die „claude“ oder „anthropic“ enthalten; sie erscheinen ab der nächsten Sitzung."
+      "gatewayDiscoveryHint": "Claude fragt die API-URL selbst nach Modellen und behält nur IDs, die „claude“ oder „anthropic“ enthalten; sie erscheinen ab der nächsten Sitzung.",
+      "thinkingSummaries": "Zusammenfassungen von Claudes Denken anzeigen",
+      "thinkingSummariesHint": "Claude Code zeigt standardmäßig nur die Notizen, die Claude zwischen Tool-Aufrufen schreibt. Eingeschaltet erscheint zusätzlich eine Zusammenfassung seines Denkens. Das kostet keine zusätzlichen Tokens und erfordert claude-agent-acp 0.99.0 oder neuer."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

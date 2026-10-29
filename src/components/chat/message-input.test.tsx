@@ -3344,6 +3344,48 @@ describe("MessageInput live content for draft tidying", () => {
       })
       await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
     })
+
+    describe("with files copied in Finder / Explorer", () => {
+      afterEach(() => {
+        attachmentsOverride.current = null
+      })
+
+      // jsdom has no `ClipboardEvent`, which ProseMirror's `pasteText` builds,
+      // so the text paste itself is only observed being asked for.
+      function spyOnTextPaste() {
+        const view = composerHandle.current!.getEditor()!.view
+        return vi.spyOn(view, "pasteText").mockImplementation(() => true)
+      }
+
+      it("attaches the files instead of pasting the names the text API sees", async () => {
+        let attachedFiles = false
+        const appendClipboardFiles = vi.fn(async () => {
+          attachedFiles = true
+          return true
+        })
+        attachmentsOverride.current = { appendClipboardFiles }
+        setClipboard(async () => "bundle.zip")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() => expect(attachedFiles).toBe(true))
+        await act(async () => {})
+        expect(pasteText).not.toHaveBeenCalled()
+      })
+
+      it("still pastes the text when the clipboard holds no files", async () => {
+        attachmentsOverride.current = {
+          appendClipboardFiles: vi.fn(async () => false),
+        }
+        setClipboard(async () => "plain words")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() =>
+          expect(pasteText).toHaveBeenCalledWith("plain words")
+        )
+      })
+    })
   })
 
   // A pasted image the hook drops at once (here an empty one): the intake

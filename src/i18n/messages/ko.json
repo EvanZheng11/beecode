@@ -1573,7 +1573,9 @@
       "disableNonessentialTrafficAria": "Claude Code 텔레메트리 또는 불필요한 네트워크 요청 비활성화",
       "gatewayDiscovery": "게이트웨이의 Claude 모델을 Claude가 나열하게 하기",
       "gatewayDiscoveryAria": "게이트웨이의 Claude 모델을 Claude Code가 나열하게 하기",
-      "gatewayDiscoveryHint": "Claude가 API URL에 직접 모델을 조회하고 “claude” 또는 “anthropic”이 들어간 ID만 남깁니다. 다음 세션부터 표시됩니다."
+      "gatewayDiscoveryHint": "Claude가 API URL에 직접 모델을 조회하고 “claude” 또는 “anthropic”이 들어간 ID만 남깁니다. 다음 세션부터 표시됩니다.",
+      "thinkingSummaries": "Claude의 사고 요약 표시",
+      "thinkingSummariesHint": "Claude Code는 기본적으로 Claude가 도구 호출 사이에 쓰는 메모만 표시합니다. 켜면 추론 과정의 요약도 표시됩니다. 추가 토큰은 들지 않으며 claude-agent-acp 0.99.0 이상이 필요합니다."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId}를 삭제하시겠습니까?",

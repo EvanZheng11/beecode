@@ -2732,9 +2732,110 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1447 leaves the status out of a permission subject for a
             //     client that is not AIR and speaks ACP v2. codeg is an AIR
             //     client on v1, whose branch is unchanged.
+            //
+            // 0.99.0 moves both SDKs: the Claude Agent SDK to 0.3.312 (CLI
+            // 2.1.310 → 2.1.312) and the ACP SDK to 2.1.0 (schema v1.27.0),
+            // whose new peer dependency `@modelcontextprotocol/server` is
+            // optional, so npm does not install it. `engines.node` stays
+            // ">=22". The scenario harness, run on the 0.99.0 sources with
+            // codeg's exact `clientCapabilities`, is byte-identical to
+            // 0.98.0's recording in all 40 scenarios, and a live `initialize`
+            // and `session/new` differ in the version only. What changed for
+            // codeg is on paths no harness scenario runs, measured live
+            // against the local fake Anthropic API (no model call), 0.98.0
+            // and 0.99.0 side by side:
+            //
+            // (pppp) **Embedded blob resources reach Claude** (#1460). A blob
+            // resource used to be dropped from the prompt whole. Now an image
+            // (PNG, JPEG, GIF, WebP) becomes an image block and a PDF a
+            // document block, each right after the link `formatUriAsLink`
+            // writes for the resource, and a text type is decoded and sent
+            // like a text resource. Any other type (zip, docx) is still
+            // dropped on v1. codeg sends a blob for a file pasted with no path
+            // on disk, so a pasted PDF now reaches the model; 0.98.0 sent the
+            // typed text alone (measured on the request both times). Two codeg
+            // readers followed the old shape:
+            //   * the transcript watcher's prompt fingerprint
+            //     (`background_watch::first_transcript_texts`) assumed a blob
+            //     writes no text. A PDF sent with nothing typed, whose record
+            //     now opens with its `clipboard://` link, read as a turn codeg
+            //     did not send, and the overlay drew it a second time. The
+            //     ledger now keeps both readings of such a prompt.
+            //   * the history parser dropped the document block and kept the
+            //     link as prose. It now reads the link as the attachment the
+            //     live turn shows (`parsers::claude::user_content_blocks`).
+            //
+            // (qqqq) **Thinking summaries on request** (#1081).
+            // `CLAUDE_CODE_THINKING_DISPLAY` (`summarized` or `omitted`) in
+            // the ADAPTER's environment becomes the session's
+            // `thinking.display` (no effect with thinking turned off, and a
+            // title request carries no `thinking` at all). Claude Code asks
+            // for `display: "updates"` by default (measured on 2.1.310 and
+            // 2.1.312 for Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 5.5, Opus 5,
+            // Sonnet 5 and a custom model id through a gateway), so a thinking
+            // block carries only the notes Claude writes between tool calls.
+            // Set to `summarized`, 0.99.0 asks for `summarized`, which adds
+            // summaries of the reasoning; display decides what comes back, not
+            // what is billed. 0.98.0 ignores the variable. The settings.json
+            // `env` reaches only the CLI process, so the Claude Code settings
+            // write it into the agent's `env_json` (the thinking-summaries
+            // switch under its environment variables), and switching it off
+            // removes it. settings.json `showThinkingSummaries: true` is no
+            // substitute under the SDK: it drops `display` from the request,
+            // and the API's default for these models is `omitted`.
+            //
+            // (rrrr) **An MCP server that fails to start is reported** (#1464)
+            // as a warning notice, `MCP server "<name>" failed to start` with
+            // "Its tools are unavailable in this session. Run /mcp for the
+            // error.", once per server per session. Only the servers
+            // `session/new` passed count (codeg-mcp among them), not the ones
+            // in Claude Code's own settings. It arrives within the first
+            // prompt's turn, when the CLI reports its MCP state, and codeg
+            // shows it as a toast like any notice. `/mcp` works over ACP and
+            // names the server and its error. A server that needs OAuth gets
+            // an info notice instead, since codeg offers Claude no URL
+            // elicitation.
+            //
+            // (ssss) **ACP error codes** (#1458). An unknown session answers
+            // -32002 with `data.sessionId`, where 0.98.0 answered -32603 with
+            // "Session not found" in `data.details` (and a `session/load` miss
+            // carried `data.uri`). An invalid config option, value or mode
+            // answers -32602 "Invalid params: …" instead of -32603. codeg's
+            // prompt and load ladders read the code first, so both versions
+            // land the same (`claude_session_not_found_reads_the_same_before_and_after_0_99_0`).
+            //
+            // (tttt) Nothing to change in codeg, each checked:
+            //   * #1467 reports EnterPlanMode with the `switch_mode` kind
+            //     (`other` before). Its title, `_meta.claudeCode.toolName` and
+            //     input are unchanged and it asks no permission, so it still
+            //     draws as the plan-mode row.
+            //   * #1466 denies a background subagent's permission request
+            //     that the client answers `cancelled`, as codeg answers every
+            //     pending request on Stop. The subagent now reads a refusal
+            //     instead of "Tool permission request failed", which it could
+            //     retry.
+            //   * #1465 answers an MCP elicitation the client cannot show with
+            //     `cancel` rather than `decline`. codeg offers Claude no
+            //     elicitation, so that is every one.
+            //   * #1463 lists a current model the picker lacks among the model
+            //     values. With a custom `ANTHROPIC_MODEL` the CLI already
+            //     listed it (both versions, measured); the other cases, a
+            //     resume onto a model an allowlist excludes and a refusal
+            //     fallback, only add a row.
+            //   * SDK 0.3.312 records unanswered AskUserQuestion questions in
+            //     `annotations`, on the elicitation path codeg does not take.
+            //   * #1459, #1461, #1462 and the `type: "command"` tag on
+            //     commands are v2 only; codeg asks for protocol 1.
+            //   * CLI 2.1.311 and 2.1.312: a Bash call that outlives its
+            //     `timeout` was already moved to the background as a shell
+            //     task, and 2.1.312 puts the output so far before the "did not
+            //     complete within its Ns timeout" sentence, which codeg finds
+            //     anywhere in the result. Model ids drop a `[1m]` suffix that
+            //     has no effect, which `heal_retired_context_lane_pick`
+            //     already maps. A failed title request is retried once.
             distribution: AgentDistribution::Npx {
-                version: "0.98.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.98.0",
+                version: "0.99.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.99.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -6777,8 +6878,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.98.0",
-            "@agentclientprotocol/claude-agent-acp@0.98.0",
+            "0.99.0",
+            "@agentclientprotocol/claude-agent-acp@0.99.0",
             Some("22.0.0"),
         );
         assert_npx_version(

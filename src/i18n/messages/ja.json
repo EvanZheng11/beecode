@@ -1573,7 +1573,9 @@
       "disableNonessentialTrafficAria": "Claude Code のテレメトリや不要なネットワークリクエストを無効化",
       "gatewayDiscovery": "ゲートウェイの Claude モデルを Claude に一覧させる",
       "gatewayDiscoveryAria": "ゲートウェイの Claude モデルを Claude Code に一覧させる",
-      "gatewayDiscoveryHint": "Claude 自身が API の URL にモデルを問い合わせ、「claude」または「anthropic」を含む ID だけを残します。次のセッションから表示されます。"
+      "gatewayDiscoveryHint": "Claude 自身が API の URL にモデルを問い合わせ、「claude」または「anthropic」を含む ID だけを残します。次のセッションから表示されます。",
+      "thinkingSummaries": "Claude の思考の要約を表示",
+      "thinkingSummariesHint": "Claude Code は既定で、ツール呼び出しの合間に Claude が書くメモだけを表示します。オンにすると推論の要約も表示されます。追加のトークンは消費しません。claude-agent-acp 0.99.0 以降が必要です。"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

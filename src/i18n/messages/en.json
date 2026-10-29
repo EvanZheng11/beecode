@@ -1573,7 +1573,9 @@
       "disableNonessentialTrafficAria": "Disable Claude Code telemetry or redundant network requests",
       "gatewayDiscovery": "Let Claude list the gateway's Claude models",
       "gatewayDiscoveryAria": "Let Claude Code list the gateway's Claude models",
-      "gatewayDiscoveryHint": "Claude asks the API URL for its models itself and keeps only ids that contain “claude” or “anthropic”; they show from the next session."
+      "gatewayDiscoveryHint": "Claude asks the API URL for its models itself and keeps only ids that contain “claude” or “anthropic”; they show from the next session.",
+      "thinkingSummaries": "Show Claude's thinking summaries",
+      "thinkingSummariesHint": "Claude Code shows only the notes Claude writes between tool calls. Turn this on to also see a summary of its reasoning. It costs no extra tokens and needs claude-agent-acp 0.99.0 or later."
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",

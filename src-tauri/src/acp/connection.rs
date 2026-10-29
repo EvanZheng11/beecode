@@ -32333,6 +32333,19 @@ mod tests {
         .expect("codex transport notice");
         assert!(codex_multiline.title.starts_with("Falling back from WebSockets"));
         assert!(codex_multiline.title.contains('\n'));
+
+        // claude-agent-acp 0.99.0 (#1464): an MCP server from `session/new`
+        // that failed to start, reported during the first prompt's turn.
+        let mcp = session_notice(&from_wire(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"d04fcebb-9f01-43b2-9b01-28b4a59d756b","update":{"sessionUpdate":"notice","severity":"warning","title":"MCP server \"broken-probe\" failed to start","description":"Its tools are unavailable in this session. Run /mcp for the error."}}}"#,
+        ))
+        .expect("claude MCP start-up notice");
+        assert_eq!(mcp.severity, "warning");
+        assert_eq!(mcp.title, "MCP server \"broken-probe\" failed to start");
+        assert_eq!(
+            mcp.description.as_deref(),
+            Some("Its tools are unavailable in this session. Run /mcp for the error.")
+        );
     }
 
     /// `title` is required and non-empty per the RFD. Without it there is
@@ -33757,6 +33770,51 @@ mod tests {
             "response to `session/prompt` never received: channel closed",
         );
         assert!(prompt_rejection_is_terminal(&dropped), "{dropped}");
+    }
+
+    /// claude-agent-acp's answers for a session it has no record of, captured
+    /// live from 0.98.0 and 0.99.0. 0.99.0 (#1458) answers `sessionNotFound`
+    /// (-32002 with `data.sessionId`) where 0.98.0 threw a plain error that
+    /// reached the client as -32603 with the text in `data.details`, and its
+    /// `session/load` miss carries `data.sessionId` instead of `data.uri`. A
+    /// prompt on such a session still ends the connection, and a load of it
+    /// still takes the `resource_not_found` banner.
+    #[test]
+    fn claude_session_not_found_reads_the_same_before_and_after_0_99_0() {
+        let error = |value: serde_json::Value| -> agent_client_protocol::Error {
+            serde_json::from_value(value).expect("an ACP error")
+        };
+        let prompt_0_98 = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"details": "Session not found"}
+        }));
+        let prompt_0_99 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found",
+            "data": {"sessionId": "10d48aa1-0f66-45e1-a91f-46a2f43d418c"}
+        }));
+        assert!(prompt_rejection_is_terminal(&prompt_0_98), "{prompt_0_98}");
+        assert!(prompt_rejection_is_terminal(&prompt_0_99), "{prompt_0_99}");
+
+        let load_0_98 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found: 30c4f341-e332-493c-b2b3-b0d41ff2e18f",
+            "data": {"uri": "30c4f341-e332-493c-b2b3-b0d41ff2e18f"}
+        }));
+        let load_0_99 = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found",
+            "data": {"sessionId": "28124b47-919f-4112-b567-0f3c7a87d966"}
+        }));
+        assert_eq!(
+            classify_session_load_error(&load_0_98),
+            Some("resource_not_found")
+        );
+        assert_eq!(
+            classify_session_load_error(&load_0_99),
+            Some("resource_not_found")
+        );
     }
 
     /// codex-acp 2.2 rejects a prompt with 1001 when the app-server died. A
