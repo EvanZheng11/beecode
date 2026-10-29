@@ -4758,6 +4758,24 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // request, CodeBuddy answers the next prompt it runs `cancelled`
             // although it finished, with `_meta["codebuddy.ai/finishReason"]:
             // "stop"`, which codeg ends as `end_turn` (`codebuddy_stop_reason`).
+            //
+            // Held at 2.177.1. In 2.178.1 (after 2.178.0) an MCP tool cannot be
+            // allowed once. The model reaches an MCP tool through
+            // `DeferExecuteTool`, and 2.178.1 asks for permission twice under
+            // the same `toolCallId`, first for `DeferExecuteTool` and then for
+            // the MCP tool itself. It resolves the second ask as a denial
+            // (`_meta["codebuddy.ai/decision"]: "deny"`) whether the client
+            // answers it Allow or Always Allow. So the server's tool is never
+            // called, the call fails with "The user doesn't want to proceed
+            // with this tool use…", and the prompt answers `cancelled` with
+            // `codebuddy.ai/outcome: "PERMISSION_DENIED"`. Only Always Allow on
+            // the first ask lets the call through, and codeg cannot choose that
+            // for the user. Measured with a stdio MCP server handed over on
+            // `session/new`, the way codeg-mcp arrives; 2.177.1 asks once and
+            // runs the tool. 2.178.1 also stops offering Code Mode to a client
+            // that does not declare `mainAgentSupport`, as codeg does not
+            // (`codeModeSupport: false`, and setting `codeMode` fails -32602).
+            // Re-check both before moving the pin.
             distribution: AgentDistribution::Npx {
                 version: "2.177.1",
                 package: "@tencent-ai/codebuddy-code@2.177.1",
@@ -5692,9 +5710,34 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // codeg records a replay without that field. The rest (the hub's
             // close tombstones, an orderly exit after a remote close) runs only
             // in the separate hub process or in the remote endpoint.
+            //
+            // Bridge 0.79.1, after 0.79.0, changes `package.json` only in its
+            // version, and against the stand-in backend `initialize`
+            // (`protocolVersion: 1`), `session/new`, the mode gate (the plan
+            // mirror still needs `set_mode` first), stdio MCP forwarding,
+            // `session/fork`, `authenticate` and a completed prompt give the
+            // client and the backend the same frames as 0.78.0, apart from the
+            // version and each turn's `turnMs`. What moved is how a failed turn
+            // ends. A `turn.failed` whose cause is `model_request_failed`,
+            // `invalid_model_request` or `provider_not_configured` is now resent
+            // even when the backend marks it non-retryable, where 0.78.0
+            // rejected the prompt at once with -32603 "ZCode turn failed: …".
+            // And once the bridge has sent a prompt six times over about 15
+            // seconds, with a "[Network error, retrying (n/5)…]" text before
+            // each of the five resends, it answers `end_turn` after a "[Request
+            // failed: …. The session is still usable — please resend.]" text,
+            // where 0.78.0 rejected the prompt with -32603. A
+            // failure the bridge does not retry, such as an exceeded context
+            // window, still rejects the prompt at once. codeg treats neither
+            // ending specially: the error or the text shows in the turn. The
+            // rest runs only in the remote endpoint or the hub: a remote close
+            // (or, from 0.79.1, the hub's shutdown route) now records the
+            // conversation in `~/.zcode/v2/acp-closed-sessions.json`, which only
+            // a `session/load` whose `_meta.zcode.intent` is `"auto"` consults,
+            // and codeg sends no intent.
             distribution: AgentDistribution::Npx {
-                version: "0.78.0",
-                package: "zcode-acp-server@0.78.0",
+                version: "0.79.1",
+                package: "zcode-acp-server@0.79.1",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -5887,8 +5930,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // acceptEdits/auto/dontAsk/yolo, `yolo` being the one labelled
             // "Bypass Permissions" (`bypassPermissions` is accepted as an alias
             // for it, `plan` is rejected) — re-read live on 1.1.64, 1.1.65,
-            // 1.1.67, 1.1.71, 1.1.72, 1.1.73, 1.1.74 and 1.1.75, and nothing in
-            // codeg names them.
+            // 1.1.67, 1.1.71, 1.1.72, 1.1.73, 1.1.74, 1.1.75 and 1.1.81, and
+            // nothing in codeg names them.
             // Session logs land as
             // `$QODER_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`
             // (default `~/.qoder/...`) in the Claude-Code-style chunk-log
@@ -6007,16 +6050,45 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // A stdio MCP server sent in `session/new` still starts with the
             // session.
             //
-            // Held at 1.1.75. The bundle's ACP agent is a rewrite from 1.1.76,
-            // and in 1.1.80 Bypass Permissions cannot be selected:
-            // `session/set_mode` and the `mode` config option answer -32603
-            // "unknown permission_mode: yolo" and the session keeps its
-            // previous mode, so a saved Bypass Permissions preference does not
-            // apply either. `setSessionMode` maps the `bypassPermissions` alias
-            // to `yolo` before it checks the advertised modes, then hands `yolo`
-            // to a permission manager that accepts only `bypassPermissions`; no
-            // value codeg could send passes both. Re-check this before moving
-            // the pin.
+            // 1.1.81 follows 1.1.76 to 1.1.80, which codeg skipped. It changes
+            // the two bundles and the version strings and adds
+            // `bundle/codemode-worker.mjs`; `postinstall.cjs`, the npm
+            // dispatcher, qoder-security 0.9.5 and the macOS and linux-x64
+            // ripgrep binaries are byte-identical (linux-arm64's is now a
+            // static musl build, and the Windows `rg.exe` differs only in its
+            // signature), and `engines.node` is unchanged. The bundle's ACP
+            // agent is a rewrite from 1.1.76. From 1.1.76 to 1.1.80 Bypass
+            // Permissions could not be selected: `setSessionMode` mapped the
+            // `bypassPermissions` alias to `yolo` and handed that to a
+            // permission manager that accepts only `bypassPermissions`, so
+            // `session/set_mode` and the `mode` config option answered -32603
+            // "unknown permission_mode: yolo". 1.1.81 maps it back first, and
+            // live both switch to `yolo` again and a Write under it asks
+            // nothing. Against 1.1.75 under `--fake-responses`, 1.1.81 gives
+            // the same answers, update streams, `AskUserQuestion` forms and
+            // answers, commands, load and resume replay, config-dir cases and
+            // token gate, and `parsers::qoder` shows its sessions, sub-agents
+            // included, as it shows 1.1.75's, except that a fork now takes its
+            // source's title. Its new Code Mode stays off unless
+            // `QODER_ENABLE_CODE_MODE` is set or Qoder's config service turns
+            // on `code_mode`.
+            //
+            // Three changes matter to codeg. The turn Qoder runs by itself when
+            // a background sub-agent finishes after the prompt that launched it
+            // has been answered is no longer streamed. 1.1.75 sends that turn's
+            // reply; 1.1.80 and 1.1.81 run it and record it in the transcript
+            // without sending codeg a frame (the rewrite dropped the agent's
+            // task-notification turns), so the reply shows only once the
+            // conversation is reopened. Only Claude Code's out-of-turn activity
+            // is followed through its transcript (`acp::background_watch`);
+            // re-check this on the next bump. 1.1.81 also waits only 5 seconds
+            // for MCP servers before it answers `session/new`, where 1.1.75
+            // waits 30 (`QODERCLI_MCP_INIT_BUDGET_MS` sets it): a server that
+            // takes longer comes up later in the session, and a call to its
+            // tools before then fails as not found. And it leaves a tool call
+            // open when a Stop cancels the call's permission request, which
+            // codeg then closes itself (`stopped_call_reports` in
+            // `acp::connection`).
             //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
@@ -6037,17 +6109,17 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // prefix (`Sr(A) = `${vv}${A}``, `ebA = Sr("EXPOSE_TOKEN_USAGE")`
             // in 1.1.54, `yr` / `CRA` in 1.1.67, `Dr` / `qMA` in 1.1.71, `yr` /
             // `VMA` in 1.1.72, `Or` / `m1A` in 1.1.73, `Or` / `_1A` in 1.1.74,
-            // `Lr` / `xGA` in 1.1.75; the minified names change every build), so
-            // grepping the bundle for the full literal returns nothing — grep the
-            // bare suffix instead, the same trap `parsers::qoder` documents for
-            // the config-dir vars.
+            // `Lr` / `xGA` in 1.1.75, `xr` / `K4A` in 1.1.81; the minified
+            // names change every build), so grepping the bundle for the full
+            // literal returns nothing — grep the bare suffix instead, the same
+            // trap `parsers::qoder` documents for the config-dir vars.
             //
             // Registry env is only the base: `merge_agent_env` lets a per-agent
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.75",
-                package: "@qoder-ai/qodercli@1.1.75",
+                version: "1.1.81",
+                package: "@qoder-ai/qodercli@1.1.81",
                 cmd: "qoder",
                 args: &["--acp"],
                 env: &[("QODER_EXPOSE_TOKEN_USAGE", "1")],
@@ -6202,8 +6274,40 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // read-only folder, and a run with `run_workflow` disabled through
             // `_meta.antigravity.disabledTools` did not write it). The Windows
             // x86_64 server is still the PyInstaller onefile with Python 3.14.
+            //
+            // 1.4.4, checked against 1.4.3: every archive is still flat with the
+            // same two executables and modes, the Windows server is still the
+            // PyInstaller onefile with Python 3.14 on both architectures, and
+            // the macOS arm64 harness's strings differ only in build stamps. Of
+            // the server's own Python only `server.py`, `tools.py`,
+            // `model_selection.py`, `client_info.py` and the version string
+            // changed. `main.py`, `config_options.py`, `paths.py`, `settings.py`,
+            // `oauth/`, `hooks.py`, the MCP and gateway modules and the vendored
+            // ACP SDK are byte-identical, `server.py::_ask_user_handler` is
+            // unchanged, and so are all 264 protobuf descriptors. `initialize`
+            // (`protocolVersion: 1`) adds only `additionalDirectories` to
+            // `sessionCapabilities`, which codeg never sends. `session/new` with
+            // its `model`, `thinking_level` and `mode` values and flat `models`
+            // list (API key, gateway and Agent Platform), the slash commands, a
+            // model then thinking-level switch, a saved 1.3.0 variant id, a
+            // gateway turn that calls a tool on a wire MCP server (asked and
+            // auto-approved), `session/load` replay and the native question
+            // frames with their Step 154 records (answered and cancelled) all
+            // answer as 1.4.3 does. What moved is file access. The harness's
+            // own `view_file` replaces the server's: its live call reports
+            // `file_path` and zero-based `start_line`/`end_line`, and history
+            // stores a `view_file` step rather than an `agency_tool_call`.
+            // `client_view_file` now asks `fs/read_text_file` for the whole file,
+            // with no `line` or `limit`, and slices out the lines itself, so
+            // codeg lets Antigravity's reads return up to the 16 MiB a file may
+            // have rather than 2 MiB (`read_response_limit` in
+            // `acp::file_system_runtime`). Lines read that way from a
+            // 16,480,000-byte file reached the model. And `client_create_file`
+            // and `client_edit_file` refuse content that looks like
+            // `view_file`'s numbered output, without sending
+            // `fs/write_text_file`, though the call still ends `completed`.
             distribution: AgentDistribution::Binary {
-                version: "1.4.3",
+                version: "1.4.4",
                 // Never resolvable on PATH (there is no standalone CLI by
                 // this name); it exists because `Binary` requires one, and
                 // for dir-tree agents `installed_binary_path` ignores it in
@@ -6220,32 +6324,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.4-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.4-darwin-x86_64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.4-linux-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.4-linux-x86_64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.3-windows-arm64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.4-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.3-windows-x86_64.zip",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.4-windows-x86_64.zip",
                         sha256: None,
                     },
                 ],
@@ -6489,9 +6593,31 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // characters. Below the budget, images codeg attaches reach the
             // model unchanged. Sub-agents now also run the user's own tool
             // hooks, which codeg never configures.
+            //
+            // 1.88.2 fixes a crash at launch, and a fresh install of 1.88.1 no
+            // longer runs at all. The package ships no lockfile, so its
+            // dependencies resolve at install time, and
+            // `@opentelemetry/semantic-conventions` 1.44.0 (published
+            // 2026-10-28, inside 1.88.1's `^1.30.0`) is an ES module without a
+            // default export. 1.88.1 imports that package and three other
+            // OpenTelemetry packages by their default export, so a copy
+            // installed since then exits before it starts, `acp` included:
+            // "SyntaxError: The requested module
+            // '@opentelemetry/semantic-conventions' does not provide an export
+            // named 'default'". 1.88.2 imports the names it uses instead. With
+            // the minified names normalized, those imports and the version
+            // string are the only change in `dist/cli.mjs`, and `package.json`
+            // changes only its version. `initialize` and the signed-out
+            // `session/new` answer as 1.88.1 did apart from the version
+            // (`protocolVersion: 1`). Zero-cost turns (text, Shell behind a
+            // permission, Read and Edit, a question, MCP calls), the
+            // `session/load` replay and the model and effort selections match
+            // 1.88.1 frame for frame, still without an `fs/*` or `terminal/*`
+            // request. So do the modes, the `effort` values, the MCP sources,
+            // the skill roots and the session store.
             distribution: AgentDistribution::Npx {
-                version: "1.88.1",
-                package: "command-code@1.88.1",
+                version: "1.88.2",
+                package: "command-code@1.88.2",
                 cmd: "command-code",
                 args: &["acp"],
                 env: &[],
@@ -6602,7 +6728,7 @@ mod tests {
                 dir_entry,
                 ..
             } => {
-                assert_eq!(version, "1.4.3");
+                assert_eq!(version, "1.4.4");
                 assert_eq!(cmd, "agy_acp_server");
                 let entry = dir_entry.expect("antigravity must use dir-tree extraction");
                 assert_eq!(entry.unix, "agy_acp_server.par");
@@ -6612,7 +6738,7 @@ mod tests {
                 assert!(platforms.iter().any(|p| p.platform == "darwin-x86_64"));
                 for platform in platforms {
                     assert!(
-                        platform.url.contains("/agy-acp-server-1.4.3-"),
+                        platform.url.contains("/agy-acp-server-1.4.4-"),
                         "{} URL lost the release name: {}",
                         platform.platform,
                         platform.url
@@ -7079,14 +7205,14 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.75",
-            "@qoder-ai/qodercli@1.1.75",
+            "1.1.81",
+            "@qoder-ai/qodercli@1.1.81",
             Some("20.0.0"),
         );
         assert_npx_version(
             AgentType::CommandCode,
-            "1.88.1",
-            "command-code@1.88.1",
+            "1.88.2",
+            "command-code@1.88.2",
             Some("22.0.0"),
         );
         assert_binary_version(AgentType::OpenCode, "2.2.0", "/releases/download/v2.2.0/");

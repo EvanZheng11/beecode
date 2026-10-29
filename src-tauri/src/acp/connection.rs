@@ -3392,6 +3392,25 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     fn waiting_len(&self) -> usize {
         self.waiting.len()
     }
+
+    /// The tool calls the parked cards ask about: the one on screen first,
+    /// then the waiting ones in order, each once. A card that names no tool
+    /// call adds nothing.
+    fn parked_tool_call_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for request_id in self
+            .showing
+            .iter()
+            .chain(self.waiting.iter().map(|card| &card.request_id))
+        {
+            if let Some(parked) = self.responders.get(request_id) {
+                if !parked.tool_call_id.is_empty() && !ids.contains(&parked.tool_call_id) {
+                    ids.push(parked.tool_call_id.clone());
+                }
+            }
+        }
+        ids
+    }
 }
 
 /// Shared per-connection permission state (responders + display queue).
@@ -3756,11 +3775,75 @@ async fn drain_permissions_then_emit(
     emit_with_state(state, emitter, follow_up).await;
 }
 
-/// Shared body of the two drains above. Emits the compensating
+/// What Qoder records as the result of a tool call whose permission request a
+/// Stop cancelled. It is the result 1.1.81 writes into its transcript, and the
+/// text 1.1.75 also sent on the call's closing `tool_call_update`.
+const QODER_STOPPED_CALL_RESULT: &str = "The user doesn't want to proceed with this tool \
+    use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written \
+    to the file). Do not repeat this call; take a different approach, or if you cannot proceed \
+    without it, tell the user what you were trying to do and why you need it.";
+
+/// The closing reports codeg sends itself, on a Stop, for the tool calls
+/// whose permission requests the Stop answers `cancelled`.
+///
+/// Such a call never runs. An agent normally closes it in its last frames for
+/// the turn, and those settle the call's card after the turn has ended (the
+/// frontend's `ConnectionState.cancelledTurn`). Qoder stopped doing so with the
+/// rewrite of its ACP agent in 1.1.76: through 1.1.81 it answers the cancelled
+/// prompt without another word about the call, so its card would show it
+/// running until the conversation is reloaded. 1.1.75 closed the call `failed`
+/// with the result its transcript still records, which codeg sends in its
+/// place. Empty for every other agent.
+fn stopped_call_reports<R: PermissionResponder>(
+    agent_type: AgentType,
+    queue: &PermissionQueue<R>,
+) -> Vec<AcpEvent> {
+    if agent_type != AgentType::Qoder {
+        return Vec::new();
+    }
+    queue
+        .parked_tool_call_ids()
+        .into_iter()
+        .map(|tool_call_id| AcpEvent::ToolCallUpdate {
+            tool_call_id,
+            title: None,
+            status: Some("failed".to_string()),
+            content: Some(QODER_STOPPED_CALL_RESULT.to_string()),
+            raw_input: None,
+            raw_output: Some(QODER_STOPPED_CALL_RESULT.to_string()),
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        })
+        .collect()
+}
+
+/// [`drain_permissions_then_emit`] for a Stop. The drain's `cancelled` answers
+/// are followed by the closing reports codeg sends for the calls those requests
+/// gated ([`stopped_call_reports`]), all before `follow_up`, which ends the
+/// turn, and in the same critical section.
+async fn drain_permissions_on_stop_then_emit<R: PermissionResponder>(
+    perms: &tokio::sync::Mutex<PermissionQueue<R>>,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    follow_up: AcpEvent,
+) {
+    let mut queue = perms.lock().await;
+    let closings = stopped_call_reports(agent_type, &queue);
+    drain_permissions_locked(&mut queue, state, emitter).await;
+    for closing in closings {
+        emit_with_state(state, emitter, closing).await;
+    }
+    emit_with_state(state, emitter, follow_up).await;
+}
+
+/// Shared body of the drains above. Emits the compensating
 /// `PermissionResolved` for whatever was on screen; queued cards were never
 /// published, so they need none.
-async fn drain_permissions_locked(
-    queue: &mut PermissionQueue,
+async fn drain_permissions_locked<R: PermissionResponder>(
+    queue: &mut PermissionQueue<R>,
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
 ) {
@@ -6802,7 +6885,8 @@ fn build_client_capabilities(
     // it denies `AskUserQuestion` for the session, so the model never gets the
     // tool. Verified on the real 1.1.67 wire, MCP tool-call approvals staying
     // on `session/request_permission`; the same form and answer handling ship
-    // in every release from 1.1.23 through 1.1.75, which matters because codeg
+    // in every release from 1.1.23 through 1.1.75, and 1.1.81 sends the same
+    // forms and takes the same answers live, which matters because codeg
     // launches a `qoder` found on PATH ahead of the pinned package). OpenCode 2
     // asks its native `question` tool's questions ONLY as a form
     // (`packages/cli/src/acp/elicitation.ts`, 2.2.0): `q<n>` select fields
@@ -7494,10 +7578,10 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     //
     // Command Code joins it for the same reason: `command-code acp` loads
     // `~/.commandcode/mcp.json` and starts what `session/new` carries as well
-    // (verified against 1.84.0, 1.86.3, 1.88.0 and 1.88.1, a server from each
-    // source in one session's tool list), and a name on both sides keeps the
-    // file's copy, as its docs say and 1.88.0 and 1.88.1 showed live. codeg's
-    // MCP settings UI manages that file.
+    // (verified against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and 1.88.2, a server
+    // from each source in one session's tool list), and a name on both sides
+    // keeps the file's copy, as its docs say and 1.88.0, 1.88.1 and 1.88.2
+    // showed live. codeg's MCP settings UI manages that file.
     //
     // OpenCode joins it: 2.x loads `mcp.servers` from its own config, which
     // codeg's MCP settings UI manages, and turns each server `session/new`
@@ -11797,7 +11881,7 @@ async fn set_session_config_option_inner(
 ) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
     // Of the two ACP mode requests, only session/set_mode refreshes the
     // bridge's plan-enabled mirror; set_config_option("mode") keeps reporting
-    // "plan" while that mirror is set (bridge 0.69.2 through 0.78.0). Send
+    // "plan" while that mirror is set (bridge 0.69.2 through 0.79.1). Send
     // set_mode first for mode changes, then read the config response; the
     // initial-mode gate still requires an exact confirmation before prompt.
     if agent_type == AgentType::ZCode && config_id == "mode" {
@@ -15320,11 +15404,15 @@ async fn run_conversation_loop(
                                     // the turn-end exits: a request admitted
                                     // between the two would be published and then
                                     // silently un-displayed by TurnComplete,
-                                    // wedging the queue.
-                                    drain_permissions_then_emit(
+                                    // wedging the queue. The calls those
+                                    // permission requests gated are closed
+                                    // here for an agent that leaves them open
+                                    // (see `stopped_call_reports`).
+                                    drain_permissions_on_stop_then_emit(
                                         perms,
                                         state,
                                         emitter,
+                                        agent_type,
                                         AcpEvent::TurnComplete {
                                             session_id: sid.0.to_string(),
                                             stop_reason: "cancelled".into(),
@@ -20050,12 +20138,13 @@ fn grok_meta_marks_ask_user(
 /// answered card the bridge recorded, and so must be dropped. Consumes the
 /// record.
 ///
-/// Measured against antigravity-acp 1.4.1 and 1.4.3: each question opens a
-/// `tool_call` (`interaction_<hex>`, titled with the question, `rawInput: {}`,
-/// `pending`), is asked through `session/request_permission` under the same id,
-/// and is closed by a `tool_call_update` carrying only `status` and a fixed
-/// `rawOutput` ("Response received" / "Interaction cancelled"). The server
-/// emits no frame for the model's `ask_question` call itself.
+/// Measured against antigravity-acp 1.4.1, 1.4.3 and 1.4.4: each question opens
+/// a `tool_call` (`interaction_<hex>`, titled with the question,
+/// `rawInput: {}`, `pending`), is asked through `session/request_permission`
+/// under the same id, and is closed by a `tool_call_update` carrying only
+/// `status` and a fixed `rawOutput` ("Response received" / "Interaction
+/// cancelled"). The server emits no frame for the model's `ask_question` call
+/// itself.
 ///
 /// The opening frame is kept: it is the row the answered card lands on, and the
 /// row an approval card's answer settles. The closing frame is dropped only
@@ -25610,6 +25699,171 @@ mod tests {
             log.lock().unwrap().clone(),
             vec![("a".to_string(), StubSettled::Cancelled)]
         );
+    }
+
+    /// Admit `request_id`, a card asking about `tool_call`.
+    fn admit_stub_about(
+        queue: &mut PermissionQueue<StubResponder>,
+        log: &StubLog,
+        request_id: &str,
+        tool_call: serde_json::Value,
+    ) {
+        queue.admit(
+            StubResponder {
+                request_id: request_id.to_string(),
+                log: Arc::clone(log),
+                withdrawn: Default::default(),
+            },
+            QueuedPermission {
+                request_id: request_id.to_string(),
+                tool_call,
+                options: vec![],
+            },
+        );
+    }
+
+    #[test]
+    fn permission_queue_lists_the_tool_calls_its_cards_ask_about() {
+        let (mut q, log) = stub_queue();
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r1",
+            serde_json::json!({"toolCallId": "call-b"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r2",
+            serde_json::json!({"toolCallId": "call-a"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r3",
+            serde_json::json!({"toolCallId": "call-b"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r4",
+            serde_json::json!({"title": "names no call"}),
+        );
+        assert_eq!(
+            q.parked_tool_call_ids(),
+            ["call-b", "call-a"],
+            "the card on screen first, then the queue, each call once"
+        );
+        q.drain();
+        assert!(q.parked_tool_call_ids().is_empty());
+    }
+
+    /// What a Stop's drain emits for `agent_type` with two cards parked, one on
+    /// screen and one waiting, and how their requests were answered.
+    async fn events_of_a_stop(agent_type: AgentType) -> (Vec<String>, Vec<(String, StubSettled)>) {
+        let (mut q, log) = stub_queue();
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r1",
+            serde_json::json!({"toolCallId": "call-1"}),
+        );
+        admit_stub_about(
+            &mut q,
+            &log,
+            "r2",
+            serde_json::json!({"toolCallId": "call-2"}),
+        );
+        let perms = tokio::sync::Mutex::new(q);
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "conn-stop".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        )));
+        let mut events = state.read().await.event_stream().subscribe();
+        drain_permissions_on_stop_then_emit(
+            &perms,
+            &state,
+            &EventEmitter::Noop,
+            agent_type,
+            AcpEvent::TurnComplete {
+                session_id: "s1".to_string(),
+                stop_reason: "cancelled".to_string(),
+                agent_type: agent_type.to_string(),
+            },
+        )
+        .await;
+        let mut seen = Vec::new();
+        while let Ok(envelope) = events.try_recv() {
+            seen.push(match &envelope.payload {
+                AcpEvent::PermissionResolved {
+                    request_id,
+                    option_id,
+                    ..
+                } => format!("resolved {request_id} {option_id:?}"),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    status,
+                    content,
+                    raw_output,
+                    ..
+                } => {
+                    assert_eq!(content.as_deref(), Some(QODER_STOPPED_CALL_RESULT));
+                    assert_eq!(raw_output.as_deref(), Some(QODER_STOPPED_CALL_RESULT));
+                    format!("closed {tool_call_id} {}", status.as_deref().unwrap_or("-"))
+                }
+                AcpEvent::TurnComplete { stop_reason, .. } => format!("turn {stop_reason}"),
+                other => format!("{other:?}"),
+            });
+        }
+        let mut settled = log.lock().unwrap().clone();
+        settled.sort();
+        (seen, settled)
+    }
+
+    /// Qoder (1.1.76 through 1.1.81) never closes a tool call whose permission
+    /// request a Stop cancelled, so codeg closes it, as 1.1.75 did, ahead of
+    /// the turn's end, where the card still takes it.
+    #[tokio::test]
+    async fn a_stop_closes_the_qoder_calls_its_cancelled_permissions_gated() {
+        let (events, settled) = events_of_a_stop(AgentType::Qoder).await;
+        assert_eq!(
+            events,
+            [
+                "resolved r1 None",
+                "closed call-1 failed",
+                "closed call-2 failed",
+                "turn cancelled",
+            ]
+        );
+        assert_eq!(
+            settled,
+            [
+                ("r1".to_string(), StubSettled::Cancelled),
+                ("r2".to_string(), StubSettled::Cancelled),
+            ]
+        );
+    }
+
+    /// Every other agent closes those calls itself, after the turn has ended, so
+    /// codeg sends nothing in their place.
+    #[tokio::test]
+    async fn a_stop_leaves_other_agents_to_close_their_own_calls() {
+        for agent_type in [
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::CodeBuddy,
+        ] {
+            let (events, settled) = events_of_a_stop(agent_type).await;
+            assert_eq!(
+                events,
+                ["resolved r1 None", "turn cancelled"],
+                "{agent_type:?}"
+            );
+            assert_eq!(settled.len(), 2, "{agent_type:?}");
+        }
     }
 
     #[test]
@@ -43516,11 +43770,25 @@ mod tests {
         )
     }
 
+    /// The method of a scripted frame sent as a request rather than a
+    /// notification: the agent asks for permission and waits, off the handler,
+    /// for an answer it then ignores.
+    const PERMISSION_REQUEST_FRAME: &str = "session/request_permission";
+
     fn send_grok_frames(
         cx: &ConnectionTo<Client>,
         frames: &[GrokFrame],
     ) -> Result<(), agent_client_protocol::Error> {
         for (method, params) in frames {
+            if *method == PERMISSION_REQUEST_FRAME {
+                let request: RequestPermissionRequest = serde_json::from_value(params.clone())
+                    .map_err(agent_client_protocol::Error::into_internal_error)?;
+                let answer = cx.send_request_to(Client, request);
+                tokio::spawn(async move {
+                    let _ = answer.block_task().await;
+                });
+                continue;
+            }
             cx.send_notification(UntypedMessage::new(method, params.clone())?)?;
         }
         Ok(())
@@ -46236,9 +46504,34 @@ mod tests {
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
+            // One queue for the loop and for the permission requests the agent
+            // sends (`PERMISSION_REQUEST_FRAME`), which the production handler
+            // parks there.
+            let perms = PendingPermissions::default();
+            let loop_perms = Arc::clone(&perms);
+            let permission_state = Arc::clone(&state);
             let client = tokio::spawn(async move {
                 let _ = Client
                     .builder()
+                    .on_receive_request(
+                        async move |req: RequestPermissionRequest,
+                                    responder: Responder<RequestPermissionResponse>,
+                                    cx: ConnectionTo<Agent>| {
+                            handle_permission_request(
+                                &cx,
+                                &permission_state,
+                                &EventEmitter::Noop,
+                                &perms,
+                                "/tmp",
+                                agent_type,
+                                req,
+                                responder,
+                            )
+                            .await;
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
                     .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
                         let raw = cx
                             .send_request_to(
@@ -46250,7 +46543,7 @@ mod tests {
                         let response: NewSessionResponse = serde_json::from_value(raw)
                             .map_err(agent_client_protocol::Error::into_internal_error)?;
                         let mut session = AgentSession::attach(&cx, response)?;
-                        let perms = PendingPermissions::default();
+                        let perms = loop_perms;
                         let ledger = background_watch::PromptLedger::shared();
                         let stderr_tail = Arc::new(StderrTail::new());
                         run_conversation_loop(
@@ -46574,6 +46867,96 @@ mod tests {
             assert!(raw.entries.iter().rev().find(|e| e.k==crate::acp_transcript::EntryKind::TurnEnd).unwrap().p.get("usage").is_none());
             lp.shutdown().await;
         }).await;
+    }
+
+    /// A Stop while a permission request is pending, run the way codeg runs it:
+    /// `session/cancel`, the request answered `cancelled`, the turn ended at
+    /// once. Qoder (1.1.76 through 1.1.81) never closes the call that request
+    /// gated, so codeg closes it ahead of the turn's end, where its card still
+    /// takes the report; another agent's call is left open for the agent's own
+    /// closing report.
+    #[tokio::test]
+    async fn a_stop_with_a_permission_pending_closes_a_qoder_call_before_the_turn_ends() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy().into_owned();
+        temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+            let custom = AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id");
+            for (agent_type, closed_by_codeg) in [(AgentType::Qoder, true), (custom, false)] {
+                let mut lp = CustomLoop::start_for(
+                    agent_type,
+                    vec![vec![
+                        custom_update(serde_json::json!({
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": "call-w",
+                            "title": "Write X.md",
+                            "kind": "edit",
+                            "status": "pending",
+                            "rawInput": {"file_path": "/tmp/X.md", "content": "x\n"},
+                        })),
+                        (
+                            PERMISSION_REQUEST_FRAME,
+                            serde_json::json!({
+                                "sessionId": "s1",
+                                "toolCall": {"toolCallId": "call-w"},
+                                "options": [
+                                    {"optionId": "proceed_once", "name": "Allow", "kind": "allow_once"},
+                                    {"optionId": "cancel", "name": "Reject", "kind": "reject_once"},
+                                ],
+                            }),
+                        ),
+                    ]],
+                )
+                .await;
+                lp.state.write().await.turn_in_flight = true;
+                lp.cmd_tx
+                    .send(ConnectionCommand::Prompt {
+                        blocks: vec![PromptInputBlock::Text {
+                            text: "write X.md".into(),
+                        }],
+                        user_message: None,
+                        internal_suffix: Vec::new(),
+                    })
+                    .await
+                    .expect("the loop is running");
+                lp.until("the permission card", |e| {
+                    matches!(e, AcpEvent::PermissionRequest { .. })
+                })
+                .await;
+                lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+                let end = lp
+                    .until("the stopped turn's end", |e| {
+                        matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+                    })
+                    .await;
+                let closings: Vec<_> = lp.seen[..end]
+                    .iter()
+                    .filter_map(|e| match e {
+                        AcpEvent::ToolCallUpdate {
+                            tool_call_id,
+                            status,
+                            content,
+                            ..
+                        } if tool_call_id == "call-w" => Some((status.clone(), content.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                if closed_by_codeg {
+                    assert_eq!(
+                        closings,
+                        [(
+                            Some("failed".to_string()),
+                            Some(QODER_STOPPED_CALL_RESULT.to_string())
+                        )],
+                        "{agent_type:?}"
+                    );
+                } else {
+                    assert!(closings.is_empty(), "{agent_type:?}: {closings:?}");
+                }
+                lp.respond.notify_one();
+                lp.shutdown().await;
+            }
+        })
+        .await;
     }
 
     /// A local cancel lets go of the prompt without waiting for the agent, so
