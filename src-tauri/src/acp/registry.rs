@@ -4097,9 +4097,74 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // gets the same tool-call fallback as on 2.3.0. #669 (batch
             // session lookup) and #689 (a faster session list) shape
             // `session/list`, which codeg does not send.
+            //
+            // 2.5.0 keeps `@openai/codex` at ^0.165.0 (a fresh install
+            // resolves the same 0.165.0 binary, so the offline catalog
+            // snapshot stands) and moves `@agentclientprotocol/sdk`, which
+            // the bundle carries inline, ~2.0.2 → ~2.1.0. `engines` is still
+            // absent, and the 20.3.0 floor stands: the new code reaches for
+            // no Node API newer than 16.9, and live on 20.3.0 a session runs
+            // a plain, a shell, a steered and a predicted turn. Under codeg's
+            // exact `clientCapabilities` the 33-scenario harness replays byte
+            // for byte as on 2.4.0, and so does `initialize` (bar the
+            // version). Live against a scripted Responses server, 2.5.0
+            // matches 2.4.0 frame for frame (plain, shell and citing turns;
+            // steers while a turn streams, while idle, before the turn starts,
+            // under an approval and under a plan review; a replayed load),
+            // bar the frames of (uu).
+            //
+            // (uu) **#703 predicts the user's next prompt** after a turn that
+            // ends normally, for an AIR client, as `session_info_update
+            // ._meta.promptSuggestions = {suggestions: [{text}]}`. That is
+            // claude-agent-acp's key and shape, so `prompt_suggestion_update`
+            // already reads it and the composer offers it. Codex predicts
+            // nothing itself: the adapter makes one more model call per turn,
+            // an ephemeral thread on the title model `gpt-5.6-luna` with a
+            // JSON output schema, fed the turn's prompt text and its last
+            // final answer (each cut at 4000 UTF-16 units). Measured: the
+            // offer lands one model call after the prompt response, and the
+            // next prompt sends `suggestions: []` before its turn starts. A
+            // prediction still in flight when the next prompt starts is
+            // dropped, never sent late. A cancelled turn predicts nothing, an
+            // empty prediction sends nothing, and `session/load` replays
+            // none. The ephemeral thread leaves no rollout and no `threads`
+            // row. On a provider without the title model the call fails once
+            // (no retry, even with default retry settings) and nothing
+            // reaches the session; the title generator has made the same
+            // failing call once per session since 1.8.0, and this one makes
+            // it once per turn. `CODEX_ACP_PROMPT_SUGGESTIONS=false` turns it
+            // off, with no request at all. codeg sets it for the connections
+            // nobody types into
+            // (`connection::apply_codex_prompt_suggestion_policy`), which is
+            // also why a Claude session of theirs asks for none.
+            //
+            // (vv) #704 aligns errors with the protocol text of SDK 2.1. A
+            // request naming a session the adapter does not hold
+            // (`session/prompt`, `set_config_option`, `set_mode`,
+            // `_session/steering`) answers -32002 with `data.sessionId`,
+            // where 2.4.0 answered -32603 "Session <id> not found" (and a
+            // steer `{outcome: "failed"}`). codeg reads -32002 on a prompt as
+            // the end of the connection's session
+            // (`prompt_rejection_is_terminal`), which is what it means, and
+            // codeg only ever prompts the session it opened. `session/load`
+            // and `session/resume` of an unknown thread still answer -32603
+            // "no rollout found", so `classify_session_load_failure` sees no
+            // change. The rest reaches nothing codeg sends: an `audio` block
+            // is refused -32602 before any of the prompt is inserted (codex
+            // advertises no audio, and codeg sends none), an SSE or ACP MCP
+            // server -32602 instead of -32600 (codex advertises HTTP only,
+            // and codeg filters on that), and an unknown authentication
+            // method -32602 instead of -32600 (codeg never authenticates
+            // codex). The SDK's v1 schema changes reach nothing codeg sends
+            // either: a `null` list now reads as empty, and an integer field
+            // (a request id, a token count, a resource link's `size`) takes
+            // any 64-bit integer but no longer a fraction. codeg's request ids
+            // are integers, and its resource links carry no `size`. The v2
+            // command discriminator and initialize rules do not apply to
+            // codeg's v1 connection.
             distribution: AgentDistribution::Npx {
-                version: "2.4.0",
-                package: "@agentclientprotocol/codex-acp@2.4.0",
+                version: "2.5.0",
+                package: "@agentclientprotocol/codex-acp@2.5.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -7186,8 +7251,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.4.0",
-            "@agentclientprotocol/codex-acp@2.4.0",
+            "2.5.0",
+            "@agentclientprotocol/codex-acp@2.5.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

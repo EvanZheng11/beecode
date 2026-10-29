@@ -1139,6 +1139,42 @@ fn apply_codex_env_policy(
     }
 }
 
+/// codex-acp's switch for its predicted follow-up prompt (2.5.0, #703): the
+/// adapter predicts unless it reads `false` here.
+const CODEX_PROMPT_SUGGESTIONS_ENV: &str = "CODEX_ACP_PROMPT_SUGGESTIONS";
+
+/// Codex-only: turn codex-acp's predicted follow-up prompt off for a
+/// connection nobody types into. `prompt_suggestions` is
+/// `SessionState.wants_prompt_suggestions`.
+///
+/// codex-acp 2.5.0 (#703) predicts the user's next prompt after every turn
+/// that ends normally, for AIR clients such as codeg. Each prediction is one
+/// more model call: an ephemeral thread on the title model (`gpt-5.6-luna`)
+/// that reads the turn's prompt and final answer. codeg offers it in the empty
+/// composer (`AcpEvent::PromptSuggestion`). An automation run, a chat-channel
+/// bot, a `codeg-cli` run and a one-shot generation have no composer, so a
+/// Claude session of theirs asks for no prediction
+/// ([`claude_raw_sdk_session_meta`]). codex-acp has no per-session switch,
+/// only this variable, so it is set for their whole process. It is forced
+/// after the user's environment, like `DISABLE_MCP_CONFIG_FILTERING`, so a
+/// user's `true` cannot bring back a call whose answer nothing shows. A
+/// connection that composes leaves the variable as the user set it, and a
+/// user's `false` keeps the prediction off everywhere.
+fn apply_codex_prompt_suggestion_policy(
+    agent_type: AgentType,
+    merged: &mut Vec<(String, String)>,
+    prompt_suggestions: bool,
+) {
+    if agent_type != AgentType::Codex || prompt_suggestions {
+        return;
+    }
+    merged.retain(|(k, _)| k != CODEX_PROMPT_SUGGESTIONS_ENV);
+    merged.push((
+        CODEX_PROMPT_SUGGESTIONS_ENV.to_string(),
+        "false".to_string(),
+    ));
+}
+
 /// Prepend `dir` to the PATH entry of `env`, seeding from `fallback_path` when
 /// `env` has no PATH key of its own. Removes any pre-existing PATH key first
 /// (case-insensitively when `windows`, since Windows env keys are
@@ -2106,6 +2142,7 @@ async fn build_agent(
     cwd: &Path,
     stderr_tail: &Arc<StderrTail>,
     scratch: Option<&Path>,
+    prompt_suggestions: bool,
 ) -> Result<(AcpAgent, crate::acp::reported_usage::PromptUsageMode), AcpError> {
     // A conversation can outlive the custom-agent definition it was started
     // with (the user deleted it in settings). `get_agent_meta` cannot report
@@ -2187,6 +2224,7 @@ async fn build_agent(
                 codex_initial_mode.as_deref(),
                 inherited_codex_config.as_deref(),
             );
+            apply_codex_prompt_suggestion_policy(agent_type, &mut merged_env, prompt_suggestions);
             // codex-acp 1.0.0 honors APP_SERVER_LOGS as a directory for its
             // adapter-side logs. Surface it only under CODEG_ACP_DEBUG so
             // default runs are unchanged; a directory-creation failure silently
@@ -2722,6 +2760,9 @@ pub async fn spawn_agent_connection(
         initial_state.pi_enabled_model_patterns =
             crate::commands::acp::pi_enabled_model_patterns_for_env(&runtime_env, &launch_cwd);
     }
+    // Fixed by the owner at creation; codex reads it from its launch
+    // environment (`apply_codex_prompt_suggestion_policy`).
+    let wants_prompt_suggestions = initial_state.wants_prompt_suggestions;
 
     let session_state = Arc::new(RwLock::new(initial_state));
 
@@ -2771,6 +2812,7 @@ pub async fn spawn_agent_connection(
         &launch_cwd,
         &stderr_tail,
         scratch.as_ref().map(|s| s.path()),
+        wants_prompt_suggestions,
     )
     .await
     {
@@ -19085,10 +19127,15 @@ fn session_info_goal_value(
 /// after a turn as `_meta.promptSuggestions = {suggestions: [{text}]}`, to an
 /// AIR client only, and sends `suggestions: []` when the next prompt arrives
 /// (the prediction is spent) or a conversation reset drops the transcript it
-/// was drawn from. The first non-blank `text` is the one offered, as AIR offers
-/// it. The key names no vendor, but it is read only from the two adapters codeg
-/// declares AIR to ([`crate::acp::air_contract::speaks_air_contract`]), the
-/// only agents that send it.
+/// was drawn from. codex-acp 2.5.0 (#703) sends the same key under the same
+/// rules. Codex predicts nothing itself, so the adapter asks the title model
+/// on an ephemeral thread, and the answer lands about one model call after
+/// the turn's response. A prediction still in flight when the next prompt
+/// starts is dropped. The first non-blank `text` is the one offered, as AIR
+/// offers it. The key names no vendor, but it is read only from the two
+/// adapters codeg declares AIR to
+/// ([`crate::acp::air_contract::speaks_air_contract`]), the only agents that
+/// send it.
 fn prompt_suggestion_update(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -25206,10 +25253,10 @@ async fn emit_conversation_update(
                 crate::acp::session_title::accept_wire_title(state, emitter, agent_type, title)
                     .await;
             }
-            // claude-agent-acp 0.92.0's predicted follow-up prompt, offered in
-            // the empty composer. It arrives after the turn's response (Claude
-            // Code predicts once the turn has ended), and its clear at the
-            // start of the next prompt.
+            // The predicted follow-up prompt of claude-agent-acp 0.92.0 and
+            // codex-acp 2.5.0, offered in the empty composer. It arrives after
+            // the turn's response (both predict once the turn has ended), and
+            // its clear at the start of the next prompt.
             if let Some(text) = prompt_suggestion_update(agent_type, info.meta.as_ref()) {
                 emit_with_state(state, emitter, AcpEvent::PromptSuggestion { text }).await;
             }
@@ -30323,6 +30370,43 @@ mod tests {
                 vec![serde_json::json!({"thread_unload_delay_secs": 60})],
                 "{blank:?}"
             );
+        }
+    }
+
+    /// codex-acp 2.5.0 predicts the next prompt after every turn, one model
+    /// call each. A connection nobody types into turns that off for its
+    /// process; one that composes leaves the user's own setting alone.
+    #[test]
+    fn codex_prompt_suggestion_policy_turns_the_prediction_off_where_nobody_composes() {
+        let key = "CODEX_ACP_PROMPT_SUGGESTIONS";
+        let values = |env: &[(String, String)]| -> Vec<String> {
+            env.iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .collect()
+        };
+
+        // No composer: off, and a user's `true` is replaced, not duplicated.
+        let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut env, false);
+        assert_eq!(values(&env), ["false"]);
+        let mut user_on = vec![(key.to_string(), "true".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut user_on, false);
+        assert_eq!(values(&user_on), ["false"]);
+
+        // A composer: nothing added, and a user's `false` stands.
+        let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut env, true);
+        assert!(values(&env).is_empty());
+        let mut user_off = vec![(key.to_string(), "false".to_string())];
+        apply_codex_prompt_suggestion_policy(AgentType::Codex, &mut user_off, true);
+        assert_eq!(values(&user_off), ["false"]);
+
+        // Codex only: a Claude session asks for none through its `_meta`.
+        for agent in [AgentType::ClaudeCode, AgentType::Grok, AgentType::OpenCode] {
+            let mut env = Vec::new();
+            apply_codex_prompt_suggestion_policy(agent, &mut env, false);
+            assert!(env.is_empty(), "{agent:?}");
         }
     }
 
