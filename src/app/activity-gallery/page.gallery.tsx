@@ -815,6 +815,40 @@ const COMMANDS_LIVE_TURN: MessageTurn = {
   ],
 }
 
+/** A command group the reply has gone on past, with one of its commands moved
+ *  to the background and still running (codex's `asyncTasks.backgrounded`:
+ *  the call that launched it never settles). */
+const BACKGROUND_GROUP_TURN: MessageTurn = {
+  id: "turn-background-group",
+  role: "assistant",
+  timestamp: "2026-10-29T08:00:00Z",
+  blocks: [
+    toolUse("bg1", "Bash", {
+      command:
+        "cat package.json && cat app/page.tsx && cat app/globals.css && cat components/neon-demo.tsx",
+    }),
+    toolResult("bg1", '{\n  "name": "web",\n  "private": true\n}'),
+    toolUse(
+      "bg2",
+      "Bash",
+      { command: "git status --short && find .. -name AGENTS.md -print" },
+      { jetbrains: { air: { asyncTasks: { backgrounded: true } } } }
+    ),
+    toolResult(
+      "bg2",
+      [
+        "../codeg-task-423/AGENTS.md",
+        "../codeg-dev-0630/AGENTS.md",
+        "find: ../.Trashes: Operation not permitted",
+      ].join("\n")
+    ),
+    {
+      type: "thinking",
+      text: "**Considering design options**\n\nThe page needs a calmer palette.",
+    },
+  ],
+}
+
 /** Every Markdown block a reply carries, the wide ones wider than the column. */
 const MARKDOWN_TURN: MessageTurn = {
   id: "turn-markdown",
@@ -1269,6 +1303,13 @@ const SCENARIOS: Scenario[] = [
     turn: COMMANDS_LIVE_TURN,
     live: true,
     inProgress: ["k3"],
+  },
+  {
+    id: "background-group",
+    title: "A command moved to the background, the reply gone on past it",
+    turn: BACKGROUND_GROUP_TURN,
+    live: true,
+    inProgress: ["bg2"],
   },
   { id: "markdown", title: "Markdown", turn: MARKDOWN_TURN },
 ]
