@@ -775,15 +775,17 @@ describe("activity timeline: failures", () => {
     expect(within(row).getByText(/Type error/)).toBeTruthy()
   })
 
-  it("leaves the failure link and a text selection to themselves", () => {
+  it("leaves the failure link to itself, and folds with text selected elsewhere", () => {
     renderSettled(partsOf(FAILURE))
     fireEvent.click(screen.getByText("1 failed"))
     expect(foldControl()).toHaveAttribute("aria-expanded", "true")
+    // Nothing in the capsule can be selected, so a press on it leaves a
+    // selection made elsewhere as it was: that is no reason not to fold.
     vi.spyOn(window, "getSelection").mockReturnValue({
-      toString: () => "1 failed",
+      toString: () => "It does not build.",
     } as Selection)
     fireEvent.click(activityHeader().querySelector(".activity-mono")!)
-    expect(foldControl()).toHaveAttribute("aria-expanded", "true")
+    expect(foldControl()).toHaveAttribute("aria-expanded", "false")
   })
 
   it("brings the failure into view in a reply that cannot fold", () => {
