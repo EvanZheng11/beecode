@@ -2655,11 +2655,15 @@ export async function cloneRepository(
   targetDir: string,
   credentials?: GitCredentials | null
 ): Promise<void> {
-  return getTransport().call("clone_repository", {
-    url,
-    targetDir,
-    credentials: credentials ?? null,
-  })
+  return getTransport().call(
+    "clone_repository",
+    {
+      url,
+      targetDir,
+      credentials: credentials ?? null,
+    },
+    { timeoutMs: 600_000 }
+  )
 }
 
 export async function getGitBranch(path: string): Promise<string | null> {
