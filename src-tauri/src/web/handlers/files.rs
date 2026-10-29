@@ -1267,7 +1267,9 @@ mod tests {
         assert_eq!(first.size, 4);
         assert_eq!(first.mime_type.as_deref(), Some("application/zip"));
         assert_eq!(std::fs::read(&first.path).unwrap(), b"PK\x05\x06");
-        let bucket = root.path().join("tab-1").canonicalize().unwrap();
+        // The stored path drops Windows' verbatim prefix, so the expected
+        // parent drops it the same way.
+        let bucket = simplify_verbatim_path(&root.path().join("tab-1").canonicalize().unwrap());
         assert_eq!(
             std::path::Path::new(&first.path).parent(),
             Some(bucket.as_path())
@@ -1294,7 +1296,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(stored.name, "passwd");
-        let anon = root.path().join("anon").canonicalize().unwrap();
+        let anon = simplify_verbatim_path(&root.path().join("anon").canonicalize().unwrap());
         assert_eq!(
             std::path::Path::new(&stored.path).parent(),
             Some(anon.as_path())
