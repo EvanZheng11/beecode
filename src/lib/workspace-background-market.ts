@@ -40,7 +40,7 @@ export type MarketWallpaperBlocker = "tooManyBytes" | "tooManyPixels"
  * Whether `download` would refuse this wallpaper, decided from the listing
  * instead of from a failed download.
  *
- * The backend caps market downloads at the same 64 MiB / 40 Mpx as a local pick,
+ * The backend caps market downloads at the same 64 MiB / 100 Mpx as a local pick,
  * and part of wallhaven's catalogue is past one of them. Those cards used
  * to look identical to any other, and clicking one produced "please retry" for a
  * condition retrying cannot change.

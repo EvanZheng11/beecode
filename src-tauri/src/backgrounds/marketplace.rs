@@ -9,7 +9,7 @@
 //!   `BackgroundAsset` for the frontend to mint a blob URL from.
 //! - `download(...)` — full image through the *same* validation and atomic
 //!   write as a manual background pick, so a market download and a local
-//!   file share one security path (byte sniff, 64 MiB / 40 Mpx caps).
+//!   file share one security path (byte sniff, 64 MiB / 100 Mpx caps).
 //!
 //! All traffic uses a process-wide `reqwest::Client` with a stable user-agent,
 //! mirroring `crate::pets::marketplace`, and a redirect policy that re-applies
@@ -160,8 +160,9 @@ pub struct MarketSearchParams {
 ///
 /// `width`/`height`/`file_size_bytes` are carried rather than dropped because
 /// `download` refuses anything past `backgrounds::MAX_BG_BYTES` /
-/// `MAX_BG_PIXELS`, and some wallhaven listings are past one of them. Without these three numbers the frontend cannot tell a wallpaper it can
-/// apply from one it can only fail on. `0` means the listing omitted the field.
+/// `MAX_BG_PIXELS`, and some wallhaven listings are past one of them. Without
+/// these three numbers the frontend cannot tell a wallpaper it can apply from
+/// one it can only fail on. `0` means the listing omitted the field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketWallpaperSummary {
@@ -368,7 +369,7 @@ pub async fn download(url: &str, source_url: &str) -> Result<(), AppCommandError
         "wallpaper download",
     )
     .await?;
-    // Same gate as a manual pick: byte sniff, 64 MiB and 40 Mpx caps. Off the
+    // Same gate as a manual pick: byte sniff, 64 MiB and 100 Mpx caps. Off the
     // runtime like every other command in `commands::background` — decoding a
     // header and fsyncing up to 64 MiB is not work to do on an executor thread.
     tokio::task::spawn_blocking(move || {

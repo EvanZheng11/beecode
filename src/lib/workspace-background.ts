@@ -141,13 +141,13 @@ export const MAX_WORKSPACE_BG_BYTES = 64 * 1024 * 1024
 const WORKSPACE_BG_TRANSFER_TIMEOUT_MS = 600_000
 
 /**
- * Decoded-pixel ceiling; matches the backend `MAX_BG_PIXELS` (40 Mpx ≈ an 8K
- * image). A local pick can't know this before the round trip — the picker never
+ * Decoded-pixel ceiling; matches the backend `MAX_BG_PIXELS` (100 Mpx, room
+ * for 10K-class wallpapers). A local pick can't know this before the round trip — the picker never
  * decodes the file — but the wallpaper market gets both dimensions in the
  * listing, so it can tell which wallpapers would be refused before offering
  * them as something to click.
  */
-export const MAX_WORKSPACE_BG_PIXELS = 40_000_000
+export const MAX_WORKSPACE_BG_PIXELS = 100_000_000
 
 // ─── Validation / clamp ───
 

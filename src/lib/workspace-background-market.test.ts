@@ -78,6 +78,9 @@ describe("marketWallpaperBlocker", () => {
     // Exactly at the ceiling is still fine — the backend uses `>` too.
     expect(marketWallpaperBlocker(sized(64 * 1024 * 1024))).toBeNull()
     expect(marketWallpaperBlocker(sized(1000, 8000, 5000))).toBeNull()
+    // A 10K wallpaper, past the old 40 Mpx ceiling — no longer refused.
+    expect(marketWallpaperBlocker(sized(1000, 10240, 5760))).toBeNull()
+    expect(marketWallpaperBlocker(sized(1000, 10_000, 10_000))).toBeNull()
   })
 
   it("blocks a wallpaper past the byte cap", () => {
@@ -88,6 +91,9 @@ describe("marketWallpaperBlocker", () => {
 
   it("blocks a wallpaper past the pixel cap", () => {
     expect(marketWallpaperBlocker(sized(1000, 15360, 8640))).toBe(
+      "tooManyPixels"
+    )
+    expect(marketWallpaperBlocker(sized(1000, 10_000, 10_001))).toBe(
       "tooManyPixels"
     )
   })
