@@ -562,11 +562,29 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     )
   })
 
-  it("puts it under a reply with no steps yet, or none at all", () => {
+  it("hangs it on a rail from the header while the reply has nothing in it yet", () => {
+    // The pending reply's shape too (`parts` empty): the reply's list stands
+    // under the header with its foot alone, the ring where the first step
+    // will go, the rail running down to it from the header.
+    const { container } = renderWithIntl(
+      <CompletedTurnContent parts={[]} durationMs={null} completed={false} />
+    )
+
+    expect(marks(container)).toHaveLength(1)
+    const mark = onRail(container)!
+    expect(mark).not.toBeNull()
+    expect(mark.parentElement).toHaveAttribute("data-headed")
+    expect(mark.parentElement!.children).toHaveLength(1)
+    // No header toggle: there is nothing to fold yet.
+    expect(queryToggle()).toBeNull()
+  })
+
+  it("puts it under the words of a reply that has no step to hang them on", () => {
+    // Prose with no step before it is no list: the words sit under the
+    // header as an answer does, the mark under them, no rail.
     const view = renderWithIntl(
       <CompletedTurnContent parts={[]} durationMs={null} completed={false} />
     )
-    expect(marks(view.container)).toHaveLength(1)
 
     view.rerender(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -578,6 +596,8 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
       </NextIntlClientProvider>
     )
     expect(marks(view.container)).toHaveLength(1)
+    expect(onRail(view.container)).toBeNull()
+    expect(view.container.querySelector(".activity-timeline")).toBeNull()
     expect(
       screen
         .getByText(writing("Let me look."))
@@ -700,6 +720,25 @@ describe("CompletedTurnContent: the turning mark while the agent works", () => {
     expect(marks(container)).toHaveLength(0)
     // Nothing at work: the steps end on the row that folds them.
     expect(fold(container)).not.toBeNull()
+  })
+
+  it("stands no list in a reply with nothing in it while the agent waits on the user", () => {
+    // The list stands for the turning ring alone; with nothing turning it
+    // would be a rail to nothing.
+    const { container } = renderWithIntl(
+      <ActivityLiveProvider
+        value={{
+          awaitingToolCallId: null,
+          awaitingUser: true,
+          approvals: EMPTY_TOOL_APPROVALS,
+        }}
+      >
+        <CompletedTurnContent parts={[]} durationMs={null} completed={false} />
+      </ActivityLiveProvider>
+    )
+
+    expect(marks(container)).toHaveLength(0)
+    expect(container.querySelector(".activity-timeline")).toBeNull()
   })
 
   it("stops once the reply is done, the ring giving way to the fold row", () => {

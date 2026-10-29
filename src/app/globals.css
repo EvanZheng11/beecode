@@ -2254,10 +2254,13 @@
   content: none;
 }
 
-/* The incoming segment of a dot row: the previous row's segment stops 0.125rem
-   into this one (it was sized for a ring at 0.25rem); this fills the rest of
-   the way down to the dot. */
-.activity-item[data-marker="dot"]:not(:first-child)::after {
+/* The incoming segment of a dot row: the segment above it — the previous
+   row's, or the one a list under the header runs down from it (below) — stops
+   0.125rem into this one (it was sized for a ring at 0.25rem); this fills the
+   rest of the way down to the dot. */
+.activity-item[data-marker="dot"]:not(:first-child)::after,
+.activity-timeline[data-headed]
+  > .activity-item[data-marker="dot"]:first-child::after {
   content: "";
   position: absolute;
   inset-inline-start: calc(0.625rem - 0.5px);
@@ -2270,26 +2273,24 @@
 /* A reply's list under its header capsule (`data-headed`, set by the turn).
    It starts a row's gap plus 0.25rem below the capsule — as if the capsule's
    edge were the bottom of a ring on a row before it — so the first ring sits
-   as far under the capsule (1rem) as a ring under the one before. The first
-   row's rail runs up to that edge: down to 0.125rem above its ring, or, when
-   prose comes first, into its dot as a dot's incoming segment does. */
+   as far under the capsule (1rem) as a ring under the one before. The rail
+   runs up to that edge as that row's segment would, down to 0.125rem above
+   the first ring — or, when prose comes first, on into its dot by the dot's
+   incoming segment. The list draws it, not its first row: it stands while
+   rows join, the first one too — a reply with nothing in it yet is this list
+   with its foot alone, the turning ring where the first step will go. */
 .activity-timeline[data-headed] {
   padding-top: calc(var(--activity-gap) + 0.25rem);
 }
 
-.activity-timeline[data-headed] > .activity-item:first-child::after {
+.activity-timeline[data-headed]::before {
   content: "";
   position: absolute;
   inset-inline-start: calc(0.625rem - 0.5px);
-  top: calc(-1 * (var(--activity-gap) + 0.25rem));
+  top: 0;
   height: calc(var(--activity-gap) + 0.375rem);
   width: 1px;
   background: var(--activity-rail);
-}
-
-.activity-timeline[data-headed]
-  > .activity-item[data-marker="dot"]:first-child::after {
-  height: calc(var(--activity-gap) + 0.875rem);
 }
 
 /* Rows inside an expanded group: indented into the content column, with a
@@ -2364,9 +2365,9 @@
    the part past its line grows, the clip let out from where the segment
    stopped. The rows one join touched take their turn top to bottom (the hook
    holds each one's growth back a little longer), so the rail draws down
-   through them. The rail up to the header stands as it is: a first row that
-   joins takes over the one already drawn. Transform and clip only, so no row
-   changes size under the virtual list. */
+   through them. The rail up to the header is the list's own and stands as
+   it is. Transform and clip only, so no row changes size under the virtual
+   list. */
 @keyframes activity-rail-grow {
   from {
     transform: scaleY(0);

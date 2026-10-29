@@ -75,7 +75,9 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   foot?: ActivityFoot
   /** The list hangs under the turn's header capsule: its first step sits as
    *  far below it as a step below the one before, and the rail runs up to
-   *  it (globals.css). */
+   *  it (globals.css). While its foot turns it stands before any step has
+   *  come: the rail runs from the header down to the turning ring, where the
+   *  first step will go, and the steps join above the ring. */
   headed?: boolean
   /** Drawn inside a step (see `ActivityRenderContextValue.nested`). */
   nested?: boolean
@@ -110,8 +112,15 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const [revealed, setRevealed] = useState(0)
   const items = model.items
   const listRef = useRef<HTMLOListElement>(null)
-  // Still going, its rail grows down to each step that joins it.
-  useRailGrowth(listRef, !pinnedOnly && isStreaming && items.length > 0)
+  // Under the header, the list is there from the start: with no step yet,
+  // it is the rail down to its turning foot (see `headed`).
+  const standing = headed && !pinnedOnly && foot?.working === true
+  // Still going, its rail grows down to each step that joins it — the first
+  // one too, when the list was standing for it.
+  useRailGrowth(
+    listRef,
+    !pinnedOnly && isStreaming && (items.length > 0 || standing)
+  )
   const long = items.length > LONG_TIMELINE_ROWS && !pinnedOnly
   // While it streams, its rows slide into the fold one at a time as new ones
   // arrive: cutting the tail to size the moment it crossed the threshold would
@@ -122,11 +131,11 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   const hidden = long
     ? Math.max(0, items.length - LONG_TIMELINE_HEAD - tailSize - revealed)
     : 0
-  if (items.length === 0) return null
+  if (items.length === 0 && !standing) return null
   const headSize = LONG_TIMELINE_HEAD + revealed
   // A group the reply has moved past — a row follows it, or the answer under
   // the rows does — takes no more members.
-  const lastKey = items[items.length - 1]!.key
+  const lastKey = items.length > 0 ? items[items.length - 1]!.key : null
   const answerFollows = hasVisibleAnswer(model.answer)
   // One list of children, the fold among them: a row that moves between the
   // head, the fold and the tail keeps its key's place, never remounting.
@@ -142,6 +151,9 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         role="list"
         className="activity-timeline empty:hidden"
         data-headed={headed ? "" : undefined}
+        // Standing for its first step, the list holds only the turning ring:
+        // nothing to read yet, so no list either.
+        aria-hidden={items.length === 0 ? true : undefined}
       >
         {rows.map((item) =>
           item === FOLD ? (

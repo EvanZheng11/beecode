@@ -239,11 +239,17 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
   // while it waits on the user to answer a permission request — that is the
   // turning ring, under whatever it is writing; otherwise a row that folds
   // the steps away, saying what it folds: `Collapse 14 steps · 3m 34s`. A
-  // live reply with no foot in view (its steps folded, none yet, or none it
-  // can fold) ends on the turning mark under whatever does end it instead.
+  // reply with nothing in it yet — no step, no words — is that list with its
+  // foot alone: the turning ring hangs under the header on the rail from it,
+  // where the first step will go, and the steps join above it. A live reply
+  // with no foot in view (its steps folded, or words but no step it can
+  // fold) ends on the turning mark under whatever does end it instead.
   const { awaitingUser } = useActivityLive()
   const working = isStreaming && !awaitingUser
-  const footShown = foldable && open && activity.items.length > 0
+  const unstarted =
+    working && activity.items.length === 0 && !hasVisibleAnswer(split.answer)
+  const footShown =
+    bodyOpen && (unstarted || (foldable && activity.items.length > 0))
   const tActivity = useTranslations("Folder.chat.activity")
   const headerRef = useRef<HTMLDivElement | null>(null)
   const foldBack = useFoldBack()
@@ -254,7 +260,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     () => ({
       // Only while the steps are open: folding, they stay in view as they
       // slide shut, and the mark under the reply has taken over by then.
-      working: working && open,
+      working: working && bodyOpen,
       what:
         [steps > 0 ? tActivity("header.steps", { count: steps }) : null, took]
           .filter(Boolean)
@@ -270,7 +276,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
           fold: () => handleOpenChange(false),
         }),
     }),
-    [working, open, steps, took, tActivity, foldBack, handleOpenChange]
+    [working, bodyOpen, steps, took, tActivity, foldBack, handleOpenChange]
   )
 
   const header = (
@@ -378,7 +384,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
               <ActivityParts
                 model={activity}
                 isStreaming={isStreaming}
-                foot={foldable ? foot : undefined}
+                foot={foldable || unstarted ? foot : undefined}
                 headed
               />
             </div>

@@ -141,13 +141,15 @@ const STOPPED_ON_FAILURE: MessageTurn = {
   ],
 }
 
-/** A declaration in globals.css, by its rule's selector (whitespace folded). */
+/** A declaration in globals.css, by one of its rule's selectors (whitespace
+ *  folded). */
 function globalsDecl(selector: string, prop: string): string | undefined {
   let value: string | undefined
   postcss
     .parse(readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8"))
     .walkRules((rule) => {
-      if (rule.selector.replace(/\s+/g, " ") !== selector) return
+      const listed = rule.selectors.map((one) => one.replace(/\s+/g, " "))
+      if (!listed.includes(selector)) return
       rule.walkDecls(prop, (decl) => {
         value = decl.value
       })
@@ -1047,23 +1049,32 @@ describe("activity timeline: where the rail ends", () => {
       globalsDecl(".activity-timeline[data-headed]", "padding-top")
     )
     expect(head + 0.25).toBeCloseTo(1.75 - 1.5 + gap + 0.25)
-    // The first row's rail starts at the capsule's edge and stops as a
-    // segment does: 0.125rem above a ring, or where a dot's incoming one
-    // stops (prose can come first).
-    const rail =
-      ".activity-timeline[data-headed] > .activity-item:first-child::after"
+    // The list draws the rail up to the capsule, from its own top edge, and
+    // stops it as a row's segment stops: 0.125rem above the first ring.
+    const rail = ".activity-timeline[data-headed]::before"
     const top = remOf(globalsDecl(rail, "top"))
+    const end = top + remOf(globalsDecl(rail, "height"))
     expect(globalsDecl(rail, "content")).toBe('""')
-    expect(top).toBeCloseTo(-head)
-    expect(top + remOf(globalsDecl(rail, "height"))).toBeCloseTo(0.25 - 0.125)
+    expect(top).toBeCloseTo(0)
+    expect(end).toBeCloseTo(head + 0.25 - 0.125)
+    // Prose first: its dot's incoming segment, the one a dot gets under any
+    // segment, takes the rail on from where the list's stops.
     const dotRail =
       '.activity-timeline[data-headed] > .activity-item[data-marker="dot"]:first-child::after'
     const incoming =
       '.activity-item[data-marker="dot"]:not(:first-child)::after'
-    expect(top + remOf(globalsDecl(dotRail, "height"))).toBeCloseTo(
-      remOf(globalsDecl(incoming, "top")) +
-        remOf(globalsDecl(incoming, "height"))
-    )
+    for (const prop of ["content", "top", "height", "inset-inline-start"]) {
+      expect(globalsDecl(dotRail, prop)).toBe(globalsDecl(incoming, prop))
+    }
+    expect(head + remOf(globalsDecl(dotRail, "top"))).toBeCloseTo(end)
+    // The first row draws none of its own up there: the two would overlap,
+    // and the translucent rail would darken where they do.
+    expect(
+      globalsDecl(
+        ".activity-timeline[data-headed] > .activity-item:first-child::after",
+        "content"
+      )
+    ).toBeUndefined()
     const column = globalsDecl(".activity-item::before", "inset-inline-start")
     expect(column).toBeTruthy()
     expect(globalsDecl(rail, "inset-inline-start")).toBe(column)
@@ -1187,6 +1198,71 @@ describe("activity timeline: where the rail ends", () => {
     const classes = foldOf(list()).className.split(/\s+/)
     expect(classes).toContain("py-0.5")
     expect(classes).toContain("leading-6")
+  })
+
+  it("stands the reply's list under the header before its first step, the rail running down to the turning ring", () => {
+    renderTurn(<CurrentRound parts={[]} completed={false} />)
+    expect(list()).toHaveAttribute("data-headed")
+    // The list is its foot alone: the ring where the first step will go, the
+    // one turning mark in the reply.
+    const working = workingOf(list())!
+    expect([...list().children]).toEqual([working])
+    expect(document.querySelectorAll('[data-marker="working"]')).toHaveLength(1)
+    // Nothing to read in it yet: no list for a screen reader either.
+    expect(list()).toHaveAttribute("aria-hidden", "true")
+    // Hung as a step would be: nothing but the list's own padding under the
+    // capsule, and the rail from it stopping 0.125rem above the ring.
+    expect(spacingBetween(activityHeader(), list())).toEqual([])
+    const head = remOf(
+      globalsDecl(".activity-timeline[data-headed]", "padding-top")
+    )
+    const rail = ".activity-timeline[data-headed]::before"
+    const end =
+      remOf(globalsDecl(rail, "top")) + remOf(globalsDecl(rail, "height"))
+    const ring = working.firstElementChild!
+    expect(ring.getAttribute("class")!.split(/\s+/)).toContain("top-1")
+    expect(head + 0.25 - end).toBeCloseTo(0.125)
+  })
+
+  it("keeps that list and its ring as the first step joins above the ring", async () => {
+    const live = (parts: AdaptedContentPart[]) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <StaticConnectionStoreProvider store={STORE}>
+          <StaticDelegationProvider value={DELEGATION}>
+            <StaticWorkspaceActionsProvider value={WORKSPACE}>
+              <CurrentRound parts={parts} completed={false} />
+            </StaticWorkspaceActionsProvider>
+          </StaticDelegationProvider>
+        </StaticConnectionStoreProvider>
+      </NextIntlClientProvider>
+    )
+    const view = render(live([]))
+    const standing = list()
+    const working = workingOf(standing)!
+
+    view.rerender(
+      live([
+        {
+          type: "tool-call",
+          toolCallId: "first",
+          toolName: "Read",
+          input: JSON.stringify({ file_path: "/r/README.md" }),
+          state: "input-available",
+        },
+      ])
+    )
+
+    // The same list, the rail from the header with it; the same ring, under
+    // the step that joined above it.
+    expect(list()).toBe(standing)
+    expect(workingOf(standing)).toBe(working)
+    const first = standing.firstElementChild!
+    expect(first).toBe(rowOf("/r/README.md"))
+    expect(first.nextElementSibling).toBe(working)
+    expect(standing).not.toHaveAttribute("aria-hidden")
+    // Its segment grows down to the ring, as a later step's does.
+    await act(async () => {})
+    expect(first).toHaveAttribute("data-rail-enter")
   })
 
   it("ends an open group's members on a row that folds the group", () => {
