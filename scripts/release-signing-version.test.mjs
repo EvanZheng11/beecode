@@ -241,7 +241,7 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json"))
   const cargo = read("src-tauri/Cargo.toml")
   assert.equal(pkg.name, "beecode")
-  assert.equal(pkg.version, "0.41.2")
+  assert.equal(pkg.version, "0.41.3")
   assert.equal(config.version, pkg.version)
   assert.equal(config.productName, "BeeCode")
   assert.equal(config.mainBinaryName, "codeg")
@@ -254,10 +254,10 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   assert.deepEqual(config.plugins.updater.endpoints, [
     "https://github.com/EvanZheng11/beecode/releases/latest/download/latest.json",
   ])
-  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.41\.2"/)
+  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.41\.3"/)
   assert.match(
     read("src-tauri/Cargo.lock"),
-    /name = "beecode"\nversion = "0\.41\.2"/
+    /name = "beecode"\nversion = "0\.41\.3"/
   )
   assert.match(cargo, /default-run = "codeg"/)
   const lock = read("src-tauri/Cargo.lock")
@@ -732,7 +732,7 @@ test("旧标签重跑的上传脚本和最终资产清单均检出 workflow SHA"
 })
 
 for (const [version, count] of [
-  ["0.41.2", 40],
+  ["0.41.3", 40],
   ["0.41.2-beta.1", 37],
   ["0.41.1", 40],
   ["0.41.1-beta.1", 37],

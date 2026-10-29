@@ -4293,6 +4293,7 @@
         "cardResultPending": "Ergebnis steht noch aus"
       },
       "asyncTasks": {
+        "title": "Hintergrundaufgaben",
         "openOutput": "Ausgabe",
         "stop": "Stoppen",
         "tokens": "{count} Tokens",
