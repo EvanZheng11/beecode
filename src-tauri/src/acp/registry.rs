@@ -1925,7 +1925,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     the adapter resolves SKILL.md only under the session cwd and
             //     the home directory, so plugin and bundled skills never carry
             //     it, and a marker in the slash menu would split codeg's skills
-            //     into two looks.
+            //     into two looks. (0.99.1 marks them all; adopted, see (uuuu).)
             //   * Write/Edit diffs and permission titles change only for the v2
             //     surface or a `diffPatch` client, and codeg is neither for
             //     Claude.
@@ -2577,7 +2577,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1372 finds a skill's SKILL.md by its declared `name`, so more
             //     skills carry a SKILL.md path. codeg reads only a Skill call's
             //     name and still does not mark skills in the slash menu (see
-            //     (ccc)): built-in skills carry no path.
+            //     (ccc)): built-in skills carry no path. (Marked from 0.99.1,
+            //     see (uuuu).)
             //   * CLI 2.1.301–2.1.303 otherwise: a full disk's login error no
             //     longer says "Please run /login" (the adapter answers it as a
             //     plain error, not `auth_required`), an omitted permission mode
@@ -2875,9 +2876,88 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     anywhere in the result. Model ids drop a `[1m]` suffix that
             //     has no effect, which `heal_retired_context_lane_pick`
             //     already maps. A failed title request is retried once.
+            //
+            // 0.99.1 changes the adapter only: the Claude Agent SDK stays
+            // 0.3.312 (CLI 2.1.312), the ACP SDK 2.1.0 and `engines.node`
+            // ">=22", and the published `dist` differs from 0.99.0's in the
+            // five changes below and nothing else. The scenario harness, run
+            // on the 0.99.1 sources with codeg's exact `clientCapabilities`,
+            // is byte-identical to 0.99.0's recording in all 40 scenarios (its
+            // mocked query lists no command and no skill). Measured live
+            // against the local fake Anthropic API (no model call), 0.99.0 and
+            // 0.99.1 side by side:
+            //
+            // (uuuu) **Every Claude skill is marked as one** (#1473). An AIR
+            // command's `_meta.jetbrains.air` carries `kind: "skill"`, with
+            // `skillPath`, for a skill. 0.99.0 marked only a skill whose
+            // SKILL.md it found under the cwd or the home directory (codeg's
+            // own skills, linked into `~/.claude/skills`, among them), which
+            // is why (ccc) left the slash menu unmarked. 0.99.1 also reads
+            // Claude Code's skill list (`getContextUsage()`) on the session's
+            // first `system/init` and on every `commands_changed`, and sends
+            // the list again with every skill marked: a plugin or nested skill
+            // with its path, one bundled with the CLI (`simplify`, `loop`,
+            // `init`, …, 12 in 2.1.312) with the kind alone; built-in commands,
+            // MCP prompts and `.claude/commands` files stay unmarked.
+            // Measured: the list `session/new` sends marks the user and the
+            // project skill only (both versions); about 0.9 s after the first
+            // prompt 0.99.1 sends it again with all 15 skills marked, and a
+            // skill under `sub/.claude/skills` joins, marked, once a file in
+            // `sub/` is read. codeg now reads the mark
+            // (`connection::air_command_skill`), the reducer takes a list that
+            // changed in its marks only, and the `/` menus draw a skill with
+            // the icon a disk skill has. They do so only for a list holding a
+            // skill without a path (`skillMarkedCommands`), which only that
+            // read produces: the list before the first prompt, and the
+            // agent-options probe that never prompts, keep every row as it
+            // was, so no menu shows some skills marked and others not.
+            //
+            //   The read costs requests codeg cannot turn off.
+            //   `getContextUsage()` defaults to `detail: "full"`, which counts
+            //   each context category with the token-count API. Measured: 26
+            //   `count_tokens` requests (about 85 KB) at a session's first
+            //   prompt where 0.99.0 sends none, and 1 at a later
+            //   `commands_changed`. They are free on the first-party API and
+            //   run beside the turn, not before it. A gateway that rejects
+            //   `count_tokens` (404 measured) still gets every mark; the CLI
+            //   then sends the uncounted ones again at each read (28).
+            //
+            // (vvvv) **A fork may name another working directory** (#1483).
+            // The fork no longer looks the source session up only under the
+            // request's `cwd` (the SDK's `dir`). codeg forks with the
+            // connection's own cwd, which forked on both versions (measured);
+            // with another cwd 0.99.0 answered -32603 and 0.99.1 forks. So a
+            // session whose transcript lives under another project directory
+            // than the cwd codeg opened it with now forks instead of failing.
+            //
+            // (wwww) **More sign-in failures are `auth_required`** (#1481).
+            // The adapter matched "Please run /login" in a failed result; it
+            // now matches "run /login" in any case, and on replay leaves out
+            // the usage-limit banners that mention `/login`. In CLI 2.1.312
+            // that adds "Login expired · Run /login to sign in again, or
+            // re-authenticate your Anthropic profile" (an expired Anthropic
+            // profile login) and the organization-disabled-API-key messages
+            // ("… run /login to sign in with your claude.ai account"), which
+            // 0.99.0 settled as an ordinary failure without the Login action.
+            // codeg consumes the kind as it is (see (e)): the access strip with
+            // its Login button, and the `authRequired` rejection kept to the
+            // turn. The history parser reads the CLI's error record by
+            // `isApiErrorMessage`, not by its wording, so history is unchanged.
+            // No 2.1.312 usage-limit text says "run /login"; they say
+            // "· /login to switch …".
+            //
+            // (xxxx) Nothing to change in codeg, each checked:
+            //   * #1469 gives an approved plan the id `plan-mode:<tool call
+            //     id>` for an AIR client, but sends `plan_update` only to a
+            //     client with plan operations, and codeg declares no `plan`
+            //     (see `build_client_capabilities`): both ExitPlanMode
+            //     scenarios are byte-identical.
+            //   * #1479 titles a native subagent by its task, in the RFD form
+            //     a client gets only when it declares `subagents` and is not
+            //     AIR; codeg is AIR and declares none.
             distribution: AgentDistribution::Npx {
-                version: "0.99.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.99.0",
+                version: "0.99.1",
+                package: "@agentclientprotocol/claude-agent-acp@0.99.1",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -7209,8 +7289,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.99.0",
-            "@agentclientprotocol/claude-agent-acp@0.99.0",
+            "0.99.1",
+            "@agentclientprotocol/claude-agent-acp@0.99.1",
             Some("22.0.0"),
         );
         assert_npx_version(

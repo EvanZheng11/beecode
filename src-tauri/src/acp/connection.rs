@@ -19513,6 +19513,94 @@ fn is_config_option_state_command(
         == Some("setConfigOption")
 }
 
+/// The commands an `available_commands_update` advertises, as codeg lists them.
+///
+/// Config-option state toggles are dropped (codex `/plan`, see
+/// [`is_config_option_state_command`]): they are already the
+/// `collaboration_mode` selector, not invokable commands. So are ZCode's
+/// commands codeg drives itself. Some agents (e.g. Claude Code with
+/// overlapping user/project slash commands) emit entries sharing a name; the
+/// first is kept, so downstream consumers don't render duplicates (the frontend
+/// reducer also dedupes as a defensive measure). A command the agent marks as a
+/// skill carries the mark (see [`air_command_skill`]).
+fn available_command_infos(
+    agent_type: AgentType,
+    commands: &[agent_client_protocol::schema::v1::AvailableCommand],
+) -> Vec<AvailableCommandInfo> {
+    let mut seen = HashSet::new();
+    commands
+        .iter()
+        .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
+        .filter(|cmd| {
+            agent_type != AgentType::ZCode
+                || !matches!(
+                    cmd.name.as_str(),
+                    "auto" | "goal" | "fork" | "rewind" | "queue" | "steer"
+                )
+        })
+        .filter(|cmd| seen.insert(cmd.name.clone()))
+        .map(|cmd| {
+            let input_hint = cmd.input.as_ref().map(|input| match input {
+                agent_client_protocol::schema::v1::AvailableCommandInput::Unstructured(u) => {
+                    u.hint.clone()
+                }
+                _ => String::new(),
+            });
+            let skill = air_command_skill(cmd.meta.as_ref());
+            AvailableCommandInfo {
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+                input_hint,
+                skill: skill.is_some(),
+                skill_path: skill.flatten(),
+            }
+        })
+        .collect()
+}
+
+/// Whether an advertised command is a skill, read off JetBrains AIR's command
+/// `_meta`: `Some` when it carries `jetbrains.air.kind = "skill"`, holding the
+/// `skillPath` beside it (the absolute path of its `SKILL.md`) when there is
+/// one, and `None` for every other command. The envelope must be `version >= 1`,
+/// as in [`air_recommended_value`].
+///
+/// claude-agent-acp is the agent that sends it, to an AIR client only (codeg is
+/// one for Claude, see `build_client_capabilities`). Up to 0.99.0 it marked a
+/// command only when it found the skill's `SKILL.md` itself, under the session
+/// cwd or the home directory, so plugin, CLI-bundled and nested skills reached
+/// codeg as plain commands. From 0.99.1 (#1473) it also reads Claude Code's own
+/// skill list (`getContextUsage().skills.skillFrontmatter`) on the session's
+/// first `system/init` and on every `commands_changed`, and sends the list
+/// again with every skill marked: one with a file gets `skillPath`, one bundled
+/// with the CLI (`simplify`, `loop`, …) the kind alone. A built-in command
+/// (`compact`), an MCP prompt and a `.claude/commands` prompt file stay
+/// unmarked. Measured on 0.99.1 with codeg's capabilities: the list
+/// `session/new` sends marks the user and project skills only, the read lands
+/// about 0.9 s after the first prompt and marks the plugin and the bundled
+/// skills too, and a skill under `sub/.claude/skills` joins, marked, once a
+/// file in `sub/` is read. The frontend shows the marks only for a list that
+/// has that read behind it (`skillMarkedCommands`), so no menu ever shows some
+/// skills marked and others not. codex-acp's `$skill` commands carry a
+/// `skillPath` without a `kind`, so they stay plain commands here, as before.
+fn air_command_skill(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<Option<String>> {
+    let air = meta?.get("jetbrains")?.get("air")?;
+    if air.get("version").and_then(serde_json::Value::as_i64)? < 1 {
+        return None;
+    }
+    if air.get("kind").and_then(serde_json::Value::as_str) != Some("skill") {
+        return None;
+    }
+    Some(
+        air.get("skillPath")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string),
+    )
+}
+
 /// True when a CodeBuddy sub-agent tool call's `_meta` marks it as a BACKGROUND
 /// sub-agent (`codebuddy.ai/isBackground == true`). A background sub-agent runs
 /// concurrently with the main agent, so the suppression-window invariant (parent
@@ -21345,6 +21433,8 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
                     .unwrap_or("")
                     .to_string(),
                 input_hint,
+                skill: false,
+                skill_path: None,
             })
         })
         .collect();
@@ -21371,6 +21461,8 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
             name: name.to_string(),
             description,
             input_hint: kiro_prompt_input_hint(prompt),
+            skill: false,
+            skill_path: None,
         })
     }));
     // The composer sends a command named `$x` as `$x`, the token codex-acp
@@ -25085,38 +25177,7 @@ async fn emit_conversation_update(
                 .await;
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            // Drop config-option state toggles (codex `/plan` — see
-            // `is_config_option_state_command`): they're already the
-            // `collaboration_mode` selector, not invokable commands. Then dedup:
-            // some agents (e.g. Claude Code with overlapping user/project slash
-            // commands) emit duplicate entries sharing the same name. Keep the
-            // first occurrence so downstream consumers don't render duplicates;
-            // the frontend reducer also dedupes as a defensive measure.
-            let mut seen = HashSet::new();
-            let commands: Vec<AvailableCommandInfo> = update
-                .available_commands
-                .iter()
-                .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
-                .filter(|cmd| {
-                    agent_type != AgentType::ZCode
-                        || !matches!(
-                            cmd.name.as_str(),
-                            "auto" | "goal" | "fork" | "rewind" | "queue" | "steer"
-                        )
-                })
-                .filter(|cmd| seen.insert(cmd.name.clone()))
-                .map(|cmd| {
-                    let input_hint = cmd.input.as_ref().map(|input| match input {
-                        agent_client_protocol::schema::v1::AvailableCommandInput::Unstructured(u) => u.hint.clone(),
-                        _ => String::new(),
-                    });
-                    AvailableCommandInfo {
-                        name: cmd.name.clone(),
-                        description: cmd.description.clone(),
-                        input_hint,
-                    }
-                })
-                .collect();
+            let commands = available_command_infos(agent_type, &update.available_commands);
             emit_with_state(state, emitter, AcpEvent::AvailableCommands { commands }).await;
         }
         SessionUpdate::UsageUpdate(update) => {
@@ -27101,6 +27162,200 @@ mod tests {
             AgentType::Codex,
             Some(&plain)
         ));
+    }
+
+    /// Commands as claude-agent-acp 0.99.1 sent them to codeg's capabilities
+    /// (recorded live; the home directory renamed), in one of two lists.
+    /// `before_read`: the list `session/new` sends, which marks only the skills
+    /// whose `SKILL.md` the adapter finds under the cwd or the home directory.
+    /// Otherwise the list it sends again once Claude Code's own skill list has
+    /// been read (#1473), which marks the plugin and the bundled skills too.
+    fn claude_0991_commands(
+        before_read: bool,
+    ) -> Vec<agent_client_protocol::schema::v1::AvailableCommand> {
+        let skill = |path: Option<&str>| match path {
+            Some(path) => serde_json::json!({"jetbrains": {"air": {
+                "version": 1, "kind": "skill", "skillPath": path,
+            }}}),
+            None => serde_json::json!({"jetbrains": {"air": {"version": 1, "kind": "skill"}}}),
+        };
+        let mut commands = vec![
+            serde_json::json!({"name": "user-skill", "description": "User skill probe (user)", "input": null,
+                "_meta": skill(Some("/home/u/.claude/skills/user-skill/SKILL.md"))}),
+            serde_json::json!({"name": "prompt-cmd", "description": "Prompt command probe (project)", "input": null}),
+            serde_json::json!({"name": "plug:pskill", "description": "(plug) Plugin skill probe", "input": null}),
+            serde_json::json!({"name": "simplify", "description": "Review the changed code", "input": {"hint": "[<target>]"}}),
+            serde_json::json!({"name": "compact", "description": "Free up context by summarizing the conversation so far",
+                "input": {"hint": "<optional custom summarization instructions>"}}),
+            serde_json::json!({"name": "mcp", "description": "Show the MCP servers and their status, or reconnect, enable, or disable a server",
+                "input": {"hint": "[reconnect|enable|disable [<server>|all]]"}}),
+        ];
+        if !before_read {
+            commands[2]["_meta"] = skill(Some("/home/u/plugins/plug/skills/pskill/SKILL.md"));
+            commands[3]["_meta"] = skill(None);
+        }
+        serde_json::from_value(serde_json::Value::Array(commands)).expect("ACP commands")
+    }
+
+    /// The skill marks each listed command carries, as `(name, skill, path)`.
+    fn skill_marks(commands: &[AvailableCommandInfo]) -> Vec<(&str, bool, Option<&str>)> {
+        commands
+            .iter()
+            .map(|c| (c.name.as_str(), c.skill, c.skill_path.as_deref()))
+            .collect()
+    }
+
+    #[test]
+    fn claude_skill_commands_carry_the_air_skill_mark() {
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        assert_eq!(
+            skill_marks(&read),
+            vec![
+                (
+                    "user-skill",
+                    true,
+                    Some("/home/u/.claude/skills/user-skill/SKILL.md")
+                ),
+                ("prompt-cmd", false, None),
+                (
+                    "plug:pskill",
+                    true,
+                    Some("/home/u/plugins/plug/skills/pskill/SKILL.md")
+                ),
+                // Bundled with the CLI: a skill without a file.
+                ("simplify", true, None),
+                ("compact", false, None),
+                ("mcp", false, None),
+            ]
+        );
+        // The mark leaves the rest of the command as it was.
+        assert_eq!(read[3].description, "Review the changed code");
+        assert_eq!(read[3].input_hint.as_deref(), Some("[<target>]"));
+
+        // Before the read only the skill found on disk is marked.
+        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true));
+        assert_eq!(
+            skill_marks(&first),
+            vec![
+                (
+                    "user-skill",
+                    true,
+                    Some("/home/u/.claude/skills/user-skill/SKILL.md")
+                ),
+                ("prompt-cmd", false, None),
+                ("plug:pskill", false, None),
+                ("simplify", false, None),
+                ("compact", false, None),
+                ("mcp", false, None),
+            ]
+        );
+    }
+
+    /// A command nothing marks goes to the frontend exactly as before the
+    /// marks existed (no `skill` / `skill_path` keys), so every other agent's
+    /// list and every snapshot is unchanged; a marked one adds the two keys.
+    #[test]
+    fn skill_marks_stay_off_the_wire_for_unmarked_commands() {
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        assert_eq!(
+            serde_json::to_value(&read[4]).unwrap(),
+            serde_json::json!({
+                "name": "compact",
+                "description": "Free up context by summarizing the conversation so far",
+                "input_hint": "<optional custom summarization instructions>",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&read[2]).unwrap(),
+            serde_json::json!({
+                "name": "plug:pskill",
+                "description": "(plug) Plugin skill probe",
+                "input_hint": null,
+                "skill": true,
+                "skill_path": "/home/u/plugins/plug/skills/pskill/SKILL.md",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&read[3]).unwrap()["skill"],
+            serde_json::json!(true)
+        );
+        assert!(serde_json::to_value(&read[3])
+            .unwrap()
+            .get("skill_path")
+            .is_none());
+        // A stored list from before the marks reads back unmarked.
+        let old: AvailableCommandInfo = serde_json::from_value(serde_json::json!({
+            "name": "compact", "description": "", "input_hint": null,
+        }))
+        .unwrap();
+        assert!(!old.skill);
+        assert_eq!(old.skill_path, None);
+    }
+
+    #[test]
+    fn air_command_skill_reads_only_a_versioned_skill_kind() {
+        let air =
+            |value: serde_json::Value| meta_map(serde_json::json!({"jetbrains": {"air": value}}));
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "kind": "skill", "skillPath": " /p/SKILL.md ",
+            })))),
+            Some(Some("/p/SKILL.md".to_string()))
+        );
+        // A blank path is no path.
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "kind": "skill", "skillPath": "  ",
+            })))),
+            Some(None)
+        );
+        // No kind: codex-acp's `$skill` commands carry the path alone.
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({
+                "version": 1, "skillPath": "/workspace/.agents/skills/build/SKILL.md",
+            })))),
+            None
+        );
+        // Another kind, an envelope without a version or below 1, the key
+        // outside the AIR namespace, and no `_meta` at all.
+        assert_eq!(
+            air_command_skill(Some(&air(
+                serde_json::json!({"version": 1, "kind": "prompt"})
+            ))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&air(serde_json::json!({"kind": "skill"})))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&air(
+                serde_json::json!({"version": 0, "kind": "skill"})
+            ))),
+            None
+        );
+        assert_eq!(
+            air_command_skill(Some(&meta_map(serde_json::json!({"kind": "skill"})))),
+            None
+        );
+        assert_eq!(air_command_skill(None), None);
+    }
+
+    /// The first of two commands sharing a name is the one kept, mark and all,
+    /// as it was before the marks.
+    #[test]
+    fn a_duplicate_command_name_keeps_the_first_entry_and_its_mark() {
+        let commands: Vec<agent_client_protocol::schema::v1::AvailableCommand> =
+            serde_json::from_value(serde_json::json!([
+                {"name": "deploy", "description": "project", "input": null,
+                    "_meta": {"jetbrains": {"air": {"version": 1, "kind": "skill", "skillPath": "/w/.claude/skills/deploy/SKILL.md"}}}},
+                {"name": "deploy", "description": "user", "input": null},
+            ]))
+            .unwrap();
+        assert_eq!(
+            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands)),
+            vec![("deploy", true, Some("/w/.claude/skills/deploy/SKILL.md"))]
+        );
     }
 
     #[test]

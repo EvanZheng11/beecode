@@ -117,6 +117,7 @@ import {
   buildKnownInvocations,
   commandToReference,
   diskSkillTrigger,
+  skillMarkedCommands,
   skillsForMenu,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
@@ -993,6 +994,12 @@ export function MessageInput({
   const slashCommands = useMemo(
     () => availableCommands ?? [],
     [availableCommands]
+  )
+  // Read off the full list, not the filtered one, so typing never moves the
+  // rows' icon column in or out.
+  const skillCommandNames = useMemo(
+    () => skillMarkedCommands(slashCommands),
+    [slashCommands]
   )
   const filteredSlashCommands = useMemo(() => {
     if (!slashMenuOpen || slashCommands.length === 0) return []
@@ -2028,7 +2035,11 @@ export function MessageInput({
                   handleSlashSelect(cmd)
                 }}
               >
-                <CommandOptionLabel command={cmd} />
+                <CommandOptionLabel
+                  command={cmd}
+                  skill={skillCommandNames.has(cmd.name)}
+                  kindColumn={skillCommandNames.size > 0}
+                />
               </button>
             ))}
             {filteredSlashSkills.map((skill, i) => {
