@@ -3337,6 +3337,102 @@ describe("SidebarConversationList — folder groups", () => {
   })
 })
 
+describe("SidebarConversationList — folder and title search", () => {
+  beforeEach(() => {
+    const folders = [
+      { ...folder(1, "Project Alpha"), alias: "Client Portal" },
+      folder(2, "Other"),
+      { ...folder(3, "Empty Directory"), alias: "Archive" },
+      { ...folder(4, "Worktree", 1), git_branch: "feature-login" },
+    ]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        conv(11, 1, { tag_ids: [5] }),
+        conv(12, 1, { status: "completed" }),
+        conv(21, 2, { title: "Fix Login" }),
+        conv(31, 9, { kind: "chat", title: "Login discussion" }),
+        conv(41, 4),
+      ],
+    })
+    store.activeTabId = null
+    store.tabSpec = []
+  })
+
+  function search(query: string, tagFilter?: TagFilter, showWorktrees = false) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted={false}
+          showWorktrees={showWorktrees}
+          sortMode="created"
+          titleQuery={query}
+          tagFilter={tagFilter}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+  const shownIds = (container: HTMLElement) =>
+    [...container.querySelectorAll("[data-conversation-id]")].map((el) =>
+      Number(el.getAttribute("data-conversation-id"))
+    )
+
+  it.each(["  PROJECT alpha  ", "  cLiEnT portal  "])(
+    "matches folder names and aliases with query %s, respecting completed visibility",
+    (query) => {
+      const { container } = render(search(query))
+      expect(shownIds(container)).toEqual([11])
+      expect(container.querySelector('[data-folder-id="2"]')).toBeNull()
+    }
+  )
+
+  it("keeps title search for folder sessions and folderless chats", () => {
+    const { container } = render(search("  LOGIN  "))
+    expect(shownIds(container).sort()).toEqual([21, 31, 41])
+  })
+
+  it.each(["empty directory", " ARCHIVE "])(
+    "keeps a matching empty folder for %s and restores folders on clearing",
+    (query) => {
+      const { container, rerender } = render(search(query))
+      expect(container.querySelector('[data-folder-id="3"]')).not.toBeNull()
+      expect(container.querySelector('[data-folder-id="2"]')).toBeNull()
+      expect(shownIds(container)).toEqual([])
+      rerender(search("   "))
+      expect(shownIds(container).sort()).toEqual([11, 21, 31, 41])
+      expect(container.querySelector('[data-folder-id="2"]')).not.toBeNull()
+    }
+  )
+
+  it("intersects folder matches with tags and hides empty tag results", () => {
+    const { container, rerender } = render(
+      search("portal", { tagIds: [5], mode: "any" })
+    )
+    expect(shownIds(container)).toEqual([11])
+    rerender(search("portal", { tagIds: [6], mode: "any" }))
+    expect(shownIds(container)).toEqual([])
+    expect(container.querySelector('[data-folder-id="1"]')).toBeNull()
+    rerender(search("archive", { tagIds: [5], mode: "any" }))
+    expect(container.querySelector('[data-folder-id="3"]')).toBeNull()
+  })
+
+  it.each([false, true])(
+    "keeps matching empty worktrees reachable with showWorktrees=%s",
+    (showWorktrees) => {
+      useAppWorkspaceStore.setState({ conversations: [] })
+      const { container } = render(
+        search("feature-login", undefined, showWorktrees)
+      )
+      expect(container.querySelector('[data-folder-id="1"]')).not.toBeNull()
+      expect(!!container.querySelector('[data-folder-id="4"]')).toBe(
+        showWorktrees
+      )
+      expect(container.querySelector('[data-folder-id="2"]')).toBeNull()
+    }
+  )
+})
+
 describe("SidebarConversationList — tag filter", () => {
   // Rendered with its own filter prop; the provider stays mounted so `t` is
   // stable, exactly like `tree()`.

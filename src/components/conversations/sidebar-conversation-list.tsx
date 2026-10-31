@@ -1422,21 +1422,46 @@ export function SidebarConversationList({
   // running badge answers "is work under way in there", filter or not. With no
   // filter this is `conversations` itself, so nothing downstream changes.
   const tagFilterActive = isTagFilterActive(tagFilter)
-  // 标题搜索：最朴素的不区分大小写子串匹配。不用 `rankByTextMatch` —— 它会按
-  // 得分重排，而用户只要求过滤，没要求改排序。没有搜索词时返回上游那个
-  // 引用（`conversations` 本体），下游的引用复用备忘录照旧生效。
+  // Search titles and folder labels without changing the existing sort order.
   const titleNeedle = titleQuery.trim().toLowerCase()
   const titleQueryActive = titleNeedle.length > 0
+  const matchingFolderIds = useMemo(
+    () =>
+      new Set(
+        folders
+          .filter(
+            (f) =>
+              titleQueryActive &&
+              [
+                f.name,
+                f.parent_id != null
+                  ? worktreeHeaderAlias(f.alias, f.git_branch)
+                  : f.alias,
+              ].some((label) => label?.toLowerCase().includes(titleNeedle))
+          )
+          .map((f) => f.id)
+      ),
+    [folders, titleNeedle, titleQueryActive]
+  )
   const shownConversations = useMemo(() => {
     const tagged = tagFilterActive
       ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
       : conversations
     if (!titleQueryActive) return tagged
-    return tagged.filter((c) =>
-      (c.title ?? "").toLowerCase().includes(titleNeedle)
+    return tagged.filter(
+      (c) =>
+        matchingFolderIds.has(c.folder_id) ||
+        (c.title ?? "").toLowerCase().includes(titleNeedle)
     )
-  }, [conversations, tagFilter, tagFilterActive, titleNeedle, titleQueryActive])
-  // 标签筛选与标题搜索都是「收窄」：叠在一起用，空文件夹也一样跟着隐藏。
+  }, [
+    conversations,
+    tagFilter,
+    tagFilterActive,
+    titleNeedle,
+    titleQueryActive,
+    matchingFolderIds,
+  ])
+  // Tag filtering still requires matching conversations, even in named folders.
   const filterNarrowed = tagFilterActive || titleQueryActive
   // 空状态文案：搜索词优先（被标题搜索收窄时说「没有匹配的会话」比说
   // 「没有带这些标签的会话」准确），否则仍是标签筛选那句。
@@ -1529,6 +1554,18 @@ export function SidebarConversationList({
   const displayChildToParent = useMemo(
     () => (showWorktrees ? EMPTY_CHILD_TO_PARENT : childToParent),
     [showWorktrees, childToParent]
+  )
+
+  const retainedFolderIds = useMemo(
+    () =>
+      tagFilterActive
+        ? new Set<number>()
+        : new Set(
+            [...matchingFolderIds].map(
+              (id) => displayChildToParent.get(id) ?? id
+            )
+          ),
+    [tagFilterActive, matchingFolderIds, displayChildToParent]
   )
 
   // Hold the previous grouping so unchanged folders keep their bucket array
@@ -1683,6 +1720,7 @@ export function SidebarConversationList({
         layout,
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: filterNarrowed,
+        retainedFolderIds,
       }),
     [
       pinned,
@@ -1707,6 +1745,7 @@ export function SidebarConversationList({
       layout,
       folderGroupExpanded,
       filterNarrowed,
+      retainedFolderIds,
     ]
   )
 

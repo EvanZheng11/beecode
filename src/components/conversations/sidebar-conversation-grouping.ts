@@ -1327,6 +1327,8 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** Folder-label matches remain visible without conversations. */
+  retainedFolderIds?: ReadonlySet<number>
 }): SidebarRow[] {
   const {
     pinned,
@@ -1351,13 +1353,13 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    retainedFolderIds = EMPTY_EXPANDED,
   } = args
   const rows: SidebarRow[] = []
 
-  // Under `hideEmptyFolders`: does this display bucket hold any row, and does
-  // this folder entry — a container counts its worktrees too — hold any?
+  // A matching folder label can retain an empty bucket under text search.
   const bucketHasRows = (folderId: number) =>
-    (byFolder.get(folderId)?.length ?? 0) > 0
+    retainedFolderIds.has(folderId) || (byFolder.get(folderId)?.length ?? 0) > 0
   const entryHasRows = (folderId: number) =>
     bucketHasRows(folderId) ||
     (containerChildren.get(folderId) ?? []).some(bucketHasRows)
