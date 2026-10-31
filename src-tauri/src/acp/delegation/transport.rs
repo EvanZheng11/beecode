@@ -61,7 +61,7 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
-use crate::acp::question::QuestionSpec;
+use crate::acp::question::{QuestionOutcome, QuestionSpec};
 
 /// One delegation call's worth of input forwarded from the companion to the
 /// main process. The main process re-validates `token` and maps
@@ -506,6 +506,23 @@ pub struct BrokerResponse {
     pub outcome: Value,
 }
 
+/// 异常未答不是用户拒答，不得生成答案或授权依赖答案的操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerAskError {
+    Cancelled,
+    Unavailable,
+}
+
+/// 保留旧的 answers/declined 字段，仅在异常时附加可选 error。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerAskOutcome {
+    #[serde(flatten)]
+    pub answer: QuestionOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<BrokerAskError>,
+}
+
 /// Maximum allowed frame size, 16 MiB. Guards against a misbehaving peer
 /// allocating gigabytes when reading the length prefix.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -715,8 +732,7 @@ pub async fn client_commit_feedback(
 /// connection open for the whole wait — there is no `wait_ms`, the block is
 /// inherent (waiting on a human). If the tool call is canceled, the companion
 /// drops this future, closing the socket; the listener observes the peer-close
-/// and tears the pending question down. Returns a `{ answers, declined }`
-/// envelope.
+/// and tears the pending question down. Returns a [`BrokerAskOutcome`].
 pub async fn client_ask_round_trip(
     socket_path: &str,
     req: &BrokerAskRequest,
@@ -1020,6 +1036,55 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::duplex;
+
+    #[test]
+    fn ask_outcome_preserves_legacy_payloads_without_error() {
+        for payload in [
+            json!({"answers": [], "declined": true}),
+            json!({"answers": [{
+                "question": "Which?", "header": "Choice", "multi_select": false,
+                "selected": ["A"]
+            }], "declined": false}),
+        ] {
+            let decoded: BrokerAskOutcome = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(decoded.error, None);
+            assert_eq!(serde_json::to_value(decoded).unwrap(), payload);
+        }
+        let missing: BrokerAskOutcome = serde_json::from_value(json!({})).unwrap();
+        assert!(missing.answer.answers.is_empty());
+        assert!(!missing.answer.declined);
+        assert_eq!(missing.error, None);
+    }
+
+    #[tokio::test]
+    async fn ask_error_outcome_round_trips_over_broker_frames() {
+        for error in [BrokerAskError::Cancelled, BrokerAskError::Unavailable] {
+            let outcome = BrokerAskOutcome {
+                answer: QuestionOutcome {
+                    answers: vec![],
+                    declined: false,
+                },
+                error: Some(error),
+            };
+            let (mut client, mut server) = duplex(1024);
+            write_frame(
+                &mut server,
+                &BrokerResponse {
+                    outcome: serde_json::to_value(&outcome).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+            let response: BrokerResponse = read_frame(&mut client).await.unwrap();
+            let decoded: BrokerAskOutcome =
+                serde_json::from_value(response.outcome.clone()).unwrap();
+            assert_eq!(decoded, outcome);
+            // 旧类型仍可读取原字段，但旧 companion 不理解异常语义，不支持混用版本。
+            let legacy: QuestionOutcome = serde_json::from_value(response.outcome).unwrap();
+            assert!(legacy.answers.is_empty());
+            assert!(!legacy.declined);
+        }
+    }
 
     #[tokio::test]
     async fn frame_round_trip_in_memory() {

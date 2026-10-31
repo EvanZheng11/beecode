@@ -486,6 +486,7 @@ pub struct ConnectionManager {
 /// build the self-describing outcome without a `SessionState` read (race-free).
 struct PendingQuestionEntry {
     parent_connection_id: String,
+    survives_turn: bool,
     questions: Vec<QuestionSpec>,
     sender: tokio::sync::oneshot::Sender<QuestionOutcome>,
     /// 本次提问的倒计时句柄。`None` 表示原生 agent 提问从来没有期限（不显示
@@ -1005,7 +1006,18 @@ impl ConnectionManager {
             Ok(d) => d,
             Err(_) => return 0,
         };
-        let to_disconnect: Vec<String> = {
+        let (to_disconnect, closed_question_parents) = {
+            let questions = self.pending_questions.lock().await;
+            let live_question_parents: std::collections::HashSet<&str> = questions
+                .values()
+                .filter(|e| !e.sender.is_closed())
+                .map(|e| e.parent_connection_id.as_str())
+                .collect();
+            let closed_question_parents: std::collections::HashSet<String> = questions
+                .values()
+                .filter(|e| e.sender.is_closed())
+                .map(|e| e.parent_connection_id.clone())
+                .collect();
             let connections = self.connections.lock().await;
             let mut victims = Vec::new();
             for (id, conn) in connections.iter() {
@@ -1018,7 +1030,7 @@ impl ConnectionManager {
                 if state.status != ConnectionStatus::Connected {
                     continue;
                 }
-                if state.pending_permission.is_some() {
+                if state.pending_permission.is_some() || live_question_parents.contains(id.as_str()) {
                     continue;
                 }
                 if state.has_active_background_work(now) {
@@ -1036,16 +1048,50 @@ impl ConnectionManager {
                     victims.push(id.clone());
                 }
             }
-            victims
+            (victims, closed_question_parents)
         };
+        // 先按清理前的活动时间选出候选，避免清理事件本身给孤儿续命。
+        // 注册表锁、连接锁均已释放；按闭合状态重新筛选，保留后来注册的新题。
+        for id in closed_question_parents {
+            self.cancel_parent_questions(&id, |e| e.sender.is_closed())
+                .await;
+        }
         let mut disconnected = 0;
         for id in to_disconnect {
-            tracing::info!("[ACP] idle sweep disconnecting connection={}", id);
-            if self.disconnect(&id).await.is_ok() {
+            if self.disconnect_idle_candidate(&id).await {
                 disconnected += 1;
             }
         }
         disconnected
+    }
+
+    async fn disconnect_idle_candidate(&self, id: &str) -> bool {
+        let removed = {
+            // 与注册统一按「注册表 → 连接表」加锁，最后检查与移除不可分割。
+            let questions = self.pending_questions.lock().await;
+            if questions
+                .values()
+                .any(|e| e.parent_connection_id == id && !e.sender.is_closed())
+            {
+                return false;
+            }
+            let mut connections = self.connections.lock().await;
+            let removed = connections.remove(id);
+            drop(questions);
+            if let Some(conn) = &removed {
+                // 保留 disconnect 的连接表 → draining 原子交接。
+                self.park_draining(conn).await;
+            }
+            removed
+        };
+        let Some(conn) = removed else {
+            return false;
+        };
+        // 与显式 disconnect 相同，所有可能阻塞的命令发送均在锁外。
+        tracing::info!("[ACP] idle sweep disconnecting connection={}", id);
+        conn.handshake.cancel();
+        let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
+        true
     }
 
     /// Compare each running connection's spawn-time config fingerprint against a
@@ -3758,7 +3804,7 @@ impl ConnectionManager {
     ) -> Option<RegisteredQuestion> {
         // 原生 agent 提问（grok / pi / elicitation）没有确定性的等待时长，
         // 因此不带倒计时；只有 MCP `ask_user_question` 走下面带期限的入口。
-        self.register_question_with_timeout(conn_id, questions, None)
+        self.register_question_inner(conn_id, questions, None, false)
             .await
     }
 
@@ -3772,6 +3818,17 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: Option<std::time::Duration>,
     ) -> Option<RegisteredQuestion> {
+        self.register_question_inner(conn_id, questions, timeout, true)
+            .await
+    }
+
+    async fn register_question_inner(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: Option<std::time::Duration>,
+        survives_turn: bool,
+    ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
         // (None → the listener declines the ask, as for any other None path).
@@ -3782,8 +3839,15 @@ impl ConnectionManager {
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let deadline = timeout.map(QuestionDeadline::from_now);
-        {
+        let drained = {
             let mut reg = self.pending_questions.lock().await;
+            let connections = self.connections.lock().await;
+            // state/emitter 可能在 idle claim 前取得；必须在插入的同一临界区核实。
+            let conn = connections.get(conn_id)?;
+            if !Arc::ptr_eq(&conn.state, &state) {
+                return None;
+            }
+            let drained = Self::drain_parent_questions(&mut reg, conn_id, |e| e.sender.is_closed());
             if reg.values().any(|e| e.parent_connection_id == conn_id) {
                 return None;
             }
@@ -3791,12 +3855,15 @@ impl ConnectionManager {
                 question_id.clone(),
                 PendingQuestionEntry {
                     parent_connection_id: conn_id.to_string(),
+                    survives_turn,
                     questions: questions.clone(),
                     sender: tx,
                     deadline: deadline.clone(),
                 },
             );
-        }
+            drained
+        };
+        self.resolve_drained_questions(conn_id, drained).await;
         // Ungated emit: the agent is blocked in the tool call, so the card must
         // show regardless of any turn-flag timing. 期限在应用事件时从共享句柄
         // 现读，防止「注册广播」与「并发延长」交错时带上旧期限。
@@ -3804,6 +3871,7 @@ impl ConnectionManager {
             Some(AcpEvent::QuestionRequest {
                 question_id: question_id.clone(),
                 questions: questions.clone(),
+                survives_turn,
                 expires_at: deadline.as_ref().and_then(|d| d.expires_at()),
             })
         })
@@ -3992,14 +4060,22 @@ impl ConnectionManager {
 
     /// Cancel a pending `ask_user_question` — the companion's tool call was
     /// canceled (peer-close) or the connection is tearing down. Removes the
-    /// one-shot (dropping the sender unblocks the listener with a declined
-    /// outcome) and broadcasts `QuestionResolved` so the card clears. No-op if
-    /// the question was already answered / gone.
-    pub async fn cancel_question(&self, conn_id: &str, question_id: &str) {
-        let _ = conn_id;
-        let removed = self.pending_questions.lock().await.remove(question_id);
+    /// one-shot (dropping the sender unblocks the listener as canceled) and
+    /// broadcasts `QuestionResolved` so the card clears. Returns true only if
+    /// this call removed the matching question and parent under the registry lock.
+    pub async fn cancel_question(&self, conn_id: &str, question_id: &str) -> bool {
+        let removed = {
+            let mut reg = self.pending_questions.lock().await;
+            if !reg
+                .get(question_id)
+                .is_some_and(|entry| entry.parent_connection_id == conn_id)
+            {
+                return false;
+            }
+            reg.remove(question_id)
+        };
         let Some(entry) = removed else {
-            return;
+            return false;
         };
         if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
         {
@@ -4012,6 +4088,7 @@ impl ConnectionManager {
             )
             .await;
         }
+        true
     }
 
     /// Cancel every pending `ask_user_question` parked on a connection that is
@@ -4023,21 +4100,44 @@ impl ConnectionManager {
     /// listener with a declined outcome; the `QuestionResolved` broadcast clears
     /// the card on every client. No-op when nothing is pending for this parent.
     pub async fn cancel_questions_by_parent(&self, conn_id: &str) {
-        // Remove every entry for this parent under the lock (dropping their
-        // senders unblocks the parked listeners), then emit outside the lock —
-        // the registry mutex is never held across an await.
-        let drained: Vec<String> = {
+        self.cancel_parent_questions(conn_id, |_| true).await;
+    }
+
+    pub async fn cancel_turn_questions_by_parent(&self, conn_id: &str) {
+        self.cancel_parent_questions(conn_id, |e| !e.survives_turn)
+            .await;
+    }
+
+    fn drain_parent_questions(
+        reg: &mut HashMap<String, PendingQuestionEntry>,
+        conn_id: &str,
+        should_cancel: impl Fn(&PendingQuestionEntry) -> bool,
+    ) -> Vec<String> {
+        let ids: Vec<String> = reg
+            .iter()
+            .filter(|(_, e)| e.parent_connection_id == conn_id && should_cancel(e))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ids {
+            reg.remove(id);
+        }
+        ids
+    }
+
+    async fn cancel_parent_questions(
+        &self,
+        conn_id: &str,
+        should_cancel: impl Fn(&PendingQuestionEntry) -> bool,
+    ) {
+        // 按 ID 在锁内移除，锁外广播；注册新题复用相同筛选以原子释放失效槽位。
+        let drained = {
             let mut reg = self.pending_questions.lock().await;
-            let ids: Vec<String> = reg
-                .iter()
-                .filter(|(_, e)| e.parent_connection_id == conn_id)
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in &ids {
-                reg.remove(id);
-            }
-            ids
+            Self::drain_parent_questions(&mut reg, conn_id, should_cancel)
         };
+        self.resolve_drained_questions(conn_id, drained).await;
+    }
+
+    async fn resolve_drained_questions(&self, conn_id: &str, drained: Vec<String>) {
         if drained.is_empty() {
             return;
         }
@@ -4665,7 +4765,7 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             .await
     }
 
-    async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) {
+    async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
         self.manager
             .cancel_question(parent_connection_id, question_id)
             .await
@@ -4675,6 +4775,12 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         self.manager
             .cancel_questions_by_parent(parent_connection_id)
             .await
+    }
+
+    async fn cancel_turn_questions_by_parent(&self, parent_connection_id: &str) {
+        self.manager
+            .cancel_turn_questions_by_parent(parent_connection_id)
+            .await;
     }
 }
 
@@ -10519,6 +10625,414 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn mcp_question_survives_turn_and_user_message_then_answers_original_sender() {
+        for unlimited in [false, true] {
+            let mgr = ConnectionManager::new();
+            mgr.insert_test_connection(
+                "background",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+            let reg = mgr
+                .register_question_with_timeout(
+                    "background",
+                    q_spec(),
+                    Some(Duration::from_secs(300)),
+                )
+                .await
+                .unwrap();
+            let original_expiry = reg.deadline.as_ref().unwrap().expires_at();
+            tokio::time::advance(Duration::from_secs(60)).await;
+            if unlimited {
+                mgr.clear_question_deadline("background", &reg.question_id)
+                    .await;
+            }
+            let state = mgr.get_state("background").await.unwrap();
+            state.write().await.apply_event(&AcpEvent::TurnComplete {
+                session_id: "s".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            });
+            let pending = state.read().await.to_snapshot().pending_question.unwrap();
+            assert_eq!(pending.question_id, reg.question_id);
+            assert!(pending.survives_turn);
+            assert_eq!(
+                pending.expires_at,
+                if unlimited { None } else { original_expiry }
+            );
+            assert!(!reg.deadline.as_ref().unwrap().is_expired());
+            state.write().await.apply_event(&AcpEvent::UserMessage {
+                message_id: "next".into(),
+                blocks: vec![],
+            });
+            assert_eq!(
+                state
+                    .read()
+                    .await
+                    .to_snapshot()
+                    .pending_question
+                    .unwrap()
+                    .question_id,
+                reg.question_id
+            );
+            mgr.answer_question(
+                "background",
+                &reg.question_id,
+                QuestionAnswer {
+                    answers: vec![crate::acp::question::QuestionAnswerItem {
+                        question_id: "qa".into(),
+                        labels: vec!["A".into()],
+                    }],
+                    declined: false,
+                },
+            )
+            .await
+            .unwrap();
+            let outcome = reg.answer_rx.await.unwrap();
+            assert_eq!(outcome.answers[0].selected, vec!["A"]);
+            assert!(state.read().await.pending_question.is_none());
+            let next = mgr
+                .register_question_with_timeout("background", q_spec(), None)
+                .await
+                .unwrap();
+            state
+                .write()
+                .await
+                .apply_event(&AcpEvent::QuestionResolved {
+                    question_id: reg.question_id,
+                });
+            assert_eq!(
+                state
+                    .read()
+                    .await
+                    .pending_question
+                    .as_ref()
+                    .unwrap()
+                    .question_id,
+                next.question_id
+            );
+            mgr.cancel_question("background", &next.question_id).await;
+            assert!(next.answer_rx.await.is_err());
+            assert!(mgr
+                .register_question("background", q_spec())
+                .await
+                .is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_question_receiver_does_not_block_registration() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("orphan", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let first = mgr
+            .register_question_with_timeout("orphan", q_spec(), None)
+            .await
+            .unwrap();
+        let state = mgr.get_state("orphan").await.unwrap();
+        drop(first.answer_rx);
+        let next = mgr
+            .register_question_with_timeout("orphan", q_spec(), None)
+            .await
+            .expect("失效接收端不得占用新题槽位");
+        assert!(!mgr
+            .pending_questions
+            .lock()
+            .await
+            .contains_key(&first.question_id));
+        let snapshot = state.read().await.to_snapshot();
+        assert_eq!(
+            snapshot.pending_question.unwrap().question_id,
+            next.question_id
+        );
+        assert!(state
+            .read()
+            .await
+            .recent_events_retained_after(0)
+            .iter()
+            .any(|e| matches!(
+                &e.payload,
+                AcpEvent::QuestionResolved { question_id } if *question_id == first.question_id
+            )));
+        // 晚到的旧题清理不能擦掉新题，答案仍送到新接收端。
+        state.write().await.apply_event(&AcpEvent::QuestionResolved {
+            question_id: first.question_id,
+        });
+        assert_eq!(
+            state.read().await.to_snapshot().pending_question.unwrap().question_id,
+            next.question_id
+        );
+        mgr.answer_question("orphan", &next.question_id, QuestionAnswer::default())
+            .await
+            .unwrap();
+        assert!(next.answer_rx.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dropped_question_receiver_does_not_prevent_idle_reclamation() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("orphan", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let first = mgr
+            .register_question_with_timeout("orphan", q_spec(), None)
+            .await
+            .unwrap();
+        let state = mgr.get_state("orphan").await.unwrap();
+        drop(first.answer_rx);
+        backdate_last_activity(&mgr, "orphan", 600).await;
+        assert_eq!(mgr.sweep_idle(Duration::from_secs(300)).await, 1);
+        assert!(!mgr
+            .pending_questions
+            .lock()
+            .await
+            .contains_key(&first.question_id));
+        assert!(state.read().await.to_snapshot().pending_question.is_none());
+        assert!(state
+            .read()
+            .await
+            .recent_events_retained_after(0)
+            .iter()
+            .any(|e| matches!(
+                &e.payload,
+                AcpEvent::QuestionResolved { question_id } if *question_id == first.question_id
+            )));
+    }
+
+    #[tokio::test]
+    async fn idle_question_cleanup_preserves_replacement_while_broadcast_is_blocked() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("orphan", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let first = mgr
+            .register_question_with_timeout("orphan", q_spec(), None)
+            .await
+            .unwrap();
+        drop(first.answer_rx);
+        backdate_last_activity(&mgr, "orphan", 600).await;
+        let state = mgr.get_state("orphan").await.unwrap();
+        let state_guard = state.read().await;
+        let sweeping = mgr.sweep_idle(Duration::from_secs(300));
+        tokio::pin!(sweeping);
+        // 读锁允许 idle 检查，但阻塞随后清理事件的写锁。
+        tokio::select! {
+            biased;
+            _ = &mut sweeping => panic!("清理广播应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        assert!(!mgr
+            .pending_questions
+            .try_lock()
+            .expect("广播不得持有注册表锁")
+            .contains_key(&first.question_id));
+        let registering = mgr.register_question_with_timeout("orphan", q_spec(), None);
+        tokio::pin!(registering);
+        tokio::select! {
+            biased;
+            _ = &mut registering => panic!("新题广播应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        {
+            let reg = mgr
+                .pending_questions
+                .try_lock()
+                .expect("新题已注册，广播在锁外等待");
+            assert_eq!(reg.len(), 1);
+            assert!(reg.values().all(|e| !e.sender.is_closed()));
+        }
+        drop(state_guard);
+        let (reclaimed, next) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(sweeping, registering)
+        })
+        .await
+        .expect("清理与注册不得死锁");
+        assert_eq!(reclaimed, 0, "新题必须继续保活");
+        let next = next.unwrap();
+        // 真实广播晚到的旧 resolved：快照及注册表都必须保留新 ID。
+        mgr.resolve_drained_questions("orphan", vec![first.question_id])
+            .await;
+        assert_eq!(
+            state.read().await.to_snapshot().pending_question.unwrap().question_id,
+            next.question_id
+        );
+        assert!(mgr
+            .pending_questions
+            .lock()
+            .await
+            .contains_key(&next.question_id));
+        mgr.answer_question("orphan", &next.question_id, QuestionAnswer::default())
+            .await
+            .unwrap();
+        assert!(next.answer_rx.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn idle_question_claim_rejects_registration_with_cached_connection() {
+        let mgr = ConnectionManager::new();
+        let mut commands = mgr
+            .insert_test_connection_live("race", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let state = mgr.get_state("race").await.unwrap();
+        let cmd_tx = mgr.connections.lock().await["race"].cmd_tx.clone();
+        for _ in 0..4 {
+            cmd_tx.send(ConnectionCommand::Disconnect).await.unwrap();
+        }
+        let registry = mgr.pending_questions.lock().await;
+        let claiming = mgr.disconnect_idle_candidate("race");
+        tokio::pin!(claiming);
+        // 先排队 idle，再排队缓存了 state/emitter 的注册者，固定锁获取顺序。
+        tokio::select! {
+            biased;
+            _ = &mut claiming => panic!("claim 应等待注册表锁"),
+            _ = std::future::ready(()) => {}
+        }
+        let registering = mgr.register_question_with_timeout("race", q_spec(), None);
+        tokio::pin!(registering);
+        // 注册已取得 state/emitter，停在注册表锁前。
+        tokio::select! {
+            biased;
+            _ = &mut registering => panic!("注册应等待注册表锁"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(registry);
+        let connections = mgr.connections.lock().await;
+        // idle 的最后检查已开始，停在连接表锁前。
+        tokio::select! {
+            biased;
+            _ = &mut claiming => panic!("claim 应等待连接表锁"),
+            _ = std::future::ready(()) => {}
+        }
+        let early_registration = tokio::select! {
+            biased;
+            result = &mut registering => Some(result),
+            _ = std::future::ready(()) => None,
+        };
+        drop(connections);
+        // 满命令队列阻塞发送，验证 claim 完成后不持注册表或连接表锁。
+        tokio::select! {
+            biased;
+            _ = &mut claiming => panic!("Disconnect 发送应等待命令队列"),
+            _ = std::future::ready(()) => {}
+        }
+        // 公平锁已把许可交给排队的注册者；先推进它，避免 try_lock 误判。
+        let registered = match early_registration {
+            Some(result) => result,
+            None => tokio::time::timeout(Duration::from_secs(2), &mut registering)
+                .await
+                .expect("claim 后注册不得等待 Disconnect 发送"),
+        };
+        assert!(registered.is_none(), "idle 先 claim 后不得成功返回新题");
+        assert!(mgr.pending_questions.try_lock().is_ok());
+        assert!(!mgr.connections.try_lock().unwrap().contains_key("race"));
+        assert!(commands.recv().await.is_some());
+        let claimed = tokio::time::timeout(Duration::from_secs(2), claiming)
+            .await
+            .expect("claim 与注册不得死锁");
+        assert!(claimed);
+        assert!(mgr.pending_questions.lock().await.is_empty());
+        assert!(state.read().await.to_snapshot().pending_question.is_none());
+        assert!(!state
+            .read()
+            .await
+            .recent_events_retained_after(0)
+            .iter()
+            .any(|e| matches!(e.payload, AcpEvent::QuestionRequest { .. })));
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Disconnect)
+        ));
+    }
+
+    #[tokio::test]
+    async fn idle_question_registration_wins_before_claim_even_before_broadcast() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("race", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let state = mgr.get_state("race").await.unwrap();
+        let state_guard = state.read().await;
+        let registering = mgr.register_question_with_timeout("race", q_spec(), None);
+        tokio::pin!(registering);
+        tokio::select! {
+            biased;
+            _ = &mut registering => panic!("广播应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        assert!(!mgr.disconnect_idle_candidate("race").await);
+        assert!(mgr.connections.try_lock().unwrap().contains_key("race"));
+        drop(state_guard);
+        let registered = registering.await.unwrap();
+        mgr.answer_question("race", &registered.question_id, QuestionAnswer::default())
+            .await
+            .unwrap();
+        assert!(registered.answer_rx.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn sweep_idle_protects_question_until_answered_or_withdrawn() {
+        for withdrawn in [false, true] {
+            let mgr = ConnectionManager::new();
+            mgr.insert_test_connection(
+                "background",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+            let reg = mgr
+                .register_question_with_timeout("background", q_spec(), None)
+                .await
+                .unwrap();
+            backdate_last_activity(&mgr, "background", 600).await;
+            assert_eq!(mgr.sweep_idle(Duration::from_secs(300)).await, 0);
+            if withdrawn {
+                mgr.cancel_question("background", &reg.question_id).await;
+                assert!(reg.answer_rx.await.is_err());
+            } else {
+                mgr.answer_question("background", &reg.question_id, QuestionAnswer::default())
+                    .await
+                    .unwrap();
+                assert!(reg.answer_rx.await.is_ok());
+            }
+            backdate_last_activity(&mgr, "background", 600).await;
+            assert_eq!(mgr.sweep_idle(Duration::from_secs(300)).await, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn native_question_remains_turn_scoped_and_old_events_default_to_native() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("native", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let reg = mgr.register_question("native", q_spec()).await.unwrap();
+        let state = mgr.get_state("native").await.unwrap();
+        assert!(
+            !state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .unwrap()
+                .survives_turn
+        );
+        let old: AcpEvent = serde_json::from_value(serde_json::json!({
+            "type": "question_request", "question_id": "old", "questions": q_spec()
+        }))
+        .unwrap();
+        let mut s = state.write().await;
+        s.apply_event(&old);
+        assert!(!s.pending_question.as_ref().unwrap().survives_turn);
+        s.apply_event(&AcpEvent::UserMessage {
+            message_id: "next".into(),
+            blocks: vec![],
+        });
+        assert!(s.pending_question.is_none());
+        drop(s);
+        mgr.cancel_question("native", &reg.question_id).await;
+        assert!(reg.answer_rx.await.is_err());
+    }
+
     // --- ask_user_question: 倒计时与延长 ---------------------------------
 
     async fn pending_expires_at(
@@ -10729,7 +11243,7 @@ mod tests {
             _ = &mut answering => panic!("广播应等待状态锁"),
             _ = std::future::ready(()) => {}
         }
-        canceling.await;
+        assert!(!canceling.await, "回答已赢得条目，取消不得声称自己移除");
         assert!(!mgr
             .pending_questions
             .lock()
@@ -10749,9 +11263,10 @@ mod tests {
         mgr.insert_test_connection("cqx", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         let reg = mgr.register_question("cqx", q_spec()).await.unwrap();
-        mgr.cancel_question("cqx", &reg.question_id).await;
+        assert!(mgr.cancel_question("cqx", &reg.question_id).await);
+        assert!(!mgr.cancel_question("cqx", &reg.question_id).await);
         // Dropping the sender surfaces to the parked listener as a recv error
-        // (which it renders as a declined outcome).
+        // (which the listener renders as canceled).
         assert!(reg.answer_rx.await.is_err());
         assert!(mgr
             .get_state("cqx")
@@ -10761,6 +11276,64 @@ mod tests {
             .await
             .pending_question
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_question_requires_exact_parent_and_id() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("owner", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let mut reg = mgr.register_question("owner", q_spec()).await.unwrap();
+        assert!(!mgr.cancel_question("other", &reg.question_id).await);
+        assert!(!mgr.cancel_question("owner", "missing-id").await);
+        assert!(matches!(
+            reg.answer_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            mgr.get_state("owner")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .unwrap()
+                .question_id,
+            reg.question_id
+        );
+        assert!(mgr.cancel_question("owner", &reg.question_id).await);
+        assert!(reg.answer_rx.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cancel_question_claim_is_visible_before_its_broadcast_completes() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cq", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let mut reg = mgr.register_question("cq", q_spec()).await.unwrap();
+        let state = mgr.get_state("cq").await.unwrap();
+        let state_guard = state.write().await;
+        let canceling = mgr.cancel_question("cq", &reg.question_id);
+        tokio::pin!(canceling);
+        tokio::select! {
+            biased;
+            _ = &mut canceling => panic!("广播应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        assert!(!mgr.cancel_question("cq", &reg.question_id).await);
+        assert!(mgr
+            .answer_question("cq", &reg.question_id, Default::default())
+            .await
+            .is_ok());
+        assert!(matches!(
+            reg.answer_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        drop(state_guard);
+        assert!(canceling.await);
+        assert!(reg.answer_rx.await.is_err());
+        assert!(state.read().await.pending_question.is_none());
     }
 
     #[tokio::test]
@@ -10922,6 +11495,7 @@ mod tests {
             AcpEvent::QuestionRequest {
                 question_id: "q1".into(),
                 questions: q_spec(),
+                survives_turn: false,
                 expires_at: None,
             },
         )

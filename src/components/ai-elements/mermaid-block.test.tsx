@@ -230,6 +230,72 @@ describe("MermaidBlock toolbar", () => {
   })
 })
 
+describe("MermaidBlock viewport", () => {
+  it.each([{}, { ctrlKey: true }, { metaKey: true }])(
+    "only zooms and cancels wheel scrolling with Ctrl or Meta: %j",
+    async (modifiers) => {
+      renderWithIntl(mermaidFence())
+      const image = await screen.findByRole("img", { name: "Diagram" })
+      const canvas = image.parentElement!
+      const initialWidth = image.style.width
+      const initialTransform = image.style.transform
+      const modified = "ctrlKey" in modifiers || "metaKey" in modifiers
+
+      for (const deltaY of [-100, 100]) {
+        const event = new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY,
+          clientX: 100,
+          clientY: 100,
+          ...modifiers,
+        })
+        fireEvent(canvas, event)
+        expect(event.defaultPrevented).toBe(modified)
+        expect(image.style.width).toBe(
+          modified && deltaY < 0 ? "500px" : initialWidth
+        )
+        expect(image.style.transform).toBe(
+          modified && deltaY < 0 ? "translate(-25px, -25px)" : initialTransform
+        )
+      }
+    }
+  )
+
+  it("keeps zoom buttons, dragging and reset working", async () => {
+    renderWithIntl(mermaidFence())
+    const image = await screen.findByRole("img", { name: "Diagram" })
+    const canvas = image.parentElement!
+    const initialWidth = image.style.width
+    const initialTransform = image.style.transform
+
+    fireEvent.click(screen.getByLabelText("Zoom in"))
+    expect(image.style.width).toBe("500px")
+    fireEvent.click(screen.getByLabelText("Zoom out"))
+    expect(image.style.width).toBe(initialWidth)
+
+    // jsdom lacks PointerEvent; MouseEvent provides the coordinates React reads.
+    for (const [type, coordinate] of [
+      ["pointerdown", 100],
+      ["pointermove", 50],
+      ["pointerup", 50],
+    ] as const) {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        clientX: coordinate,
+        clientY: coordinate,
+        button: 0,
+      })
+      Object.defineProperty(event, "pointerId", { value: 1 })
+      fireEvent(canvas, event)
+    }
+    expect(image.style.transform).toBe("translate(-50px, -50px)")
+    fireEvent.click(screen.getByLabelText("Reset view"))
+    expect(image.style.width).toBe(initialWidth)
+    expect(image.style.transform).toBe(initialTransform)
+  })
+})
+
 describe("MermaidBlock errors", () => {
   it("shows the failure with the source, and retries on demand", async () => {
     mocks.render.mockRejectedValueOnce(new Error("Parse error on line 2"))

@@ -26,7 +26,8 @@ use crate::acp::computer_tools::{
     ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome, ERROR_NO_SUCH_TARGET,
 };
 use crate::acp::delegation::transport::{
-    read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
+    read_frame, write_frame, BrokerAskError, BrokerAskOutcome, BrokerAskRequest,
+    BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
     BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
@@ -524,10 +525,9 @@ impl DelegationListener {
                 // companion's future, closing this socket, which we observe and
                 // tear the pending question down. An invalid token, a gone
                 // connection, or a connection that already has a pending ask
-                // (one-at-a-time) yields a `declined` outcome (the LLM proceeds
-                // with its own judgment) rather than hanging.
+                // (one-at-a-time) yields an unavailable error, not a user decline.
                 let Some(parent_conn_id) = self.ask_target(&req).await else {
-                    write_frame(conn, &ask_declined_response()?).await?;
+                    write_frame(conn, &ask_error_response(BrokerAskError::Unavailable)?).await?;
                     return Ok(());
                 };
                 let cfg = self.question_config.snapshot().await;
@@ -547,7 +547,7 @@ impl DelegationListener {
                         )
                         .await
                     else {
-                        write_frame(conn, &ask_declined_response()?).await?;
+                        write_frame(conn, &ask_error_response(BrokerAskError::Unavailable)?).await?;
                         return Ok(());
                     };
                     let question_id = reg.question_id.clone();
@@ -556,7 +556,7 @@ impl DelegationListener {
                         self.questions
                             .cancel_question(&parent_conn_id, &question_id)
                             .await;
-                        write_frame(conn, &ask_declined_response()?).await?;
+                        write_frame(conn, &ask_error_response(BrokerAskError::Unavailable)?).await?;
                         return Ok(());
                     }
                     match wait_for_question_answer(
@@ -571,6 +571,11 @@ impl DelegationListener {
                     {
                         AskWaitResult::Answered(outcome) => {
                             write_frame(conn, &ask_response(&outcome)?).await?;
+                            return Ok(());
+                        }
+                        AskWaitResult::Cancelled => {
+                            write_frame(conn, &ask_error_response(BrokerAskError::Cancelled)?)
+                                .await?;
                             return Ok(());
                         }
                         AskWaitResult::PeerClosed => return Ok(()),
@@ -883,7 +888,7 @@ impl DelegationListener {
 
     /// Validate the token and resolve the `ask_user_question` target: the
     /// caller's parent connection id. `None` on an invalid token — the LLM gets
-    /// a `declined` outcome (proceed with judgment), and we don't leak which.
+    /// an unavailable error, without leaking which check failed.
     async fn ask_target(&self, req: &BrokerAskRequest) -> Option<String> {
         let entry = self.tokens.lookup(&req.token).await?;
         Some(entry.parent_connection_id)
@@ -1403,6 +1408,13 @@ fn feedback_response(items: &[PendingFeedback]) -> std::io::Result<BrokerRespons
 /// Serialize a resolved [`QuestionOutcome`] into a [`BrokerResponse`] for the
 /// `Ask` arm — the `{ answers, declined }` envelope the companion renders.
 fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
+    ask_outcome_response(BrokerAskOutcome {
+        answer: outcome.clone(),
+        error: None,
+    })
+}
+
+fn ask_outcome_response(outcome: BrokerAskOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1412,6 +1424,7 @@ fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
 
 enum AskWaitResult {
     Answered(QuestionOutcome),
+    Cancelled,
     TimedOut,
     PeerClosed,
 }
@@ -1421,10 +1434,7 @@ fn question_answer_result(
 ) -> AskWaitResult {
     match outcome {
         Ok(outcome) => AskWaitResult::Answered(outcome),
-        Err(_) => AskWaitResult::Answered(QuestionOutcome {
-            answers: Vec::new(),
-            declined: true,
-        }),
+        Err(_) => AskWaitResult::Cancelled,
     }
 }
 
@@ -1508,22 +1518,30 @@ where
 
     if matches!(result, AskWaitResult::TimedOut) {
         // 超时已经就绪时再无阻塞地取一次答案，覆盖 select 与取消之间的最短窗口。
-        if let Ok(outcome) = answer_rx.try_recv() {
-            result = AskWaitResult::Answered(outcome);
+        match answer_rx.try_recv() {
+            Ok(outcome) => result = AskWaitResult::Answered(outcome),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                result = AskWaitResult::Cancelled;
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
         }
     }
 
-    if matches!(result, AskWaitResult::TimedOut | AskWaitResult::PeerClosed) {
-        questions
+    if matches!(
+        result,
+        AskWaitResult::TimedOut | AskWaitResult::PeerClosed | AskWaitResult::Cancelled
+    ) {
+        let removed = questions
             .cancel_question(parent_connection_id, &question_id)
             .await;
-    }
-
-    if matches!(result, AskWaitResult::TimedOut) {
-        // 取消操作与回答共用后端注册表锁；取消返回后再 drain 一次，确保先赢得
-        // 注册表条目的用户回答不会被超时分支静默丢弃。
-        if let Ok(outcome) = answer_rx.try_recv() {
-            result = AskWaitResult::Answered(outcome);
+        if matches!(result, AskWaitResult::TimedOut) {
+            // 回答在同一注册表锁内投递，先取实际答案；只有自己撤回才算正常超时。
+            // 外部撤回可能仍在广播并持有 sender，因此 Empty 和 Closed 都是取消。
+            match answer_rx.try_recv() {
+                Ok(outcome) => result = AskWaitResult::Answered(outcome),
+                Err(_) if !removed => result = AskWaitResult::Cancelled,
+                Err(_) => {}
+            }
         }
     }
 
@@ -1740,13 +1758,14 @@ fn authoring_response(outcome: AuthoringOutcome) -> std::io::Result<BrokerRespon
     })
 }
 
-/// The `declined` outcome — used when the token is invalid, the connection is
-/// gone, or the answer one-shot was dropped without a response. The LLM reads it
-/// as "the user didn't answer; proceed with your own judgment".
-fn ask_declined_response() -> std::io::Result<BrokerResponse> {
-    ask_response(&QuestionOutcome {
-        answers: Vec::new(),
-        declined: true,
+/// 异常未答保留空答案与非拒答标志，由 companion 渲染为工具错误。
+fn ask_error_response(error: BrokerAskError) -> std::io::Result<BrokerResponse> {
+    ask_outcome_response(BrokerAskOutcome {
+        answer: QuestionOutcome {
+            answers: Vec::new(),
+            declined: false,
+        },
+        error: Some(error),
     })
 }
 
@@ -1996,6 +2015,12 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct QuestionCancelGate {
+        entered: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+    }
+
     /// In-memory question stub. `register_question` mints a sequential id,
     /// stashes the answer sender (so a test can resolve it via `answer`), and
     /// records the (parent_conn, questions); `cancel_question` removes the
@@ -2003,14 +2028,16 @@ mod tests {
     /// driven without a real `ConnectionManager`.
     #[derive(Default)]
     struct StubQuestion {
-        pending: tokio::sync::Mutex<HashMap<String, oneshot::Sender<QuestionOutcome>>>,
+        pending: tokio::sync::Mutex<
+            HashMap<String, (String, oneshot::Sender<QuestionOutcome>)>,
+        >,
         registered: tokio::sync::Mutex<
             Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
         >,
         canceled: tokio::sync::Mutex<Vec<String>>,
         /// 被清空倒计时（最终转为无限等待）的提问 id。
         cleared: tokio::sync::Mutex<Vec<String>>,
-        answer_during_cancel: tokio::sync::Mutex<Option<QuestionOutcome>>,
+        cancel_gate: tokio::sync::Mutex<Option<Arc<QuestionCancelGate>>>,
     }
     #[async_trait]
     impl SessionQuestionAccess for StubQuestion {
@@ -2019,9 +2046,14 @@ mod tests {
             parent_connection_id: &str,
             questions: Vec<crate::acp::question::QuestionSpec>,
         ) -> Option<crate::acp::question::RegisteredQuestion> {
+            let mut pending = self.pending.lock().await;
+            // 模拟生产注册表的同连接单问题占槽限制。
+            if pending.values().any(|(parent, _)| parent == parent_connection_id) {
+                return None;
+            }
             let question_id = format!("q-{}", self.registered.lock().await.len() + 1);
             let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(question_id.clone(), tx);
+            pending.insert(question_id.clone(), (parent_connection_id.to_string(), tx));
             self.registered
                 .lock()
                 .await
@@ -2043,20 +2075,32 @@ mod tests {
             registered.deadline = timeout.map(crate::acp::question::QuestionDeadline::from_now);
             Some(registered)
         }
-        async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
-            if let Some(outcome) = self.answer_during_cancel.lock().await.take() {
-                if let Some(tx) = self.pending.lock().await.remove(question_id) {
-                    let _ = tx.send(outcome);
-                }
-            } else {
-                self.pending.lock().await.remove(question_id);
+        async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
+            // 卡在第一次 drain 之后、获取注册表锁之前，交错由测试显式放行。
+            let gate = self.cancel_gate.lock().await.take();
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.resume.notified().await;
             }
+            let removed = {
+                let mut pending = self.pending.lock().await;
+                if pending
+                    .get(question_id)
+                    .is_some_and(|(parent, _)| parent == parent_connection_id)
+                {
+                    pending.remove(question_id)
+                } else {
+                    None
+                }
+            };
             self.canceled.lock().await.push(question_id.to_string());
+            removed.is_some()
         }
-        async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {
-            // Not exercised by the listener unit tests (the teardown sweep lives
-            // in connection.rs); drop all parked senders to satisfy the trait.
-            self.pending.lock().await.clear();
+        async fn cancel_questions_by_parent(&self, parent_connection_id: &str) {
+            self.pending
+                .lock()
+                .await
+                .retain(|_, (parent, _)| parent != parent_connection_id);
         }
         async fn clear_question_deadline(&self, _parent_connection_id: &str, question_id: &str) {
             self.cleared.lock().await.push(question_id.to_string());
@@ -2064,13 +2108,15 @@ mod tests {
     }
     impl StubQuestion {
         async fn answer(&self, question_id: &str, outcome: QuestionOutcome) {
-            if let Some(tx) = self.pending.lock().await.remove(question_id) {
+            if let Some((_, tx)) = self.pending.lock().await.remove(question_id) {
                 let _ = tx.send(outcome);
             }
         }
 
-        async fn answer_during_cancel(&self, outcome: QuestionOutcome) {
-            *self.answer_during_cancel.lock().await = Some(outcome);
+        async fn pause_cancel(&self) -> Arc<QuestionCancelGate> {
+            let gate = Arc::new(QuestionCancelGate::default());
+            *self.cancel_gate.lock().await = Some(gate.clone());
+            gate
         }
     }
 
@@ -3773,10 +3819,9 @@ mod tests {
         assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1".to_string()]);
     }
 
-    /// An invalid token never registers a question and returns a `declined`
-    /// outcome (the LLM proceeds with its own judgment).
+    /// 无效 token 没有用户答案，不能冒充用户拒答。
     #[tokio::test]
-    async fn ask_invalid_token_declined() {
+    async fn ask_invalid_token_unavailable() {
         let questions = Arc::new(StubQuestion::default());
         let listener = make_question_listener(Arc::new(TokenRegistry::default()), questions.clone());
         let (mut client, mut server) = duplex(8 * 1024);
@@ -3788,8 +3833,107 @@ mod tests {
             .unwrap();
         let resp: BrokerResponse = read_frame(&mut client).await.unwrap();
         server_task.await.unwrap();
-        assert_eq!(resp.outcome["declined"], true);
+        assert_ask_error(&resp, "unavailable");
         assert!(questions.registered.lock().await.is_empty());
+    }
+
+    fn assert_ask_error(response: &BrokerResponse, error: &str) {
+        assert_eq!(response.outcome["error"], error);
+        assert_eq!(response.outcome["declined"], false);
+        assert_eq!(response.outcome["answers"], serde_json::json!([]));
+        let rendered = crate::acp::delegation::companion::render_ask_result(&response.outcome);
+        assert_eq!(rendered["isError"], true);
+        assert_eq!(rendered["structuredContent"]["error"], error);
+        let hint = rendered["structuredContent"]["hint"].as_str().unwrap();
+        assert!(hint.contains("No user answer was received"));
+        assert!(hint.contains("Do not infer an answer, choose defaults"));
+        assert!(hint.contains("or continue steps that depend on this answer"));
+        assert!(!hint.contains("Proceed"));
+        assert!(!hint.contains("reasonable defaults"));
+        assert_eq!(rendered["content"][0]["text"], hint);
+    }
+
+    #[tokio::test]
+    async fn ask_closed_answer_channel_is_cancelled_without_retry_or_default() {
+        tokio::time::pause();
+        for final_wait in [false, true] {
+            let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+                retry_count: if final_wait { 0 } else { 3 },
+                auto_select_first_on_timeout: false,
+                ..default_config()
+            })
+            .await;
+            wait_for_question_registration(&questions, 1).await;
+            if final_wait {
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_secs(601)).await;
+                for _ in 0..8 {
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(questions.cleared.lock().await.as_slice(), &["q-1"]);
+            }
+            questions.pending.lock().await.clear();
+            let response = read_paused_response(&mut client).await;
+            assert_ask_error(&response, "cancelled");
+            assert_eq!(questions.registered.lock().await.len(), 1);
+            assert!(questions.pending.lock().await.is_empty());
+            assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_occupied_registration_is_unavailable_and_preserves_first_question() {
+        let (listener, questions, mut first) = start_ask_round_trip(QuestionConfig {
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        let (mut second, mut server) = duplex(8 * 1024);
+        let serving = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        write_frame(&mut second, &ask_msg("tok")).await.unwrap();
+        let response: BrokerResponse = tokio::time::timeout(
+            Duration::from_secs(1),
+            read_frame(&mut second),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        serving.await.unwrap();
+        assert_ask_error(&response, "unavailable");
+        assert_eq!(questions.registered.lock().await.len(), 1);
+        assert!(questions.canceled.lock().await.is_empty());
+        assert!(questions.pending.lock().await.contains_key("q-1"));
+        questions.answer("q-1", user_answer_outcome()).await;
+        let response: BrokerResponse = read_frame(&mut first).await.unwrap();
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+    }
+
+    #[tokio::test]
+    async fn ask_explicit_user_decline_keeps_existing_semantics() {
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        questions
+            .answer("q-1", QuestionOutcome { answers: vec![], declined: true })
+            .await;
+        let response: BrokerResponse = read_frame(&mut client).await.unwrap();
+        assert_eq!(
+            response.outcome,
+            serde_json::json!({"answers": [], "declined": true})
+        );
+        let rendered = crate::acp::delegation::companion::render_ask_result(&response.outcome);
+        assert_eq!(rendered["isError"], false);
+        assert_eq!(rendered["structuredContent"]["declined"], true);
+        assert!(rendered["structuredContent"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Proceed"));
     }
 
     fn default_config() -> QuestionConfig {
@@ -3914,9 +4058,11 @@ mod tests {
         })
         .await;
         wait_for_question_registration(&questions, 1).await;
-        questions.answer_during_cancel(user_answer_outcome()).await;
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(60)).await;
+        let gate = questions.pause_cancel().await;
+        tokio::time::advance(Duration::from_secs(61)).await;
+        gate.entered.notified().await;
+        questions.answer("q-1", user_answer_outcome()).await;
+        gate.resume.notify_one();
 
         let response = read_paused_response(&mut client).await;
         assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
@@ -3926,20 +4072,85 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn ask_external_withdrawal_during_timeout_cancel_never_retries_or_defaults() {
+        tokio::time::pause();
+        for (retry_count, auto_select) in [(3, false), (3, true), (0, true)] {
+            for hold_sender in [false, true] {
+                let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+                    wait_timeout_minutes: 1,
+                    retry_count,
+                    auto_select_first_on_timeout: auto_select,
+                    ..default_config()
+                })
+                .await;
+                wait_for_question_registration(&questions, 1).await;
+                let gate = questions.pause_cancel().await;
+                tokio::time::advance(Duration::from_secs(61)).await;
+                gate.entered.notified().await;
+                // 模拟外部撤回赢得注册表锁；持有 sender 还覆盖异步广播尚未完成。
+                let (_, sender) = questions.pending.lock().await.remove("q-1").unwrap();
+                let held_sender = if hold_sender {
+                    Some(sender)
+                } else {
+                    drop(sender);
+                    None
+                };
+                gate.resume.notify_one();
+
+                let response = read_paused_response(&mut client).await;
+                assert_ask_error(&response, "cancelled");
+                assert_eq!(questions.registered.lock().await.len(), 1);
+                assert!(questions.pending.lock().await.is_empty());
+                assert!(questions.cleared.lock().await.is_empty());
+                drop(held_sender);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_normal_deadline_cancel_still_retries_then_selects_when_enabled() {
+        tokio::time::pause();
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            wait_timeout_minutes: 1,
+            retry_count: 1,
+            ..default_config()
+        })
+        .await;
+        for attempt in 1..=2 {
+            wait_for_question_registration(&questions, attempt).await;
+            let gate = questions.pause_cancel().await;
+            tokio::time::advance(Duration::from_secs(61)).await;
+            gate.entered.notified().await;
+            assert!(questions
+                .pending
+                .lock()
+                .await
+                .contains_key(&format!("q-{attempt}")));
+            gate.resume.notify_one();
+        }
+        let response = read_paused_response(&mut client).await;
+        assert_eq!(questions.registered.lock().await.len(), 2);
+        assert!(questions.pending.lock().await.is_empty());
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Incremental");
+        assert!(response.outcome.get("error").is_none());
+    }
+
     /// 用户在倒计时中途延长后：原期限到点不得超时，新期限到点才超时。
     #[tokio::test]
     async fn question_deadline_extension_defers_the_timeout() {
         let stub = Arc::new(StubQuestion::default());
         let questions: Arc<dyn SessionQuestionAccess> = stub.clone();
         // 初始期限 150ms；80ms 时追加 400ms，新期限约为注册后 550ms。
-        let deadline =
-            crate::acp::question::QuestionDeadline::from_now(Duration::from_millis(150));
-        let (_answer_tx, answer_rx) = oneshot::channel();
-        let reg = crate::acp::question::RegisteredQuestion {
-            question_id: "q-ext".into(),
-            answer_rx,
-            deadline: Some(deadline.clone()),
-        };
+        let reg = stub
+            .register_question_with_timeout(
+                "parent-conn",
+                Vec::new(),
+                Some(Duration::from_millis(150)),
+            )
+            .await
+            .unwrap();
+        let deadline = reg.deadline.clone().unwrap();
         let (_client, mut server) = duplex(64);
         let extender = deadline.clone();
         tokio::spawn(async move {
@@ -3967,7 +4178,7 @@ mod tests {
         // 走的是正常超时清理路径（取消注册表条目），不是无限等待。
         assert_eq!(
             stub.canceled.lock().await.as_slice(),
-            &["q-ext".to_string()]
+            &["q-1".to_string()]
         );
     }
 
@@ -4022,6 +4233,45 @@ mod tests {
         let response = read_paused_response(&mut client).await;
         drop(listener);
         assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+    }
+
+    #[tokio::test]
+    async fn ask_manual_policy_retries_three_times_then_keeps_receiver() {
+        tokio::time::pause();
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        for expected in 2..=4 {
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(601)).await;
+            wait_for_question_registration(&questions, expected).await;
+        }
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(601)).await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(3600),
+                read_frame::<_, BrokerResponse>(&mut client),
+            )
+            .await
+            .is_err(),
+            "最终期限耗尽后仍不能生成响应"
+        );
+        assert_eq!(questions.registered.lock().await.len(), 4);
+        assert_eq!(
+            questions.canceled.lock().await.as_slice(),
+            &["q-1", "q-2", "q-3"]
+        );
+        assert_eq!(questions.cleared.lock().await.as_slice(), &["q-4"]);
+        assert!(questions.pending.lock().await.contains_key("q-4"));
+        questions.answer("q-4", user_answer_outcome()).await;
+        let response = read_paused_response(&mut client).await;
+        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
+        assert!(response.outcome.get("error").is_none());
+        assert!(questions.pending.lock().await.is_empty());
     }
 
     #[tokio::test]

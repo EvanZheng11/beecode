@@ -177,8 +177,16 @@ impl SessionQuestionAccess for StubQuestions {
             deadline: None,
         })
     }
-    async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
-        self.pending.lock().await.remove(question_id);
+    async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
+        let mut pending = self.pending.lock().await;
+        if pending
+            .get(question_id)
+            .is_some_and(|(parent, _)| parent == parent_connection_id)
+        {
+            pending.remove(question_id).is_some()
+        } else {
+            false
+        }
     }
     async fn cancel_questions_by_parent(&self, parent_connection_id: &str) {
         self.pending
@@ -623,7 +631,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
                 .register_question(parent_connection_id, questions)
                 .await
         }
-        async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) {
+        async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
             self.inner
                 .cancel_question(parent_connection_id, question_id)
                 .await

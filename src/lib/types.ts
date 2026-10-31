@@ -1700,6 +1700,8 @@ export interface PendingQuestionState {
   question_id: string
   questions: QuestionSpec[]
   created_at: string
+  /** MCP 请求可跨前台回合等待；旧快照默认 false。 */
+  survives_turn?: boolean
   /** 后端等待用户回答的截止时间（RFC3339 UTC）。原生 agent 的提问没有此字段，
    *  前端据此只对 MCP ask_user_question 显示倒计时和「延长」入口。 */
   expires_at?: string | null
@@ -3427,6 +3429,7 @@ export type AcpEvent =
       type: "question_request"
       question_id: string
       questions: QuestionSpec[]
+      survives_turn?: boolean
       /** 后端等待截止时间（RFC3339 UTC）。没有期限的原生提问省略此字段。 */
       expires_at?: string | null
     }

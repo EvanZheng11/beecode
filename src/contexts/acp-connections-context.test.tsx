@@ -333,6 +333,7 @@ const h = vi.hoisted(() => {
     acpConnect: vi.fn(),
     acpDisconnect: vi.fn(),
     acpExtendQuestion: vi.fn(),
+    acpAnswerQuestion: vi.fn(),
     acpGetSessionSnapshot: vi.fn(),
     acpTouchConnection: vi.fn(),
     acpCancel: vi.fn(),
@@ -424,6 +425,7 @@ vi.mock("@/lib/api", () => ({
   acpConnect: h.acpConnect,
   acpDisconnect: h.acpDisconnect,
   acpExtendQuestion: h.acpExtendQuestion,
+  acpAnswerQuestion: h.acpAnswerQuestion,
   acpGetSessionSnapshot: h.acpGetSessionSnapshot,
   acpPrompt: vi.fn(),
   acpSetMode: vi.fn(),
@@ -474,6 +476,8 @@ beforeEach(() => {
   h.acpFindConnectionForConversation.mockReset()
   h.acpConnect.mockReset()
   h.acpDisconnect.mockReset()
+  h.acpAnswerQuestion.mockReset()
+  h.acpAnswerQuestion.mockResolvedValue(undefined)
   h.acpExtendQuestion.mockReset()
   h.acpExtendQuestion.mockResolvedValue("2026-01-01T00:15:00.000Z")
   h.acpGetSessionSnapshot.mockReset()
@@ -9214,6 +9218,105 @@ describe("AcpConnectionsProvider 提问期限", () => {
     })
     return latestAttachHandlers()
   }
+
+  it("MCP 问题在第 60 秒结束回合、收到新消息和快照后仍可回答，旧 ID 不清新题", async () => {
+    const handlers = await connectOwner()
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"))
+      let seq = 0
+      const emit = (payload: Record<string, unknown>) =>
+        emitAcpEvent(handlers, {
+          seq: ++seq,
+          connection_id: "spawned-conn",
+          ...payload,
+        } as EventEnvelope)
+      emit({ type: "status_changed", status: "prompting" })
+      emit({
+        type: "question_request",
+        question_id: "q-background",
+        questions: [],
+        survives_turn: true,
+        expires_at: "2026-01-01T00:05:00Z",
+      })
+      vi.setSystemTime(new Date("2026-01-01T00:01:00Z"))
+      emit({
+        type: "turn_complete",
+        session_id: "sess-1",
+        stop_reason: "end_turn",
+        agent_type: "claude_code",
+      })
+      const pending = h.store!.getConnection(TAB)!.pendingAskQuestion
+      expect(pending?.question_id).toBe("q-background")
+      expect(Date.parse(pending!.expires_at!) - Date.now()).toBe(240_000)
+      emit({ type: "user_message", message_id: "next", blocks: [] })
+      emit({ type: "status_changed", status: "prompting" })
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toEqual(pending)
+      h.denormalizeSnapshot.mockReturnValue({
+        ...snapshotBase(),
+        pendingAskQuestion: pending,
+        eventSeq: ++seq,
+      })
+      hydrateSnapshot(handlers, { event_seq: seq } as LiveSessionSnapshot)
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toEqual(pending)
+      await act(async () => {
+        await h.actions!.answerQuestion(TAB, "q-background", {
+          answers: [],
+          declined: true,
+        })
+      })
+      expect(h.acpAnswerQuestion).toHaveBeenCalledWith(
+        "spawned-conn",
+        "q-background",
+        { answers: [], declined: true }
+      )
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toBeNull()
+      emit({
+        type: "question_request",
+        question_id: "q-new",
+        questions: [],
+        survives_turn: true,
+      })
+      emit({ type: "question_resolved", question_id: "q-background" })
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion?.question_id).toBe(
+        "q-new"
+      )
+      // 最终无限人工等待也必须跨回合；Disconnect 仍立即清理。
+      emit({ type: "status_changed", status: "prompting" })
+      emit({ type: "status_changed", status: "connected" })
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion?.question_id).toBe(
+        "q-new"
+      )
+      emit({ type: "status_changed", status: "disconnected" })
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("旧事件和原生问题仍随回合结束清理", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "native",
+      questions: [],
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "connected",
+    })
+    expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toBeNull()
+  })
 
   it("question_request 带上期限，deadline_changed 更新并可用 null 清空", async () => {
     const handlers = await connectOwner()

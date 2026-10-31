@@ -14901,26 +14901,9 @@ async fn run_conversation_loop(
                                 },
                             )
                             .await;
-                            // `TurnComplete` has just taken any
-                            // `ask_user_question` card off every client, so
-                            // decline a question still parked on this
-                            // connection: nothing can answer it now, and while
-                            // it holds the one-per-connection slot every later
-                            // ask is refused. Usually there is none — an agent
-                            // blocked in an ask cannot end its turn. Claude Code
-                            // 2.1.286 (claude-agent-acp 0.85.0) is what makes it
-                            // reachable: a foreground MCP call can move to the
-                            // background and keep running past the end of the
-                            // turn — after a steer (the Steer arm below declines
-                            // first), or after a timeout when the user's
-                            // environment sets `CLAUDE_AUTO_BACKGROUND_TASKS`.
-                            // Awaited inline, like the Cancel reclaim, so it is
-                            // scoped to the turn that just ended. Plan approvals
-                            // are not swept: each is a request the agent itself
-                            // blocks on, which no adapter moves to the
-                            // background.
+                            // 按注册表来源清理原生问题，不依赖可能已被新消息清空的快照。
                             if let Some(inj) = delegation_injection {
-                                inj.questions.cancel_questions_by_parent(conn_id).await;
+                                inj.questions.cancel_turn_questions_by_parent(conn_id).await;
                             }
                             // Cascade-cancel any pending delegations whenever
                             // the parent's turn ended for a reason other than
@@ -15105,12 +15088,8 @@ async fn run_conversation_loop(
                                     // abandon the ask and the card closed. From
                                     // 2.1.286 (claude-agent-acp 0.85.0) the CLI
                                     // moves the call to the background instead
-                                    // and nothing cancels it, so the card would
-                                    // stay up only until this turn ends (see
-                                    // the turn exit's reclaim) and every new ask
-                                    // until then would be refused, the slot
-                                    // still taken. Declining it here keeps the
-                                    // old meaning — redirecting the agent drops
+                                    // and nothing cancels it. Declining it here
+                                    // keeps the old meaning — redirecting the agent drops
                                     // its question — and the agent reads the
                                     // decline beside the steer.
                                     if let Some(inj) = delegation_injection {
@@ -15495,6 +15474,10 @@ async fn run_conversation_loop(
                 // handler above for rationale.
                 if let Some(inj) = delegation_injection {
                     inj.broker.cancel_by_parent_turn(conn_id).await;
+                    // 前台回合已结束，后台 MCP 仍可能在等答案；Stop 同样撤回它。
+                    if !closed_agent_turn {
+                        inj.questions.cancel_questions_by_parent(conn_id).await;
+                    }
                 }
                 if closed_agent_turn {
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
@@ -26283,7 +26266,9 @@ mod tests {
     /// answers any — only a withdrawal can settle them.
     #[derive(Default)]
     struct UnansweredQuestions {
-        pending: tokio::sync::Mutex<Vec<oneshot::Sender<crate::acp::question::QuestionOutcome>>>,
+        pending: tokio::sync::Mutex<
+            HashMap<(String, String), oneshot::Sender<crate::acp::question::QuestionOutcome>>,
+        >,
         canceled: std::sync::Mutex<Vec<String>>,
     }
 
@@ -26291,12 +26276,15 @@ mod tests {
     impl crate::acp::question::SessionQuestionAccess for UnansweredQuestions {
         async fn register_question(
             &self,
-            _parent_connection_id: &str,
+            parent_connection_id: &str,
             _questions: Vec<crate::acp::question::QuestionSpec>,
         ) -> Option<crate::acp::question::RegisteredQuestion> {
             let (tx, rx) = oneshot::channel();
             // Kept alive, so the answer channel stays open and unresolved.
-            self.pending.lock().await.push(tx);
+            self.pending.lock().await.insert(
+                (parent_connection_id.to_string(), "q-1".to_string()),
+                tx,
+            );
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: "q-1".to_string(),
                 answer_rx: rx,
@@ -26304,8 +26292,13 @@ mod tests {
             })
         }
 
-        async fn cancel_question(&self, _parent_connection_id: &str, question_id: &str) {
+        async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
             self.canceled.lock().unwrap().push(question_id.to_string());
+            self.pending
+                .lock()
+                .await
+                .remove(&(parent_connection_id.to_string(), question_id.to_string()))
+                .is_some()
         }
 
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
@@ -42300,7 +42293,9 @@ mod tests {
             None
         }
 
-        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) {}
+        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) -> bool {
+            false
+        }
 
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
     }
@@ -43532,7 +43527,9 @@ mod tests {
             None
         }
 
-        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) {}
+        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) -> bool {
+            false
+        }
 
         async fn cancel_questions_by_parent(&self, parent_connection_id: &str) {
             self.questions
@@ -44801,6 +44798,12 @@ mod tests {
         const CONN: &'static str = "conn-claude";
 
         async fn start() -> Self {
+            Self::start_with_manager(None).await
+        }
+
+        async fn start_with_manager(
+            manager: Option<Arc<crate::acp::manager::ConnectionManager>>,
+        ) -> Self {
             use agent_client_protocol::schema::v1::PromptResponse;
 
             let asks = Arc::new(RecordingAsks::default());
@@ -44860,12 +44863,29 @@ mod tests {
                 "win".to_string(),
                 None,
             )));
+            let state = if let Some(mgr) = &manager {
+                mgr.insert_test_connection(
+                    Self::CONN,
+                    AgentType::ClaudeCode,
+                    None,
+                    EventEmitter::Noop,
+                )
+                .await;
+                mgr.get_state(Self::CONN).await.unwrap()
+            } else {
+                state
+            };
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
+            let questions: Arc<dyn crate::acp::question::SessionQuestionAccess> =
+                if let Some(manager) = manager {
+                    Arc::new(crate::acp::manager::ConnectionManagerQuestionLookup { manager })
+                } else {
+                    asks.clone()
+                };
             let injection = DelegationInjection {
-                questions: Arc::clone(&asks)
-                    as Arc<dyn crate::acp::question::SessionQuestionAccess>,
+                questions,
                 plan_approvals: Arc::clone(&asks)
                     as Arc<dyn crate::acp::plan_approval::SessionPlanApprovalAccess>,
                 ..test_delegation_injection(
@@ -44969,21 +44989,6 @@ mod tests {
                 .count()
         }
 
-        /// Wait — bounded — until `count` question sweeps have run. The turn
-        /// end's sweep follows `TurnComplete`, so seeing that event does not
-        /// yet mean the sweep ran.
-        async fn until_question_sweeps(&self, count: usize) {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-            while self.question_sweeps() < count {
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "timed out waiting for {count} question sweeps; saw {}",
-                    self.question_sweeps()
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        }
-
         async fn until(&mut self, what: &str, matches: impl Fn(&AcpEvent) -> bool) {
             let deadline = std::time::Duration::from_secs(10);
             loop {
@@ -45024,19 +45029,19 @@ mod tests {
             "the question was declined before the steer reached the agent"
         );
 
-        // The turn's own end sweeps again; with nothing parked, a no-op.
         claude.respond.notify_one();
-        claude.until_question_sweeps(2).await;
+        claude
+            .until("the turn end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        assert_eq!(claude.question_sweeps(), 1);
         claude.shutdown().await;
     }
 
-    /// A turn that ends sweeps a question still parked on its connection:
-    /// `TurnComplete` took the card off every client, so nothing could answer it,
-    /// and while it stayed parked every later ask on the connection would be
-    /// refused. Reachable since Claude Code 2.1.286, whose MCP calls can move to
-    /// the background and outlive their turn.
+    /// 正常前台回合结束不能批量撤回仍在后台等待的 MCP 请求。
     #[tokio::test]
-    async fn a_turn_end_sweeps_the_questions_parked_on_its_connection() {
+    async fn a_turn_end_does_not_sweep_background_questions() {
         let mut claude = AskSweepLoop::start().await;
         claude.open_turn("hello").await;
         assert_eq!(
@@ -45051,11 +45056,165 @@ mod tests {
                 matches!(e, AcpEvent::TurnComplete { .. })
             })
             .await;
-        claude.until_question_sweeps(1).await;
+        assert_eq!(claude.question_sweeps(), 0);
         assert!(
             claude.sweeps_at_steer.lock().unwrap().is_empty(),
             "no steer was sent"
         );
+        claude.shutdown().await;
+    }
+
+    fn background_question_specs() -> Vec<crate::acp::question::QuestionSpec> {
+        vec![crate::acp::question::QuestionSpec {
+            id: "choice".into(),
+            question: "Which approach?".into(),
+            header: "Choice".into(),
+            multi_select: false,
+            options: vec![],
+            is_secret: false,
+        }]
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn background_mcp_answer_channel_survives_real_turn_end_and_idle_stop_reclaims_next() {
+        let manager = Arc::new(crate::acp::manager::ConnectionManager::new());
+        let mut claude = AskSweepLoop::start_with_manager(Some(manager.clone())).await;
+        claude.open_turn("ask then run in background").await;
+        let reg = manager
+            .register_question_with_timeout(
+                AskSweepLoop::CONN,
+                background_question_specs(),
+                Some(std::time::Duration::from_secs(300)),
+            )
+            .await
+            .unwrap();
+        let expires_at = reg.deadline.as_ref().unwrap().expires_at();
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        claude.respond.notify_one();
+        claude
+            .until("normal turn end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        let pending = claude
+            .state
+            .read()
+            .await
+            .to_snapshot()
+            .pending_question
+            .unwrap();
+        assert_eq!(pending.question_id, reg.question_id);
+        assert_eq!(pending.expires_at, expires_at);
+        assert!(!reg.deadline.as_ref().unwrap().is_expired());
+        manager
+            .answer_question(
+                AskSweepLoop::CONN,
+                &reg.question_id,
+                crate::acp::question::QuestionAnswer {
+                    answers: vec![crate::acp::question::QuestionAnswerItem {
+                        question_id: "choice".into(),
+                        labels: vec!["SQLite".into()],
+                    }],
+                    declined: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reg.answer_rx.await.unwrap().answers[0].selected,
+            vec!["SQLite"]
+        );
+        let next = manager
+            .register_question_with_timeout(AskSweepLoop::CONN, background_question_specs(), None)
+            .await
+            .unwrap();
+        claude.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+        claude.until("idle Stop resolves next question", |e| matches!(e, AcpEvent::QuestionResolved { question_id } if *question_id == next.question_id)).await;
+        assert!(next.answer_rx.await.is_err());
+        assert!(claude.state.read().await.pending_question.is_none());
+        assert!(manager
+            .register_question_with_timeout(AskSweepLoop::CONN, background_question_specs(), None)
+            .await
+            .is_some());
+        manager.cancel_questions_by_parent(AskSweepLoop::CONN).await;
+        claude.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn active_stop_and_steer_cancel_mcp_answer_channels_and_release_the_slot() {
+        for steer in [false, true] {
+            let manager = Arc::new(crate::acp::manager::ConnectionManager::new());
+            let mut claude = AskSweepLoop::start_with_manager(Some(manager.clone())).await;
+            claude.open_turn("ask me").await;
+            let reg = manager
+                .register_question_with_timeout(
+                    AskSweepLoop::CONN,
+                    background_question_specs(),
+                    Some(std::time::Duration::from_secs(300)),
+                )
+                .await
+                .unwrap();
+            if steer {
+                assert!(matches!(
+                    claude.steer("never mind").await,
+                    Ok(SteerOutcome::Injected)
+                ));
+            } else {
+                claude.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+            }
+            claude
+                .until("question cancellation", |e| {
+                    matches!(e, AcpEvent::QuestionResolved { .. })
+                })
+                .await;
+            assert!(reg.answer_rx.await.is_err());
+            assert!(claude.state.read().await.pending_question.is_none());
+            let next = manager
+                .register_question_with_timeout(
+                    AskSweepLoop::CONN,
+                    background_question_specs(),
+                    None,
+                )
+                .await
+                .unwrap();
+            manager
+                .cancel_question(AskSweepLoop::CONN, &next.question_id)
+                .await;
+            claude.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn native_question_turn_end_cancels_sender_and_releases_the_slot() {
+        let manager = Arc::new(crate::acp::manager::ConnectionManager::new());
+        let mut claude = AskSweepLoop::start_with_manager(Some(manager.clone())).await;
+        claude.open_turn("native question").await;
+        let reg = manager
+            .register_question(AskSweepLoop::CONN, background_question_specs())
+            .await
+            .unwrap();
+        // 即使新消息先清空原生快照，回合结束仍须清掉注册表中的答案通道。
+        claude
+            .state
+            .write()
+            .await
+            .apply_event(&AcpEvent::UserMessage {
+                message_id: "next".into(),
+                blocks: vec![],
+            });
+        claude.respond.notify_one();
+        claude
+            .until("normal turn end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        assert!(reg.answer_rx.await.is_err());
+        assert!(claude.state.read().await.pending_question.is_none());
+        assert!(manager
+            .register_question(AskSweepLoop::CONN, background_question_specs())
+            .await
+            .is_some());
+        manager.cancel_questions_by_parent(AskSweepLoop::CONN).await;
         claude.shutdown().await;
     }
 
@@ -47151,7 +47310,9 @@ mod tests {
                 deadline: None,
             })
         }
-        async fn cancel_question(&self, _connection_id: &str, _question_id: &str) {}
+        async fn cancel_question(&self, _connection_id: &str, _question_id: &str) -> bool {
+            false
+        }
         async fn cancel_questions_by_parent(&self, _connection_id: &str) {}
     }
 
@@ -47481,7 +47642,9 @@ mod tests {
             })
         }
 
-        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) {}
+        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) -> bool {
+            false
+        }
 
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
     }

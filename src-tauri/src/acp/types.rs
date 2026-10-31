@@ -870,6 +870,9 @@ pub enum AcpEvent {
     QuestionRequest {
         question_id: String,
         questions: Vec<crate::acp::question::QuestionSpec>,
+        /// 由独立 MCP 请求持有，前台回合结束不代表请求撤回。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        survives_turn: bool,
         /// 后端真实的等待截止时间（RFC3339 UTC）。原生 agent 提问没有期限，
         /// 字段省略；MCP 提问在注册时写入，前端据此显示倒计时。
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -362,7 +362,7 @@ function useViewportController(
   useEffect(() => {
     if (!element) return
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY === 0) return
+      if ((!event.ctrlKey && !event.metaKey) || event.deltaY === 0) return
       // Non-passive listener: React's `onWheel` cannot preventDefault, and
       // without that the transcript scrolls out from under the zoom.
       event.preventDefault()

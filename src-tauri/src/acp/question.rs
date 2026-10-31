@@ -6,7 +6,7 @@
 //! non-blocking pull the user pushes into, a question PAUSES the agent's tool
 //! call: the questions render as an interactive card above the conversation
 //! input box (driven by [`crate::acp::session_state::SessionState`], in-memory
-//! and turn-scoped — it is real-time steering, not durable history), and the
+//! and request-scoped — it may outlive the foreground turn), and the
 //! tool call returns only once the user submits their choices.
 //!
 //! This module holds the pieces shared across layers so the manager, the
@@ -102,6 +102,9 @@ pub struct PendingQuestionState {
     pub question_id: String,
     pub questions: Vec<QuestionSpec>,
     pub created_at: DateTime<Utc>,
+    /// MCP 请求可在前台回合结束后继续等待；旧快照默认按原生回合问题处理。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub survives_turn: bool,
     /// 这次提问的等待截止时间（RFC3339 UTC）。`None` 表示没有期限：原生 agent
     /// 提问从未带过期限，或 MCP 提问的等待已转为“无限等待”（不再显示倒计时）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,8 +332,10 @@ pub trait SessionQuestionAccess: Send + Sync {
 
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
-    /// the card on every client. No-op if it was already answered / gone.
-    async fn cancel_question(&self, parent_connection_id: &str, question_id: &str);
+    /// the card on every client. Returns true only when this call removed the
+    /// exact question and parent under the answer/cancel registry lock. If an
+    /// answer won that lock, it must already be readable before returning false.
+    async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) -> bool;
 
     /// Cancel every pending question parked on a connection that is tearing
     /// down. Called from the `run_connection` cleanup guard (alongside the
@@ -339,6 +344,10 @@ pub trait SessionQuestionAccess: Send + Sync {
     /// rather than lingering until the companion's ask socket happens to close.
     /// No-op when the connection has no pending ask.
     async fn cancel_questions_by_parent(&self, parent_connection_id: &str);
+
+    /// 正常回合结束只清理原生问题；MCP 的生命周期由请求撤回/回答决定。
+    /// 默认无操作供不持有原生问题的测试桩使用，生产实现按注册表来源筛选。
+    async fn cancel_turn_questions_by_parent(&self, _parent_connection_id: &str) {}
 }
 
 /// Validate + parse the MCP `ask_user_question` arguments into typed

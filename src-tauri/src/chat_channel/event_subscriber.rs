@@ -630,6 +630,7 @@ mod permission_push_tests {
             connection_id: connection_id.into(),
             payload: AcpEvent::QuestionRequest {
                 question_id: "q-1".into(),
+                survives_turn: false,
                 questions: vec![QuestionSpec {
                     id: "q1".into(),
                     question: "Which approach?".into(),

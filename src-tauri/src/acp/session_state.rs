@@ -296,9 +296,9 @@ pub struct SessionState {
 
     /// The agent's in-flight `ask_user_question` (one set of multiple-choice
     /// questions awaiting the user's answer). Set by `QuestionRequest`, cleared
-    /// by a matching `QuestionResolved` (and defensively on `TurnComplete` /
-    /// `UserMessage`). Carried on `to_snapshot()` so a client attaching mid-turn
-    /// re-renders the interactive card the one-shot event won't replay for it.
+    /// by a matching `QuestionResolved`; only native questions are cleared on
+    /// `TurnComplete` / `UserMessage`. Carried on `to_snapshot()` so a client
+    /// attaching mid-turn re-renders the interactive card the one-shot event won't replay for it.
     /// At most one is pending at a time (the agent is blocked in the tool call);
     /// the backend's `pending_questions` registry keys the answer one-shot.
     pub pending_question: Option<PendingQuestionState>,
@@ -1077,6 +1077,7 @@ impl SessionState {
                 ) {
                     // Remote Control ran in the agent CLI, which is gone.
                     self.remote_control = None;
+                    self.pending_question = None;
                 }
                 self.status = status.clone();
             }
@@ -1266,12 +1267,14 @@ impl SessionState {
             AcpEvent::QuestionRequest {
                 question_id,
                 questions,
+                survives_turn,
                 expires_at,
             } => {
                 self.pending_question = Some(PendingQuestionState {
                     question_id: question_id.clone(),
                     questions: questions.clone(),
                     created_at: Utc::now(),
+                    survives_turn: *survives_turn,
                     expires_at: *expires_at,
                 });
             }
@@ -1451,13 +1454,8 @@ impl SessionState {
                 // the snapshot the instant the parent turn ends (the original
                 // web-only bug). It's removed per-entry by `DelegationCompleted`.
                 self.pending_permission = None;
-                // A blocked `ask_user_question` can't outlive its turn: if the
-                // turn ends (cancel / stop) the card is moot. The backend's
-                // answer one-shot is declined by the connection loop right after
-                // this event (see the turn exit's question sweep) — usually the
-                // listener's peer-close got there first; this just keeps the
-                // snapshot honest.
-                self.pending_question = None;
+                // MCP 的答案通道由请求持有，可在前台回合结束后继续等待。
+                self.pending_question = self.pending_question.take().filter(|q| q.survives_turn);
                 // Likewise a blocked `exit_plan_mode` approval: the parked ext
                 // responder is drained by the connection's teardown/cancel path;
                 // this just keeps the snapshot honest if the turn settles first.
@@ -1492,8 +1490,8 @@ impl SessionState {
                 // read your note → resend" fallback already had its post-turn
                 // window before this next prompt arrives.
                 self.feedback.clear();
-                // A new user turn supersedes any stale pending question.
-                self.pending_question = None;
+                // 新消息不能撤回后台 MCP 请求；原生问题仍按回合清理。
+                self.pending_question = self.pending_question.take().filter(|q| q.survives_turn);
                 // Likewise a stale plan approval: a new turn started without a
                 // clean TurnComplete (fork/resume re-prompt, error recovery, or a
                 // queued prompt sent instead of answering) must not leave a dead

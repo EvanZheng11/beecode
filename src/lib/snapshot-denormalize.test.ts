@@ -84,6 +84,7 @@ describe("denormalizeSnapshot — 提问期限", () => {
         pending_question: {
           question_id: "q-1",
           questions: [],
+          survives_turn: true,
           created_at: "2026-01-01T00:00:00Z",
           expires_at: "2026-01-01T00:05:00Z",
         },
@@ -91,6 +92,7 @@ describe("denormalizeSnapshot — 提问期限", () => {
     )
     expect(patch.pendingAskQuestion).toMatchObject({
       question_id: "q-1",
+      survives_turn: true,
       expires_at: "2026-01-01T00:05:00Z",
     })
   })

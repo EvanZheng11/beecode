@@ -305,7 +305,9 @@ mod tests {
         ) -> Option<crate::acp::question::RegisteredQuestion> {
             None
         }
-        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) {}
+        async fn cancel_question(&self, _parent_connection_id: &str, _question_id: &str) -> bool {
+            false
+        }
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
     }
 

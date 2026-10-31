@@ -60,7 +60,7 @@ use crate::acp::delegation::transport::{
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
     client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
     client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
+    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskError, BrokerAskRequest,
     BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
     BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
     BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
@@ -1960,24 +1960,19 @@ fn render_feedback_result_with_streak(outcome: &Value, empty_streak: Option<u32>
     })
 }
 
-/// Map the `ask_user_question` round-trip outcome (a `{ answers, declined }`
-/// envelope from the listener) into an MCP `tools/call` result.
-///
-/// The human-readable `content` text reports the user's selections per question
-/// so the agent can act on them; a declined / empty answer tells the agent to
-/// proceed with its own judgment. Either way it ends by telling the agent not to
-/// ask again just to confirm it may proceed (issue #861). The raw envelope rides
-/// along in `structuredContent` with that instruction as `hint`, because Claude
-/// Code and Codex show the model only the structured JSON (see
-/// [`render_feedback_result`]). `isError` is always `false` — a declined
-/// question is a valid result, not an error.
-///
-/// The declined hint does not say the user dismissed anything: the listener
-/// also answers `declined` when no card was ever shown (a second ask while one
-/// is pending, a gone connection, an invalid token). The text keeps its
-/// historical "The user dismissed the question(s)" opening, which the
-/// frontend's text fallback (`parseAskQuestionOutcome`) matches on.
+/// 将 broker 提问结果渲染为 MCP 响应；仅真实拒答保留原有默认决策指引。
+/// 旧 payload 可省略 error，但空的非拒答结果也不能冒充用户回答。
 pub fn render_ask_result(outcome: &Value) -> Value {
+    // 仅解码新字段，保留历史答案字段的宽松读取（包括 multiSelect 等旧格式）。
+    let error = match serde_json::from_value::<Option<BrokerAskError>>(
+        outcome.get("error").cloned().unwrap_or(Value::Null),
+    ) {
+        Ok(error) => error,
+        Err(_) => return render_ask_error(BrokerAskError::Unavailable),
+    };
+    if let Some(error) = error {
+        return render_ask_error(error);
+    }
     const DECLINED_GUIDANCE: &str = "Proceed using your best judgment and reasonable \
                                      defaults. Do not call ask_user_question again to \
                                      confirm that you should proceed.";
@@ -1990,7 +1985,10 @@ pub fn render_ask_result(outcome: &Value) -> Value {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let (text, hint) = if declined || answers.is_empty() {
+    if !declined && answers.is_empty() {
+        return render_ask_error(BrokerAskError::Unavailable);
+    }
+    let (text, hint) = if declined {
         (
             format!(
                 "The user dismissed the question(s) without choosing an answer. \
@@ -2028,6 +2026,19 @@ pub fn render_ask_result(outcome: &Value) -> Value {
         "content": [{ "type": "text", "text": text }],
         "isError": false,
         "structuredContent": { "answers": answers, "declined": declined, "hint": hint },
+    })
+}
+
+fn render_ask_error(error: BrokerAskError) -> Value {
+    let hint = "No user answer was received. Do not infer an answer, choose defaults, \
+                or continue steps that depend on this answer. Wait for the user or \
+                ask the question again when available.";
+    json!({
+        "content": [{ "type": "text", "text": hint }],
+        "isError": true,
+        "structuredContent": {
+            "answers": [], "declined": false, "error": error, "hint": hint,
+        },
     })
 }
 
@@ -5380,6 +5391,62 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ask_host_cancel_drops_the_broker_socket_and_inflight_slot() {
+        use crate::acp::delegation::transport::{read_frame, BrokerMessage};
+        use tokio::io::AsyncReadExt;
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = dir.path().join("ask.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert!(matches!(
+                read_frame::<_, BrokerMessage>(&mut stream).await.unwrap(),
+                BrokerMessage::Ask(_)
+            ));
+            ready_tx.send(()).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+        });
+        let mut context = ctx();
+        context.socket_path = socket.to_string_lossy().into_owned();
+        context.features = ASK_ONLY;
+        let inflight = Arc::new(InflightCalls::new());
+        let request = json!({
+            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+            "params": { "name": "ask_user_question", "arguments": ask_args() }
+        })
+        .to_string();
+        let LineAction::Spawn(call) = dispatch_line(&context, inflight.clone(), &request).await
+        else {
+            panic!("expected ask call");
+        };
+        let waiting = tokio::spawn(call.future);
+        tokio::time::timeout(Duration::from_secs(2), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let cancel =
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":40}}"#;
+        assert!(matches!(
+            dispatch_line(&context, inflight.clone(), cancel).await,
+            LineAction::Silent
+        ));
+        assert!(waiting.await.unwrap().response.is_none());
+        peer.await.unwrap();
+        assert!(inflight.inner.lock().await.is_empty());
+    }
+
     #[tokio::test]
     async fn ask_user_question_invalid_args_rejected_synchronously() {
         // Empty questions array → -32602, fixable by the LLM without a round-trip.
@@ -5428,6 +5495,73 @@ mod tests {
         assert_eq!(rendered["isError"], false);
         let text = rendered["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("dismissed"));
+    }
+
+    #[test]
+    fn render_ask_result_errors_never_supply_answers_or_default_guidance() {
+        for error in ["cancelled", "unavailable"] {
+            // 即使输入矛盾，异常也不能带出答案或用户拒答。
+            let rendered = render_ask_result(&json!({
+                "error": error, "declined": true,
+                "answers": [{"question": "Which?", "header": "Choice", "selected": ["A"]}]
+            }));
+            assert_eq!(rendered["isError"], true);
+            assert_eq!(rendered["structuredContent"]["error"], error);
+            assert_eq!(rendered["structuredContent"]["declined"], false);
+            assert_eq!(rendered["structuredContent"]["answers"], json!([]));
+            let hint = rendered["structuredContent"]["hint"].as_str().unwrap();
+            assert_eq!(rendered["content"][0]["text"], hint);
+            assert!(hint.contains("No user answer was received"));
+            assert!(hint.contains("Do not infer an answer, choose defaults"));
+            assert!(hint.contains("or continue steps that depend on this answer"));
+            assert!(hint.contains("Wait for the user or ask the question again"));
+            assert!(!hint.contains("Proceed"));
+            assert!(!hint.contains("reasonable defaults"));
+            assert!(!hint.contains("dismissed"));
+        }
+    }
+
+    #[test]
+    fn render_ask_result_empty_or_invalid_payload_is_unavailable() {
+        for payload in [
+            json!({"answers": [], "declined": false}),
+            json!({}),
+            json!(null),
+            json!({"error": "future_error", "declined": true}),
+        ] {
+            let rendered = render_ask_result(&payload);
+            assert_eq!(rendered["isError"], true, "{payload}");
+            assert_eq!(rendered["structuredContent"]["error"], "unavailable");
+            assert_eq!(rendered["structuredContent"]["declined"], false);
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_host_cancel_suppresses_ready_success_and_error_results() {
+        for outcome in [
+            json!({"declined": true, "answers": []}),
+            json!({"error": "cancelled", "declined": false, "answers": []}),
+        ] {
+            let inflight = Arc::new(InflightCalls::new());
+            let LineAction::Spawn(call) = register_and_spawn(
+                inflight.clone(),
+                json!(40),
+                None,
+                Box::pin(async move { Ok(BrokerResponse { outcome }) }),
+                render_ask_result,
+            )
+            .await
+            else {
+                panic!("expected ask call");
+            };
+            let cancel = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":40}}"#;
+            assert!(matches!(
+                dispatch_line(&ctx(), inflight.clone(), cancel).await,
+                LineAction::Silent
+            ));
+            assert!(call.future.await.response.is_none());
+            assert!(inflight.inner.lock().await.is_empty());
+        }
     }
 
     /// Issue #861: after the user answers (or dismisses), the result itself
@@ -5498,9 +5632,7 @@ mod tests {
             "开始执行 (Recommended)"
         );
 
-        // The listener also answers `declined` when no card was shown, so the
-        // hint must not claim the user dismissed it. The text keeps the
-        // "dismissed the question" phrase the frontend's text fallback needs.
+        // 保留主动拒答的历史文案与前端文本回退所需的 dismissed 短语。
         let declined = render_ask_result(&json!({ "declined": true, "answers": [] }));
         let hint = declined["structuredContent"]["hint"].as_str().unwrap();
         assert!(

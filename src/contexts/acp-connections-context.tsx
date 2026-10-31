@@ -373,7 +373,7 @@ export interface ConnectionState {
   pendingQuestion: PendingQuestion | null
   /** Awaiting-answer multiple-choice `ask_user_question` (the codeg-mcp blocking
    *  tool). Set from a `question_request` event or a snapshot's
-   *  `pending_question`; cleared on `question_resolved` or turn end. Distinct
+   *  `pending_question`; MCP requests survive turn end until resolved. Distinct
    *  from the free-text `pendingQuestion` above. */
   pendingAskQuestion: PendingQuestionState | null
   /** Awaiting-decision Grok `exit_plan_mode` approval (the plan the agent is
@@ -2359,6 +2359,7 @@ function connectionsReducer(
       if (action.status === "disconnected" || action.status === "error") {
         // Remote Control ran in the agent CLI, which is gone.
         updated.remoteControl = null
+        updated.pendingAskQuestion = null
       }
       if (action.status === "prompting") {
         updated.hasPrompted = true
@@ -2397,10 +2398,10 @@ function connectionsReducer(
         // warning. The `turn_complete` handler settles warnings on a clean
         // `end_turn` instead (SETTLE_SESSION_FAILURES), after the response's
         // terminal error escalation (if any) has already landed.
-        // A blocked ask_user_question can't outlive its turn. The normal path
-        // clears it via `question_resolved`; this is the safety net for a turn
-        // that ended without one (agent error / abandoned block).
-        updated.pendingAskQuestion = null
+        // MCP 请求可在后台继续等待，只有原生回合问题在这里清理。
+        if (!conn.pendingAskQuestion?.survives_turn) {
+          updated.pendingAskQuestion = null
+        }
         // Likewise a blocked exit_plan_mode approval — cleared via
         // `plan_approval_resolved` normally; this is the turn-end safety net.
         updated.pendingPlanApproval = null
@@ -5403,6 +5404,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             pendingAskQuestion: {
               question_id: e.question_id,
               questions: e.questions,
+              survives_turn: e.survives_turn ?? false,
               created_at: new Date().toISOString(),
               expires_at: e.expires_at ?? null,
             },

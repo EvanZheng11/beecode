@@ -418,6 +418,7 @@ async fn check_state(
                 .map(|q| AcpEvent::QuestionRequest {
                     question_id: q.question_id.clone(),
                     questions: q.questions.clone(),
+                    survives_turn: q.survives_turn,
                     expires_at: q.expires_at,
                 }),
             s.pending_plan_approval
