@@ -254,6 +254,11 @@ pub enum NotifyError {
     Unavailable,
     #[error("{0}")]
     DeliveryFailed(String),
+    /// The parent is replacing its turn. A notice must not steer or prompt
+    /// ahead of the user's message. The claim is released so a later manual
+    /// notify can still deliver.
+    #[error("suppressed during turn replace")]
+    Suppressed,
 }
 
 /// Task ids whose completion notice already went out. The broker's terminal
@@ -397,9 +402,9 @@ impl CompletionNotifier {
             ),
             // A duplicate is the normal outcome of "auto notice won the race
             // with the manual button" — not a warning.
-            Err(NotifyError::AlreadyNotified) => tracing::debug!(
+            Err(NotifyError::AlreadyNotified) | Err(NotifyError::Suppressed) => tracing::debug!(
                 task_id = %task_id,
-                "子任务完成通知此前已投递，跳过"
+                "子任务完成通知此前已投递或被回合替换压住，跳过"
             ),
             Err(err) => tracing::warn!(
                 task_id = %task_id,
@@ -494,10 +499,23 @@ impl CompletionNotifier {
         // exactly the stall this notice exists to remove. An idle parent gets a
         // prompt, which is what actually starts the turn that reads it.
         let turn_in_flight = match self.manager.get_state(parent_connection_id).await {
-            Some(state) => state.read().await.turn_in_flight,
+            Some(state) => {
+                let s = state.read().await;
+                // Held while an insert is cancelling this turn and waiting to
+                // send the user's message. A notice here would prompt or
+                // start another replace and steal that message.
+                if s.notice_hold > 0 || s.prompt_barrier {
+                    return Err(NotifyError::Suppressed);
+                }
+                s.turn_in_flight
+            }
             // No such connection: let the prompt path report it.
             None => false,
         };
+        // Test seam: runs after the hold read and before submit/prompt, so a
+        // test can set hold and clear the turn in that window without sleeping.
+        #[cfg(test)]
+        notice_race_park().await;
         if turn_in_flight {
             match self
                 .manager
@@ -505,6 +523,9 @@ impl CompletionNotifier {
                 .await
             {
                 Ok(_) => return Ok(NotifyDelivery::Steering),
+                // Deferred is not "no channel". Falling through to send_prompt
+                // is how a notice steals the insert's next turn.
+                Err(AcpError::FeedbackDeferred) => return Err(NotifyError::Suppressed),
                 // The turn ended between the read and the steer, or this adapter
                 // has no steering channel. A prompt is the remaining channel.
                 Err(AcpError::NoActiveTurn) | Err(AcpError::FeedbackDisabled) => {}
@@ -513,7 +534,8 @@ impl CompletionNotifier {
                 Err(e) => return Err(NotifyError::DeliveryFailed(e.to_string())),
             }
         }
-        self.manager
+        match self
+            .manager
             .send_prompt(
                 parent_connection_id,
                 vec![PromptInputBlock::Text {
@@ -521,8 +543,40 @@ impl CompletionNotifier {
                 }],
             )
             .await
-            .map(|_| NotifyDelivery::Prompt)
-            .map_err(|e| NotifyError::DeliveryFailed(e.to_string()))
+        {
+            Ok(()) => Ok(NotifyDelivery::Prompt),
+            // The idle path lost the race with an insert. Do not treat it as
+            // delivered, and do not consume the claim.
+            Err(AcpError::FeedbackDeferred) => Err(NotifyError::Suppressed),
+            Err(e) => Err(NotifyError::DeliveryFailed(e.to_string())),
+        }
+    }
+}
+
+#[cfg(test)]
+fn notice_race_slot() -> &'static std::sync::Mutex<
+    Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+> {
+    static SLOT: std::sync::OnceLock<
+        std::sync::Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
+    > = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+async fn notice_race_park() {
+    let parked = notice_race_slot().lock().expect("race slot").take();
+    if let Some((entered, release)) = parked {
+        let _ = entered.send(());
+        let _ = release.await;
     }
 }
 
@@ -694,5 +748,81 @@ mod completion_notice_tests {
             error_code: "child_max_tokens".into(),
         });
         assert_eq!(failed, (TaskStatus::Failed, "error_code: child_max_tokens".into()));
+    }
+
+    /// Notice read hold=0, then the user held and a Stop cleared the turn,
+    /// then submit returned deferred. That must not fall through to
+    /// send_prompt. The claim stays so a later notify can still deliver.
+    #[tokio::test]
+    async fn hold_after_the_read_does_not_fall_back_to_a_prompt() {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = super::notice_race_slot().lock().expect("slot").take();
+            }
+        }
+        let _guard = Guard;
+        let mgr = Arc::new(ConnectionManager::new());
+        let mut rx = mgr
+            .insert_test_connection_live(
+                "c1",
+                crate::models::AgentType::OpenCode,
+                None,
+                crate::web::event_bridge::EventEmitter::Noop,
+            )
+            .await;
+        {
+            let state = mgr.get_state("c1").await.unwrap();
+            let mut s = state.write().await;
+            s.turn_in_flight = true;
+            s.notice_hold = 0;
+            s.steer_replaces_turn = true;
+            s.feedback_tool_available = true;
+        }
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *super::notice_race_slot().lock().expect("slot") = Some((entered_tx, release_rx));
+        crate::acp::manager::NOTICE_PROMPT_REFUSALS
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let notifier = Arc::new(CompletionNotifier::new(Arc::clone(&mgr)));
+        let waiting = Arc::clone(&notifier);
+        let task = tokio::spawn(async move {
+            waiting
+                .notify("c1", "t1", TaskStatus::Canceled, "done")
+                .await
+        });
+        entered_rx.await.expect("deliver passed the hold read");
+        {
+            let state = mgr.get_state("c1").await.unwrap();
+            let mut s = state.write().await;
+            s.notice_hold = 1;
+            s.turn_in_flight = false;
+        }
+        release_tx.send(()).expect("hook waiting");
+        let err = task.await.expect("notify task").expect_err("deferred");
+        assert!(matches!(err, NotifyError::Suppressed), "{err}");
+        assert!(
+            rx.try_recv().is_err(),
+            "deferred notice must not enqueue a prompt"
+        );
+        assert_eq!(
+            crate::acp::manager::NOTICE_PROMPT_REFUSALS
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "FeedbackDeferred must not reach send_prompt"
+        );
+        {
+            let state = mgr.get_state("c1").await.unwrap();
+            state.write().await.notice_hold = 0;
+        }
+        let delivery = notifier
+            .notify("c1", "t1", TaskStatus::Canceled, "done")
+            .await
+            .expect("claim was released");
+        assert_eq!(delivery, NotifyDelivery::Prompt);
+        assert!(matches!(
+            rx.try_recv().expect("prompt after hold drops"),
+            crate::acp::connection::ConnectionCommand::Prompt { .. }
+        ));
     }
 }

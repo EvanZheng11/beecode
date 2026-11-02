@@ -3882,6 +3882,10 @@ export interface LiveSessionSnapshot {
    *  version proof — the frontend must NOT re-derive it from agent type).
    *  Absent → `false`. */
   native_steering_available?: boolean
+  /** Same insert entry as native steering, without `_session/steering`.
+   *  The backend replaces the running prompt. Absent → false. Not a new
+   *  feature name — the composer still uses the native insert copy. */
+  steer_replaces_turn?: boolean
   modes: SessionModeStateInfo | null
   current_mode: string | null
   config_options: SessionConfigOptionInfo[] | null

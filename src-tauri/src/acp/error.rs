@@ -31,6 +31,12 @@ pub enum AcpError {
     /// backend's defense-in-depth for a direct/stale call.
     #[error("live feedback is disabled")]
     FeedbackDisabled,
+    /// A completion notice arrived while an insert holds the next prompt, or
+    /// while that insert's cancelled prompt has not actually ended. Not a
+    /// missing channel: callers must not fall back to `send_prompt`. The
+    /// notice stays retryable.
+    #[error("completion notice deferred while a turn is being replaced")]
+    FeedbackDeferred,
     /// The submitted feedback note is empty or exceeds the per-note size bound.
     /// The full text rides in the broadcast event + snapshot + MCP response, so
     /// a sanity bound keeps a single pathological note from bloating them.
@@ -140,6 +146,7 @@ impl AcpError {
             Self::TurnInProgress => Some("turn_in_progress"),
             Self::NoActiveTurn => Some("no_active_turn"),
             Self::FeedbackDisabled => Some("feedback_disabled"),
+            Self::FeedbackDeferred => Some("feedback_deferred"),
             Self::InvalidFeedback(_) => Some("invalid_feedback"),
             Self::SpawnFailed(_) => Some("spawn_failed"),
             Self::DownloadFailed(_) => Some("download_failed"),

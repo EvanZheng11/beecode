@@ -9120,6 +9120,10 @@ async fn run_connection(
                 // that needs no tool; OpenClaw-style `supports_mcp: false`
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
+                // OpenCode never sets the native flag. The insert entry is
+                // the same; the loop replaces the prompt instead of calling
+                // `_session/steering`.
+                s.steer_replaces_turn = registry::steering_replaces_turn(agent_type);
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
@@ -11201,6 +11205,16 @@ async fn handle_permission_request(
     req: RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) {
+    // An insert is still tearing down the old turn. Answering cancelled here
+    // — not queueing — is what lets the agent finish the cancelled prompt.
+    // The flag is cleared before the replacement prompt is sent, so a card
+    // from the new turn is not refused.
+    if state.read().await.replacing_turn {
+        let _ = responder.respond(RequestPermissionResponse::new(
+            RequestPermissionOutcome::Cancelled,
+        ));
+        return;
+    }
     let request_id = uuid::Uuid::new_v4().to_string();
 
     // Codex Plan-mode review gate: seed the tool call codex never announced, so
@@ -13442,6 +13456,130 @@ fn hold_for_codebuddy_cancel(
 
 /// Resolves when `held` may be sent: [`CODEBUDDY_CANCEL_BARRIER`] after the
 /// cancelled prompt's answer, or as soon as it is clear none will come.
+/// A Codex-entry insert on an agent with no `_session/steering`. The loop
+/// has already sent `session/cancel` and drained this parent's children.
+/// The new prompt is not sent until the old `session/prompt` resolves and
+/// [`ReplacePending::teardown`] does.
+struct ReplacePending {
+    blocks: Vec<PromptInputBlock>,
+    replies: Vec<oneshot::Sender<Result<SteerOutcome, AcpError>>>,
+    interrupted: Vec<crate::acp::delegation::broker::InterruptedDelegation>,
+    teardown: oneshot::Receiver<()>,
+    /// When the old prompt must have ended. Past this, the insert is returned
+    /// to the composer instead of being sent against a prompt that is still
+    /// open.
+    deadline: tokio::time::Instant,
+    resume_ok: bool,
+}
+
+enum ReplaceReady {
+    Send(ReplacePending),
+    Abort {
+        replies: Vec<oneshot::Sender<Result<SteerOutcome, AcpError>>>,
+        disconnect: bool,
+    },
+}
+
+fn fail_steer_replies(
+    replies: Vec<oneshot::Sender<Result<SteerOutcome, AcpError>>>,
+    message: &str,
+) {
+    for reply in replies {
+        let _ = reply.send(Err(AcpError::protocol(message.to_string())));
+    }
+}
+
+fn ready_teardown() -> oneshot::Receiver<()> {
+    let (tx, rx) = oneshot::channel();
+    let _ = tx.send(());
+    rx
+}
+
+/// Drop permission / question / plan cards left by the turn being replaced.
+/// Called again immediately before the replacement prompt is sent: the old
+/// prompt can still emit a card after the first drain. Not called after that
+/// send, so a card from the new turn stays.
+async fn drain_replaced_turn_leftovers(
+    perms: &PendingPermissions,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    delegation_injection: Option<&DelegationInjection>,
+    conn_id: &str,
+) {
+    drain_permissions(perms, state, emitter).await;
+    if let Some(inj) = delegation_injection {
+        inj.questions.cancel_questions_by_parent(conn_id).await;
+        inj.plan_approvals
+            .cancel_plan_approvals_by_parent(conn_id)
+            .await;
+    }
+}
+
+/// One poll of the replacement prompt. `None` means the request is in flight
+/// (Pending). A ready error never left the process — do not claim Injected.
+async fn poll_prompt_now<F>(prompt: &mut F) -> Option<F::Output>
+where
+    F: std::future::Future + Unpin,
+{
+    tokio::select! {
+        biased;
+        result = &mut *prompt => Some(result),
+        _ = std::future::ready(()) => None,
+    }
+}
+
+/// Wait until this cancel's child teardown finishes, or the user stops the
+/// transition. Other commands are stashed so they are not dropped and do not
+/// run ahead of the insert.
+async fn wait_replace_ready(
+    mut pending: ReplacePending,
+    cmd_rx: &mut mpsc::Receiver<ConnectionCommand>,
+    stashed: &mut VecDeque<ConnectionCommand>,
+    agent_type: AgentType,
+) -> ReplaceReady {
+    let teardown_deadline = tokio::time::Instant::now() + crate::acp::turn_replace::REPLACE_TEARDOWN_WAIT;
+    loop {
+        tokio::select! {
+            biased;
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(ConnectionCommand::Cancel) => {
+                        return ReplaceReady::Abort {
+                            replies: pending.replies,
+                            disconnect: false,
+                        };
+                    }
+                    Some(ConnectionCommand::Disconnect) | None => {
+                        return ReplaceReady::Abort {
+                            replies: pending.replies,
+                            disconnect: true,
+                        };
+                    }
+                    Some(ConnectionCommand::Steer { blocks, reply })
+                        if registry::steering_replaces_turn(agent_type) =>
+                    {
+                        pending.blocks.extend(blocks);
+                        pending.replies.push(reply);
+                    }
+                    Some(other) => stashed.push_back(other),
+                }
+            }
+            result = &mut pending.teardown => {
+                let _ = result;
+                pending.resume_ok = true;
+                return ReplaceReady::Send(pending);
+            }
+            _ = tokio::time::sleep_until(teardown_deadline) => {
+                // The user's message still goes out. Resume stays refused in
+                // the broker until this cancel's disconnect finishes; the
+                // suffix is not the gate.
+                pending.resume_ok = false;
+                return ReplaceReady::Send(pending);
+            }
+        }
+    }
+}
+
 async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
     let release_at = match held.release_at {
         Some(at) => at,
@@ -14470,6 +14608,24 @@ async fn run_conversation_loop(
                 user_message,
                 internal_suffix,
             }) => {
+                if state.read().await.prompt_barrier {
+                    // Fail closed: the previous session/prompt is still open.
+                    // Stop and disconnect are other arms and stay available.
+                    state.write().await.turn_in_flight = false;
+                    emit_with_state(
+                        state,
+                        emitter,
+                        AcpEvent::Error {
+                            message: "the previous prompt has not ended yet".into(),
+                            agent_type: agent_type.to_string(),
+                            code: Some("turn_in_progress".into()),
+                            details: None,
+                            terminal: false,
+                        },
+                    )
+                    .await;
+                    continue;
+                }
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
                 // consumed: the transcript record this prompt becomes must
@@ -14610,7 +14766,7 @@ async fn run_conversation_loop(
                 // claude-agent-acp answers a `/remote-control` prompt itself;
                 // its reply says whether Remote Control is on.
                 cb_state.claude_remote_control = remote_control_command(agent_type, &prompt_blocks);
-                let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
+                let mut turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
                 // Snapshot the stderr write position BEFORE the request is
                 // dispatched. An agent that fails the moment the prompt lands
@@ -14715,6 +14871,10 @@ async fn run_conversation_loop(
                 // Read updates until turn completes.
                 // We must also listen for commands (e.g. RespondPermission)
                 // to avoid deadlocking when the agent awaits a permission response.
+                let mut replace: Option<ReplacePending> = None;
+                // Commands read while waiting out a replace, replayed before
+                // the channel so a Stop is not the only thing that can be seen.
+                let mut stashed_cmds: VecDeque<ConnectionCommand> = VecDeque::new();
                 loop {
                     tokio::select! {
                         // Updates before the response: an agent that writes
@@ -14901,6 +15061,193 @@ async fn run_conversation_loop(
                             }
                         }
                         prompt_result = &mut prompt_response => {
+                            if let Some(pending) = replace.take() {
+                                let terminal = matches!(
+                                    &prompt_result,
+                                    Err(e) if prompt_rejection_is_terminal(e)
+                                        || lost_the_connection(e)
+                                );
+                                if terminal {
+                                    let Err(e) = prompt_result else {
+                                        unreachable!("terminal match is Err")
+                                    };
+                                    fail_steer_replies(
+                                        pending.replies,
+                                        "session ended before the inserted message was accepted",
+                                    );
+                                    if lost_the_connection(&e) {
+                                        return Err(defer_to_connection_report(e).await);
+                                    }
+                                    return Err(e);
+                                }
+                                let stop = match &prompt_result {
+                                    Ok(response) => stop_reason_to_str(response.stop_reason),
+                                    Err(_) => "rejected",
+                                };
+                                drop(prompt_result);
+                                record_turn_end(
+                                    agent_type,
+                                    &sid.0,
+                                    stop,
+                                    turn_started_at_ms,
+                                    current_session_model_id(state).await,
+                                    None,
+                                    zcode_turn.metrics(),
+                                )
+                                .await;
+                                match wait_replace_ready(
+                                    pending,
+                                    cmd_rx,
+                                    &mut stashed_cmds,
+                                    agent_type,
+                                )
+                                .await
+                                {
+                                    ReplaceReady::Abort {
+                                        replies,
+                                        disconnect,
+                                    } => {
+                                        fail_steer_replies(
+                                            replies,
+                                            "stopped before the inserted message was accepted",
+                                        );
+                                        state.write().await.replacing_turn = false;
+                                        drain_permissions_then_emit(
+                                            perms,
+                                            state,
+                                            emitter,
+                                            AcpEvent::TurnComplete {
+                                                session_id: sid.0.to_string(),
+                                                stop_reason: "cancelled".into(),
+                                                agent_type: agent_type.to_string(),
+                                            },
+                                        )
+                                        .await;
+                                        if disconnect {
+                                            disconnect_requested = true;
+                                        }
+                                        break;
+                                    }
+                                    ReplaceReady::Send(pending) => {
+                                        let delegation_enabled =
+                                            state.read().await.delegation_enabled;
+                                        let suffix = crate::acp::turn_replace::interrupt_suffix(
+                                            &pending.interrupted,
+                                            pending.resume_ok,
+                                        );
+                                        let user_blocks = pending.blocks.clone();
+                                        prompt_ledger.record_prompt_blocks(&user_blocks);
+                                        let prompt_blocks = prepare_agent_bound_prompt(
+                                            agent_type,
+                                            user_blocks,
+                                            delegation_enabled,
+                                            suffix,
+                                        );
+                                        if prompt_blocks.is_empty() {
+                                            fail_steer_replies(
+                                                pending.replies,
+                                                "inserted message had no content to send",
+                                            );
+                                            state.write().await.replacing_turn = false;
+                                            drain_permissions_then_emit(
+                                                perms,
+                                                state,
+                                                emitter,
+                                                AcpEvent::TurnComplete {
+                                                    session_id: sid.0.to_string(),
+                                                    stop_reason: "cancelled".into(),
+                                                    agent_type: agent_type.to_string(),
+                                                },
+                                            )
+                                            .await;
+                                            break;
+                                        }
+                                        // Cards the cancelled prompt emitted after
+                                        // the first drain. Cleared before the flag
+                                        // drops, so this does not touch a new turn.
+                                        drain_replaced_turn_leftovers(
+                                            perms,
+                                            state,
+                                            emitter,
+                                            delegation_injection,
+                                            conn_id,
+                                        )
+                                        .await;
+                                        state.write().await.replacing_turn = false;
+                                        record_prompt(agent_type, &sid.0, &prompt_blocks).await;
+                                        let prompt_request =
+                                            PromptRequest::new(sid.clone(), prompt_blocks);
+                                        prompt_response = Box::pin(
+                                            cx.clone()
+                                                .send_request_to(Agent, prompt_request)
+                                                .block_task(),
+                                        );
+                                        turn_started_at_ms =
+                                            crate::acp_transcript::now_epoch_ms();
+                                        probe = TurnOutputProbe::new(stderr_tail.mark());
+                                        cb_state.opencode.turn_started();
+                                        match poll_prompt_now(&mut prompt_response).await {
+                                            Some(Err(e)) => {
+                                                fail_steer_replies(
+                                                    pending.replies,
+                                                    "inserted message was not dispatched",
+                                                );
+                                                if lost_the_connection(&e) {
+                                                    return Err(
+                                                        defer_to_connection_report(e).await,
+                                                    );
+                                                }
+                                                drain_permissions_then_emit(
+                                                    perms,
+                                                    state,
+                                                    emitter,
+                                                    AcpEvent::TurnComplete {
+                                                        session_id: sid.0.to_string(),
+                                                        stop_reason: "cancelled".into(),
+                                                        agent_type: agent_type.to_string(),
+                                                    },
+                                                )
+                                                .await;
+                                                break;
+                                            }
+                                            early => {
+                                                for reply in pending.replies {
+                                                    let _ = reply.send(Ok(
+                                                        SteerOutcome::Injected,
+                                                    ));
+                                                }
+                                                if let Some(Ok(response)) = early {
+                                                    let reason =
+                                                        stop_reason_to_str(response.stop_reason);
+                                                    record_turn_end(
+                                                        agent_type,
+                                                        &sid.0,
+                                                        reason,
+                                                        turn_started_at_ms,
+                                                        current_session_model_id(state).await,
+                                                        None,
+                                                        zcode_turn.metrics(),
+                                                    )
+                                                    .await;
+                                                    drain_permissions_then_emit(
+                                                        perms,
+                                                        state,
+                                                        emitter,
+                                                        AcpEvent::TurnComplete {
+                                                            session_id: sid.0.to_string(),
+                                                            stop_reason: reason.into(),
+                                                            agent_type: agent_type.to_string(),
+                                                        },
+                                                    )
+                                                    .await;
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             // A rejected prompt is a TURN failure, not a dead
                             // connection: the agent answered, so it is still
                             // there, and the session it answered about is still
@@ -15206,7 +15553,75 @@ async fn run_conversation_loop(
                             )
                             .await;
                         }
-                        cmd = cmd_rx.recv() => {
+                        _ = async {
+                            match replace.as_ref() {
+                                Some(pending) => {
+                                    tokio::time::sleep_until(pending.deadline).await
+                                }
+                                None => std::future::pending().await,
+                            }
+                        }, if replace.is_some() => {
+                            if let Some(pending) = replace.take() {
+                                fail_steer_replies(
+                                    pending.replies,
+                                    "timed out waiting for the cancelled prompt to end",
+                                );
+                                // Set before TurnComplete clears turn_in_flight,
+                                // so a retry cannot start a second session/prompt
+                                // on the request this arms.
+                                state.write().await.prompt_barrier = true;
+                                let barrier_state = Arc::clone(state);
+                                let barrier_perms = Arc::clone(perms);
+                                let barrier_emitter = emitter.clone();
+                                let barrier_conn = conn_id.to_string();
+                                let barrier_questions = delegation_injection
+                                    .as_ref()
+                                    .map(|inj| Arc::clone(&inj.questions));
+                                let barrier_plans = delegation_injection
+                                    .as_ref()
+                                    .map(|inj| Arc::clone(&inj.plan_approvals));
+                                tokio::spawn(async move {
+                                    let _ = prompt_response.await;
+                                    drain_permissions(
+                                        &barrier_perms,
+                                        &barrier_state,
+                                        &barrier_emitter,
+                                    )
+                                    .await;
+                                    if let Some(questions) = barrier_questions {
+                                        questions
+                                            .cancel_questions_by_parent(&barrier_conn)
+                                            .await;
+                                    }
+                                    if let Some(plans) = barrier_plans {
+                                        plans
+                                            .cancel_plan_approvals_by_parent(&barrier_conn)
+                                            .await;
+                                    }
+                                    let mut s = barrier_state.write().await;
+                                    s.prompt_barrier = false;
+                                    s.replacing_turn = false;
+                                });
+                                drain_permissions_then_emit(
+                                    perms,
+                                    state,
+                                    emitter,
+                                    AcpEvent::TurnComplete {
+                                        session_id: sid.0.to_string(),
+                                        stop_reason: "cancelled".into(),
+                                        agent_type: agent_type.to_string(),
+                                    },
+                                )
+                                .await;
+                                break;
+                            }
+                        }
+                        cmd = async {
+                            if let Some(cmd) = stashed_cmds.pop_front() {
+                                return Some(cmd);
+                            }
+                            cmd_rx.recv().await
+                        } => {
                             match cmd {
                                 Some(ConnectionCommand::RespondPermission {
                                     request_id,
@@ -15329,6 +15744,50 @@ async fn run_conversation_loop(
                                     }
                                 }
                                 Some(ConnectionCommand::Steer { blocks, reply }) => {
+                                    if registry::steering_replaces_turn(agent_type) {
+                                        if let Some(pending) = replace.as_mut() {
+                                            pending.blocks.extend(blocks);
+                                            pending.replies.push(reply);
+                                        } else {
+                                            state.write().await.replacing_turn = true;
+                                            let (interrupted, teardown) =
+                                                if let Some(inj) = delegation_injection {
+                                                    let cancel = inj
+                                                        .broker
+                                                        .cancel_by_parent_turn(conn_id)
+                                                        .await;
+                                                    (cancel.interrupted, cancel.done)
+                                                } else {
+                                                    (Vec::new(), ready_teardown())
+                                                };
+                                            let _ = cx.send_notification_to(
+                                                Agent,
+                                                CancelNotification::new(sid.clone()),
+                                            );
+                                            terminal_runtime
+                                                .release_all_for_session(sid.0.as_ref())
+                                                .await;
+                                            tracked_terminal_tool_calls.clear();
+                                            drain_replaced_turn_leftovers(
+                                                perms,
+                                                state,
+                                                emitter,
+                                                delegation_injection,
+                                                conn_id,
+                                            )
+                                            .await;
+                                            replace = Some(ReplacePending {
+                                                blocks,
+                                                replies: vec![reply],
+                                                interrupted,
+                                                teardown,
+                                                deadline: tokio::time::Instant::now()
+                                                    + crate::acp::turn_replace::replace_prompt_end(),
+                                                resume_ok: true,
+                                            });
+                                        }
+                                        continue;
+                                    }
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -15416,6 +15875,12 @@ async fn run_conversation_loop(
                                     );
                                 }
                                 Some(ConnectionCommand::Cancel) => {
+                                    if let Some(pending) = replace.take() {
+                                        fail_steer_replies(
+                                            pending.replies,
+                                            "stopped before the inserted message was accepted",
+                                        );
+                                    }
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -15544,6 +16009,12 @@ async fn run_conversation_loop(
                                     break;
                                 }
                                 Some(ConnectionCommand::Disconnect) | None => {
+                                    if let Some(pending) = replace.take() {
+                                        fail_steer_replies(
+                                            pending.replies,
+                                            "disconnected before the inserted message was accepted",
+                                        );
+                                    }
                                     tracing::info!(
                                         "[ACP] disconnect requested during prompting; connection_id={conn_id}"
                                     );
@@ -34693,6 +35164,38 @@ mod tests {
         terminal: Option<String>,
         /// Refuse session/new, once released, instead of opening a session.
         fail_session_new: bool,
+        /// Hold `session/prompt` until `session/cancel`, then answer it
+        /// `cancelled`. A later prompt is answered `end_turn` at once.
+        hold_prompt_until_cancel: bool,
+        /// Record cancel but do not answer the held prompt. The test releases
+        /// it through [`HandshakeAgent::release_held`].
+        hold_through_cancel: bool,
+        /// After cancel, ask for permission and wait for the answer before
+        /// ending the held prompt.
+        permission_on_cancel: bool,
+        /// After the held prompt is answered cancelled, drop the connection.
+        close_after_cancel_answer: bool,
+        /// Also hold a prompt whose text contains `HOLD` until cancel.
+        hold_inserted: bool,
+        /// On an inserted prompt, ask for permission and wait before ending.
+        permission_on_inserted: bool,
+    }
+
+    fn scripted_permission_request() -> agent_client_protocol::schema::v1::RequestPermissionRequest
+    {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, PermissionOptionKind, RequestPermissionRequest, ToolCallUpdate,
+            ToolCallUpdateFields,
+        };
+        RequestPermissionRequest::new(
+            SessionId::new("s1"),
+            ToolCallUpdate::new("tool-1", ToolCallUpdateFields::new().title("run".to_string())),
+            vec![PermissionOption::new(
+                "allow",
+                "Allow",
+                PermissionOptionKind::AllowOnce,
+            )],
+        )
     }
 
     /// An in-process agent for `run_connection`'s handshake. It reports each
@@ -34703,6 +35206,7 @@ mod tests {
     struct HandshakeAgent {
         seen: mpsc::UnboundedReceiver<String>,
         open_session: Arc<tokio::sync::Notify>,
+        release_held: Arc<tokio::sync::Notify>,
         closed: oneshot::Receiver<()>,
         task: tokio::task::JoinHandle<()>,
     }
@@ -34715,13 +35219,26 @@ mod tests {
                 stall_initialize,
                 terminal,
                 fail_session_new,
+                hold_prompt_until_cancel,
+                hold_through_cancel,
+                permission_on_cancel,
+                close_after_cancel_answer,
+                hold_inserted,
+                permission_on_inserted,
             } = script;
             let (seen_tx, seen) = mpsc::unbounded_channel();
             let (init_seen, new_seen, prompt_seen) = (seen_tx.clone(), seen_tx.clone(), seen_tx);
             let open_session = Arc::new(tokio::sync::Notify::new());
             let release = Arc::clone(&open_session);
+            let prompt_release = Arc::new(tokio::sync::Notify::new());
+            let prompt_release_for_cancel = Arc::clone(&prompt_release);
+            let release_held = Arc::new(tokio::sync::Notify::new());
+            let release_held_for_prompt = Arc::clone(&release_held);
             let (closed_tx, closed) = oneshot::channel();
+            let (die_tx, die_rx) = oneshot::channel();
+            let die_slot = Arc::new(std::sync::Mutex::new(Some(die_tx)));
             let task = tokio::spawn(async move {
+                let cancel_seen = prompt_seen.clone();
                 let _ = Agent
                     .builder()
                     .on_receive_request(
@@ -34774,9 +35291,14 @@ mod tests {
                         on_receive_request!(),
                     )
                     .on_receive_request(
-                        async move |req: PromptRequest,
+                        {
+                            let die_slot = Arc::clone(&die_slot);
+                            let release_held = Arc::clone(&release_held_for_prompt);
+                            let prompt_seen = prompt_seen.clone();
+                            let prompt_release = Arc::clone(&prompt_release);
+                            async move |req: PromptRequest,
                                     responder: Responder<PromptResponse>,
-                                    _cx: ConnectionTo<Client>| {
+                                    cx: ConnectionTo<Client>| {
                             let text: String = req
                                 .prompt
                                 .iter()
@@ -34786,12 +35308,76 @@ mod tests {
                                 })
                                 .collect();
                             let _ = prompt_seen.send(format!("session/prompt: {text}"));
-                            responder.respond(PromptResponse::new(StopReason::EndTurn))
+                            if permission_on_inserted && text.contains("INSERTED") {
+                                let seen = prompt_seen.clone();
+                                tokio::spawn(async move {
+                                    let result = cx
+                                        .send_request_to(Client, scripted_permission_request())
+                                        .block_task()
+                                        .await;
+                                    let _ = seen.send(format!("permission: {result:?}"));
+                                    let _ = responder
+                                        .respond(PromptResponse::new(StopReason::EndTurn));
+                                });
+                                return Ok(());
+                            }
+                            let hold = (hold_prompt_until_cancel && !text.contains("INSERTED"))
+                                || (hold_inserted && text.contains("HOLD"));
+                            if !hold {
+                                return responder
+                                    .respond(PromptResponse::new(StopReason::EndTurn));
+                            }
+                            let seen = prompt_seen.clone();
+                            let prompt_release = Arc::clone(&prompt_release);
+                            let release_held = Arc::clone(&release_held);
+                            let die_slot = Arc::clone(&die_slot);
+                            tokio::spawn(async move {
+                                tokio::select! {
+                                    _ = prompt_release.notified() => {}
+                                    _ = release_held.notified() => {}
+                                }
+                                let _ = seen.send("prompt-answered".to_string());
+                                let _ = responder
+                                    .respond(PromptResponse::new(StopReason::Cancelled));
+                                if close_after_cancel_answer {
+                                    if let Some(tx) = die_slot.lock().expect("die").take() {
+                                        let _ = tx.send(());
+                                    }
+                                }
+                            });
+                            Ok(())
+                        }
                         },
                         on_receive_request!(),
                     )
+                    .on_receive_notification(
+                        async move |_cancel: CancelNotification, cx: ConnectionTo<Client>| {
+                            let _ = cancel_seen.send("session/cancel".to_string());
+                            if permission_on_cancel {
+                                let seen = cancel_seen.clone();
+                                let release = Arc::clone(&prompt_release_for_cancel);
+                                tokio::spawn(async move {
+                                    let result = cx
+                                        .send_request_to(Client, scripted_permission_request())
+                                        .block_task()
+                                        .await;
+                                    let _ = seen.send(format!("permission: {result:?}"));
+                                    release.notify_waiters();
+                                });
+                                return Ok(());
+                            }
+                            if hold_prompt_until_cancel && !hold_through_cancel {
+                                prompt_release_for_cancel.notify_waiters();
+                            }
+                            Ok(())
+                        },
+                        on_receive_notification!(),
+                    )
                     .connect_with(agent_end, async move |cx: ConnectionTo<Client>| {
-                        cx.incoming_closed().await;
+                        tokio::select! {
+                            _ = cx.incoming_closed() => {}
+                            _ = die_rx => {}
+                        }
                         let _ = closed_tx.send(());
                         Ok(())
                     })
@@ -34800,9 +35386,14 @@ mod tests {
             Self {
                 seen,
                 open_session,
+                release_held,
                 closed,
                 task,
             }
+        }
+
+        fn release_held(&self) {
+            self.release_held.notify_waiters();
         }
 
         async fn next_request(&mut self) -> String {
@@ -34842,11 +35433,15 @@ mod tests {
 
     impl HandshakeRun {
         async fn start(client_end: agent_client_protocol::Channel) -> Self {
+            Self::start_as(client_end, AgentType::OpenClaw).await
+        }
+
+        async fn start_as(
+            client_end: agent_client_protocol::Channel,
+            agent_type: AgentType,
+        ) -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
             let cwd = dir.path().to_path_buf();
-            // An agent codeg forwards no MCP servers to, so the handshake reads
-            // no MCP config from the machine running the test.
-            let agent_type = AgentType::OpenClaw;
             let state = Arc::new(RwLock::new(SessionState::new(
                 "conn-handshake".to_string(),
                 agent_type,
@@ -34942,6 +35537,336 @@ mod tests {
             }
             (ended, emitted)
         }
+    }
+
+    /// OpenCode insert waits for the cancelled prompt to end, then sends the
+    /// note as the next prompt on the same session. It must not send that
+    /// prompt while the old one is still unanswered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opencode_insert_sends_the_new_prompt_only_after_the_cancelled_one_ends() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                ..Default::default()
+            },
+        );
+        let run = HandshakeRun::start_as(client_end, AgentType::OpenCode).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "INSERTED please continue".into(),
+                }],
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        assert_eq!(agent.next_request().await, "prompt-answered");
+        let inserted = agent.next_request().await;
+        assert!(
+            inserted.contains("INSERTED"),
+            "new prompt must follow the cancelled prompt's answer, got {inserted}"
+        );
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx)
+            .await
+            .expect("insert replies")
+            .expect("reply channel")
+            .expect("accepted");
+        assert!(matches!(outcome, SteerOutcome::Injected));
+        run.cmd_tx
+            .send(ConnectionCommand::Disconnect)
+            .await
+            .expect("connection alive");
+        let _ = run.ended().await;
+        agent.closed().await;
+    }
+
+    /// A permission the cancelled prompt emits after the first drain must be
+    /// answered cancelled, or the agent never ends that prompt. A permission
+    /// from the replacement prompt is a new-turn card and stays up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opencode_insert_cancels_a_permission_from_the_old_prompt_only() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                permission_on_cancel: true,
+                permission_on_inserted: true,
+                ..Default::default()
+            },
+        );
+        let mut run = HandshakeRun::start_as(client_end, AgentType::OpenCode).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "INSERTED".into(),
+                }],
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        let old_perm = agent.next_request().await;
+        assert!(
+            old_perm.contains("Cancelled"),
+            "old-turn permission must be cancelled, got {old_perm}"
+        );
+        assert_eq!(agent.next_request().await, "prompt-answered");
+        let inserted = agent.next_request().await;
+        assert!(inserted.contains("INSERTED"), "{inserted}");
+        let request_id = loop {
+            let envelope = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                run.events.recv(),
+            )
+            .await
+            .expect("new-turn permission is shown")
+            .expect("event stream");
+            if let AcpEvent::PermissionRequest { request_id, .. } = &envelope.payload {
+                break request_id.clone();
+            }
+        };
+        run.cmd_tx
+            .send(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id: "allow".into(),
+                origin: crate::acp::types::PermissionAnswerOrigin::User,
+            })
+            .await
+            .unwrap();
+        let new_perm = agent.next_request().await;
+        assert!(
+            new_perm.contains("allow"),
+            "new-turn card must stay answerable, got {new_perm}"
+        );
+        assert!(!new_perm.contains("Cancelled"), "{new_perm}");
+        let outcome = reply_rx.await.unwrap().unwrap();
+        assert!(matches!(outcome, SteerOutcome::Injected));
+        run.cmd_tx.send(ConnectionCommand::Disconnect).await.unwrap();
+        let _ = run.ended().await;
+        agent.closed().await;
+    }
+
+    /// 已提交的插入消息不再拼接进下一次请求，避免同一会话重复消费。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_second_insert_does_not_repeat_the_injected_message_it_cancels() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                hold_inserted: true,
+                ..Default::default()
+            },
+        );
+        let run = HandshakeRun::start_as(client_end, AgentType::OpenCode).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+
+        let (first_tx, first_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "HOLD-FIRST".into(),
+                }],
+                reply: first_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        assert_eq!(agent.next_request().await, "prompt-answered");
+        let first = agent.next_request().await;
+        assert!(first.contains("HOLD-FIRST"), "{first}");
+        assert!(matches!(
+            first_rx.await.unwrap().unwrap(),
+            SteerOutcome::Injected
+        ));
+
+        let (second_tx, second_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "SECOND".into(),
+                }],
+                reply: second_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        assert_eq!(agent.next_request().await, "prompt-answered");
+        let second = agent.next_request().await;
+        assert!(!second.contains("HOLD-FIRST"), "{second}");
+        assert!(second.contains("SECOND"), "{second}");
+        assert!(matches!(
+            second_rx.await.unwrap().unwrap(),
+            SteerOutcome::Injected
+        ));
+        run.cmd_tx.send(ConnectionCommand::Disconnect).await.unwrap();
+        let _ = run.ended().await;
+        agent.closed().await;
+    }
+
+    /// Injected is not claimed when the replacement prompt's first poll is
+    /// already a dispatch failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn insert_does_not_claim_injected_when_dispatch_already_failed() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                close_after_cancel_answer: true,
+                ..Default::default()
+            },
+        );
+        let run = HandshakeRun::start_as(client_end, AgentType::OpenCode).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "INSERTED".into(),
+                }],
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        assert_eq!(agent.next_request().await, "prompt-answered");
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), reply_rx)
+            .await
+            .expect("insert replies")
+            .expect("reply channel");
+        assert!(
+            outcome.is_err(),
+            "dispatch failure must not be reported as injected: {outcome:?}"
+        );
+        let _ = run.ended().await;
+        agent.closed().await;
+    }
+
+    /// A replace that times out backgrounds the old prompt and refuses the
+    /// next one until that request ends. Stop still reaches the agent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_timed_out_insert_blocks_the_next_prompt_until_the_old_one_ends() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                hold_through_cancel: true,
+                ..Default::default()
+            },
+        );
+        let mut run = HandshakeRun::start_as(client_end, AgentType::OpenCode).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "INSERTED".into(),
+                }],
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        loop {
+            let envelope = tokio::time::timeout(
+                crate::acp::turn_replace::REPLACE_PROMPT_END
+                    + std::time::Duration::from_secs(10),
+                run.events.recv(),
+            )
+            .await
+            .expect("replace times out")
+            .expect("event stream");
+            if matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+                break;
+            }
+        }
+        assert!(reply_rx.await.unwrap().is_err(), "the insert is returned");
+        assert!(run.state.read().await.prompt_barrier);
+
+        run.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+        assert_eq!(agent.next_request().await, "session/cancel");
+        assert!(
+            matches!(
+                run.ended.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "Stop must not require the old prompt to end"
+        );
+
+        run.prompt("RETRY").await;
+        loop {
+            let envelope = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                run.events.recv(),
+            )
+            .await
+            .expect("retry is refused")
+            .expect("event stream");
+            if let AcpEvent::Error { message, .. } = &envelope.payload {
+                if message.contains("previous prompt") {
+                    break;
+                }
+            }
+        }
+        assert!(run.state.read().await.prompt_barrier);
+
+        agent.release_held();
+        for _ in 0..200 {
+            if !run.state.read().await.prompt_barrier {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!run.state.read().await.prompt_barrier);
+        run.prompt("AFTER").await;
+        let mut saw_after = false;
+        let mut saw_retry = false;
+        for _ in 0..4 {
+            let seen = agent.next_request().await;
+            saw_retry |= seen.contains("RETRY");
+            if seen.contains("AFTER") {
+                saw_after = true;
+                break;
+            }
+        }
+        assert!(saw_after && !saw_retry, "retry={saw_retry} after={saw_after}");
+        run.cmd_tx.send(ConnectionCommand::Disconnect).await.unwrap();
+        let _ = run.ended().await;
+        agent.closed().await;
     }
 
     /// A connection let go while its agent has not answered Initialize stops

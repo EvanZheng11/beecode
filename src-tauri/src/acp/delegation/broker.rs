@@ -457,6 +457,11 @@ struct PendingInner {
     /// would silently stomp the first's `RunningTask`. Unlike `setups` this is
     /// a plain claim with no early-terminal gating semantics.
     resuming: HashSet<String>,
+    /// Task ids whose turn-cancel teardown (spawner cancel + disconnect) has
+    /// not finished. `resume_delegation` refuses these until the id is removed,
+    /// so a resume cannot `session/load` a child the old disconnect can still
+    /// kill, and cannot spawn a second child onto that session.
+    teardown_pending: HashSet<String>,
 }
 
 /// One in-flight `handle_request` setup tracked for parent-cancel coverage.
@@ -1571,6 +1576,25 @@ pub struct DelegationBroker {
     /// [`BLOCK_RESURFACE_INTERVAL`] in production. A field only so tests can
     /// shrink it; nothing outside tests ever sets it.
     block_resurface: Duration,
+}
+
+/// A child this parent-turn cancel interrupted. Enough for the next prompt
+/// to name `resume_delegation`; the broker still refuses completed, failed,
+/// live, and session-less tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterruptedDelegation {
+    pub task_id: String,
+    pub child_conversation_id: i32,
+    pub task_preview: String,
+}
+
+/// [`DelegationBroker::cancel_by_parent_turn`]'s result. Callers that only
+/// need the drain ignore it. `done` resolves after the background child
+/// teardown for THIS cancel — wait on it before a new prompt may resume
+/// those children.
+pub struct ParentTurnCancel {
+    pub interrupted: Vec<InterruptedDelegation>,
+    pub done: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl DelegationBroker {
@@ -3631,16 +3655,29 @@ impl DelegationBroker {
     /// a host re-emit of an already-handled `tool_call_id` re-register and
     /// mis-bind the next same-key delegation on this live connection — see
     /// `drop_tool_calls_for_parent`.
-    pub async fn cancel_by_parent_turn(&self, parent_connection_id: &str) {
+    pub async fn cancel_by_parent_turn(&self, parent_connection_id: &str) -> ParentTurnCancel {
         let drained = self
             .drain_for_parent_cancel(parent_connection_id, true)
             .await;
+        let interrupted = drained
+            .iter()
+            .map(|(task, _)| InterruptedDelegation {
+                task_id: task.task_id.clone(),
+                child_conversation_id: task.child_conversation_id,
+                task_preview: task.task_preview.clone(),
+            })
+            .collect();
         // The fast drain above already ran inline (scoped to the just-ended
-        // turn); background only the slow child teardown.
+        // turn); background only the slow child teardown. `done` fires after
+        // that teardown so a follow-up prompt can wait before resume — the
+        // old disconnect must not kill a connection the new turn spawns.
+        let (tx, done) = tokio::sync::oneshot::channel();
         let broker = self.clone();
         tokio::spawn(async move {
             broker.finalize_parent_cancel(drained).await;
+            let _ = tx.send(());
         });
+        ParentTurnCancel { interrupted, done }
     }
 
     /// Fast, lock-guarded part of a parent cancel: drop/tombstone this parent's
@@ -3682,8 +3719,14 @@ impl DelegationBroker {
                 .collect();
             if keep_consumed {
                 // Turn cancel: connection stays alive → keep each canceled
-                // result queryable.
-                drain_and_record_canceled(&mut inner, keys, "parent canceled")
+                // result queryable. Mark teardown before releasing the lock so
+                // a resume cannot pass the gate in the gap before the
+                // background disconnect starts.
+                let drained = drain_and_record_canceled(&mut inner, keys, "parent canceled");
+                for (task, _) in &drained {
+                    inner.teardown_pending.insert(task.task_id.clone());
+                }
+                drained
             } else {
                 // Connection teardown: just remove the running tasks and drop the
                 // whole completed-cache for this parent. No completed entry to
@@ -3713,8 +3756,15 @@ impl DelegationBroker {
     /// drain.
     async fn finalize_parent_cancel(&self, drained: Vec<(RunningTask, u64)>) {
         for (task, duration_ms) in drained {
-            // A turn was in flight → cancel + disconnect.
+            // A turn was in flight → cancel + disconnect. The resume gate
+            // stays up until disconnect returns, including when cancel is slow.
             self.teardown_canceled_child(&task, duration_ms, true).await;
+            self.pending
+                .inner
+                .lock()
+                .await
+                .teardown_pending
+                .remove(&task.task_id);
         }
     }
 
@@ -4433,6 +4483,29 @@ impl DelegationBroker {
         if ctx.parent_id != Some(req.parent_conversation_id) {
             self.drop_inflight(inflight_id).await;
             return unknown_report(&req.task_id);
+        }
+        // Hard gate: the turn cancel already marked the task Canceled, but the
+        // child connection may still be live. Resuming now session/loads that
+        // session and the in-flight disconnect kills the new task. Refused
+        // until `finalize_parent_cancel` removes the id — not a prompt hint.
+        if self
+            .pending
+            .inner
+            .lock()
+            .await
+            .teardown_pending
+            .contains(&req.task_id)
+        {
+            self.drop_inflight(inflight_id).await;
+            return not_resumable_report(
+                &req.task_id,
+                ctx.status,
+                Some(ctx.child_conversation_id),
+                Some(ctx.agent_type),
+                "the interrupted child connection is still being torn down — \
+                 resume is refused until that cleanup finishes, then the same \
+                 task_id can be resumed.",
+            );
         }
         // Deferred claim-contention refusal (see the gate): the caller owns the
         // task, so naming the in-flight resume leaks nothing.
@@ -7793,7 +7866,9 @@ mod tests {
             )
             .await;
 
-        broker.cancel_by_parent_turn("parent-conn").await;
+        let cancel = broker.cancel_by_parent_turn("parent-conn").await;
+        assert_eq!(cancel.interrupted.len(), 1);
+        assert!(!cancel.interrupted[0].task_id.is_empty());
 
         // (a) Synchronously — no sleep: the parked call is removed and the
         // tracker entry is dropped (tombstoned), so neither can leak into a
@@ -7812,13 +7887,66 @@ mod tests {
         );
 
         // (b) The backgrounded child teardown still resolves the driver as
-        // canceled and tears the child down exactly once.
+        // canceled and tears the child down exactly once. `done` is that
+        // teardown, not a sleep.
+        tokio::time::timeout(Duration::from_secs(2), cancel.done)
+            .await
+            .expect("this cancel's teardown finishes")
+            .expect("teardown sender lives until finalize returns");
         match driver.await.unwrap() {
             DelegationOutcome::Err { code, .. } => assert_eq!(code, "canceled"),
             other => panic!("expected canceled, got {other:?}"),
         }
         assert_eq!(mock.cancels.lock().await.as_slice(), &["child-1"]);
         assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-1"]);
+    }
+
+    /// The connection may send the next turn once its teardown wait times out.
+    /// Resume must still be refused until this cancel's disconnect finishes,
+    /// then the same task_id may resume once — not a second spawn onto the
+    /// session the old disconnect can still kill.
+    #[tokio::test]
+    async fn resume_is_refused_until_turn_cancel_teardown_finishes() {
+        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        mock.queue_spawn(Ok("child-conn-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let ack = broker.start_delegation(request(1, "pt-orig")).await;
+        let task_id = ack.task_id.expect("running task");
+        assert_eq!(ack.status, TaskStatus::Running);
+
+        let (release, entered) = mock.install_teardown_hold().await;
+        let cancel = broker.cancel_by_parent_turn("parent-conn").await;
+        entered.await.expect("cancel entered the hold");
+
+        let refused = broker.resume_delegation(resume_request(&task_id)).await;
+        assert_eq!(refused.status, TaskStatus::Canceled);
+        assert_eq!(refused.error_code.as_deref(), Some("not_resumable"));
+        assert!(refused.message.unwrap().contains("still being torn down"));
+        assert!(
+            mock.resume_spawn_args.lock().await.is_empty(),
+            "timeout-equivalent resume must not spawn while disconnect is in flight"
+        );
+        assert!(
+            mock.disconnects.lock().await.is_empty(),
+            "disconnect has not run; the child connection is still the old one"
+        );
+
+        release.send(()).expect("hold still open");
+        tokio::time::timeout(Duration::from_secs(2), cancel.done)
+            .await
+            .expect("teardown finishes when the spawner is released")
+            .expect("done sender lives until finalize returns");
+        assert_eq!(mock.disconnects.lock().await.as_slice(), &["child-conn-1"]);
+
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
+        mock.queue_resume_send(Ok(())).await;
+        let resumed = broker.resume_delegation(resume_request(&task_id)).await;
+        assert_eq!(resumed.status, TaskStatus::Running);
+        assert_eq!(resumed.task_id.as_deref(), Some(task_id.as_str()));
+        let spawns = mock.resume_spawn_args.lock().await;
+        assert_eq!(spawns.len(), 1, "one resume, one spawn");
+        assert_eq!(spawns[0].external_session_id, "ext-session-1");
     }
 
     #[tokio::test]

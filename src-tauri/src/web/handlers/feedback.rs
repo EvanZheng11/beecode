@@ -77,6 +77,7 @@ pub async fn submit_session_feedback(
                 // prompt) and surfaces the others.
                 AcpError::NoActiveTurn
                 | AcpError::FeedbackDisabled
+                | AcpError::FeedbackDeferred
                 | AcpError::InvalidFeedback(_) => {
                     AppCommandError::new(AppErrorCode::InvalidInput, message)
                 }

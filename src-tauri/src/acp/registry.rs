@@ -544,6 +544,13 @@ pub fn steering_prompt_required_min_version(agent_type: AgentType) -> Option<&'s
     }
 }
 
+/// OpenCode has no `_session/steering` (do not report it as native). The same
+/// insert entry cancels the running prompt and, once that prompt has actually
+/// ended, sends the note as the next `session/prompt` on the same session.
+pub fn steering_replaces_turn(agent_type: AgentType) -> bool {
+    matches!(agent_type, AgentType::OpenCode)
+}
+
 /// Whether a live-feedback note that would be steered natively goes to the
 /// next-turn queue instead while a permission card is open on the session
 /// (`ConnectionManager::submit_feedback_native` answers `NoActiveTurn`, the
@@ -7207,11 +7214,15 @@ mod tests {
             AgentType::Gemini,
             AgentType::OpenClaw,
             AgentType::Grok,
+            AgentType::OpenCode,
             AgentType::Antigravity,
             AgentType::Custom("acme"),
         ] {
             assert_eq!(steering_prompt_required_min_version(agent), None);
+            assert_eq!(steering_replaces_turn(agent), agent == AgentType::OpenCode);
         }
+        assert!(!steering_replaces_turn(AgentType::Codex));
+        assert!(!steering_replaces_turn(AgentType::ClaudeCode));
     }
 
     #[test]

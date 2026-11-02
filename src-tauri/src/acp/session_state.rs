@@ -598,6 +598,28 @@ pub struct SessionState {
     /// opt-in), rerouting subsequent notes to the MCP pull path.
     pub native_steering_available: bool,
 
+    /// OpenCode insert: same user entry as native steering, but the connection
+    /// replaces the running prompt instead of calling `_session/steering`.
+    /// Not a native-capability claim. Set once at initialize.
+    pub steer_replaces_turn: bool,
+
+    /// In-flight replace inserts. Completion notices must not prompt or steer
+    /// while this is non-zero — they would steal the turn the insert is
+    /// about to send. Not on the snapshot.
+    pub notice_hold: u32,
+
+    /// OpenCode insert has cancelled the current prompt and not yet dispatched
+    /// the replacement (or is still waiting out a timed-out prompt). Old-turn
+    /// permission, question, and plan cards are refused. Cleared before the
+    /// replacement prompt is sent, so a card from the new turn is kept. Not
+    /// on the snapshot.
+    pub replacing_turn: bool,
+
+    /// A replace timed out and backgrounded the old `session/prompt`. New
+    /// prompts are refused until that request ends. Stop and disconnect are
+    /// not gated. Not on the snapshot.
+    pub prompt_barrier: bool,
+
     /// Which generation of codex-acp's `request_user_input` bridge this
     /// connection is talking to — 1.12.0 swapped the question and the tab
     /// header between a form property's `title` and `description`, and nothing
@@ -928,6 +950,10 @@ impl SessionState {
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
             native_steering_available: false,
+            steer_replaces_turn: false,
+            notice_hold: 0,
+            replacing_turn: false,
+            prompt_barrier: false,
             codex_user_input_shape: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
@@ -2512,6 +2538,7 @@ impl SessionState {
             background_outstanding: self.background_outstanding,
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
+            steer_replaces_turn: self.steer_replaces_turn,
             modes: self.modes.clone(),
             current_mode: self.current_mode.clone(),
             config_options: self.config_options.clone(),
@@ -2650,6 +2677,11 @@ pub struct LiveSessionSnapshot {
     /// like `feedback_tool_available` so the frontend can rely on it.
     #[serde(default)]
     pub native_steering_available: bool,
+    /// OpenCode uses the same insert entry as native steering, but does not
+    /// speak `_session/steering`. Absent on older payloads → false. Omitted
+    /// when false so other agents' snapshots stay unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steer_replaces_turn: bool,
     pub modes: Option<SessionModeStateInfo>,
     pub current_mode: Option<String>,
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,

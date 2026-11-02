@@ -288,6 +288,33 @@ describe("useSessionFeedback", () => {
     expect(result.current.steerAvailable).toBe(true)
   })
 
+  it("uses the native insert copy when the backend replaces the turn", async () => {
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: true,
+        native_steering_available: false,
+        steer_replaces_turn: true,
+      })
+    )
+    const { result } = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() => expect(result.current.channel).toBe("native"))
+    expect(result.current.steerAvailable).toBe(true)
+
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: true,
+        native_steering_available: false,
+        steer_replaces_turn: true,
+      })
+    )
+    mockSubmit.mockResolvedValueOnce(note("r1", "inserted", "delivered"))
+    await act(async () => {
+      await result.current.steer("inserted")
+    })
+    expect(result.current.channel).toBe("native")
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
   it("stays on the pull channel when only the tool is available", async () => {
     mockSnapshot.mockResolvedValue(
       snapshot({

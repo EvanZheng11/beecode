@@ -516,6 +516,10 @@ impl Default for ConnectionManager {
     }
 }
 
+#[cfg(test)]
+pub(crate) static NOTICE_PROMPT_REFUSALS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl ConnectionManager {
     pub fn new() -> Self {
         Self {
@@ -1246,6 +1250,20 @@ impl ConnectionManager {
             .map_err(|_| AcpError::ProcessExited)?;
         {
             let mut s = state_arc.write().await;
+            // Same lock as the gate. A notice that read hold=0 / idle before
+            // an insert landed must not take the slot the user's prompt is
+            // about to use, and must not start a second session/prompt while
+            // a timed-out replace is still on the wire.
+            if s.prompt_barrier {
+                return Err(AcpError::TurnInProgress);
+            }
+            if s.notice_hold > 0
+                && crate::acp::turn_replace::blocks_are_completion_notice(&blocks)
+            {
+                #[cfg(test)]
+                NOTICE_PROMPT_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Err(AcpError::FeedbackDeferred);
+            }
             if s.turn_in_flight {
                 // Names the gate, not just the outcome: the linked path checks
                 // the same flag once before its side effects and again here, and
@@ -3457,16 +3475,35 @@ impl ConnectionManager {
         // `native_steering_available` is re-read on every call so a
         // `startedNewTurn` downgrade mid-session silently reroutes later
         // notes to the pull path.
-        let (native, tool_available) = {
+        let (native, tool_available, replaces, notice_hold, prompt_barrier) = {
             let s = state.read().await;
-            (s.native_steering_available, s.feedback_tool_available)
+            (
+                s.native_steering_available,
+                s.feedback_tool_available,
+                s.steer_replaces_turn,
+                s.notice_hold,
+                s.prompt_barrier,
+            )
         };
-        if !native && !tool_available {
+        // A child-completion notice must not cancel the turn it is reporting
+        // on, and must not race the user's insert while that insert holds the
+        // next prompt.
+        let completion_notice = crate::acp::turn_replace::is_completion_notice(&text);
+        if completion_notice && (notice_hold > 0 || prompt_barrier) {
+            // Deferred, not disabled: the notifier must not fall back to a
+            // prompt. The claim stays retryable.
+            return Err(AcpError::FeedbackDeferred);
+        }
+        if !native && !tool_available && !(replaces && !completion_notice) {
             return Err(AcpError::FeedbackDisabled);
         }
 
         if native {
             return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
+                .await;
+        }
+        if replaces && !completion_notice {
+            return Self::submit_feedback_replace(conn_id, state, cmd_tx, emitter, text, blocks)
                 .await;
         }
 
@@ -3504,6 +3541,41 @@ impl ConnectionManager {
             return Err(AcpError::NoActiveTurn);
         }
         Ok(item)
+    }
+
+    /// OpenCode insert. Same `Steer` command and delivered-note result as
+    /// native steering; the connection loop cancels the running prompt and
+    /// sends this note only after that prompt ends. `notice_hold` stays up
+    /// until that reply so a completion notice cannot take the next prompt.
+    async fn submit_feedback_replace(
+        conn_id: &str,
+        state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
+        cmd_tx: tokio::sync::mpsc::Sender<ConnectionCommand>,
+        emitter: EventEmitter,
+        text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
+    ) -> Result<FeedbackItem, AcpError> {
+        {
+            let mut s = state.write().await;
+            s.notice_hold = s.notice_hold.saturating_add(1);
+        }
+        let conn_id = conn_id.to_string();
+        let state_for_clear = Arc::clone(&state);
+        let handle = tokio::spawn(async move {
+            let result =
+                Self::submit_feedback_native(&conn_id, state, cmd_tx, emitter, text, blocks).await;
+            {
+                let mut s = state_for_clear.write().await;
+                s.notice_hold = s.notice_hold.saturating_sub(1);
+            }
+            result
+        });
+        match handle.await {
+            Ok(result) => result,
+            Err(join_err) => Err(AcpError::protocol(format!(
+                "replace-turn feedback task did not complete: {join_err}"
+            ))),
+        }
     }
 
     /// Native `_session/steering` delivery — the push half of
@@ -3849,6 +3921,9 @@ impl ConnectionManager {
             return None;
         }
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
+        if state.read().await.replacing_turn {
+            return None;
+        }
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let deadline = timeout.map(QuestionDeadline::from_now);
@@ -4179,6 +4254,9 @@ impl ConnectionManager {
         plan_markdown: String,
     ) -> Option<RegisteredPlanApproval> {
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
+        if state.read().await.replacing_turn {
+            return None;
+        }
         let approval_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
@@ -9977,6 +10055,87 @@ mod tests {
 
     // --- native steering (push channel) ----------------------------------
 
+    #[tokio::test]
+    async fn opencode_insert_uses_steer_and_holds_completion_notices() {
+        let mgr = Arc::new(ConnectionManager::new());
+        let mut rx = mgr
+            .insert_test_connection_live(
+                "c1",
+                AgentType::OpenCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        {
+            let state = mgr.get_state("c1").await.unwrap();
+            let mut s = state.write().await;
+            s.steer_replaces_turn = true;
+            s.feedback_tool_available = true;
+            s.turn_in_flight = true;
+            s.native_steering_available = false;
+        }
+        let submit = {
+            let mgr = mgr.clone();
+            tokio::spawn(async move {
+                mgr.submit_feedback("c1", "ship the fix".into(), None).await
+            })
+        };
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("steer enqueued")
+            .expect("connection alive");
+        let ConnectionCommand::Steer { blocks, reply } = cmd else {
+            panic!("OpenCode insert must use the steer entry, not a pull note");
+        };
+        assert!(matches!(
+            blocks.first(),
+            Some(PromptInputBlock::Text { text }) if text == "ship the fix"
+        ));
+        assert!(
+            mgr.get_state("c1").await.unwrap().read().await.notice_hold > 0,
+            "notices are held until the insert is accepted"
+        );
+        let notice = mgr
+            .submit_feedback(
+                "c1",
+                "[system] Sub-agent task t1 finished with status: Canceled.\n".into(),
+                None,
+            )
+            .await;
+        assert!(matches!(notice, Err(AcpError::FeedbackDeferred)));
+        let _ = reply.send(Ok(SteerOutcome::Injected));
+        let item = submit.await.unwrap().unwrap();
+        assert_eq!(item.status, crate::acp::feedback::FeedbackStatus::Delivered);
+        assert_eq!(
+            mgr.get_state("c1").await.unwrap().read().await.notice_hold,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn send_prompt_refuses_a_completion_notice_while_an_insert_holds() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::OpenCode, None, EventEmitter::Noop)
+            .await;
+        {
+            let state = mgr.get_state("c1").await.unwrap();
+            state.write().await.notice_hold = 1;
+        }
+        let err = mgr
+            .send_prompt(
+                "c1",
+                vec![PromptInputBlock::Text {
+                    text: "[system] Sub-agent task t1 finished with status: Canceled.\n".into(),
+                }],
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcpError::FeedbackDeferred));
+        assert!(!mgr.get_state("c1").await.unwrap().read().await.turn_in_flight);
+        assert!(rx.try_recv().is_err(), "the user's next prompt slot stays free");
+    }
+
     async fn mark_native_steering_ready(mgr: &ConnectionManager, conn_id: &str) {
         let state = mgr.get_state(conn_id).await.unwrap();
         let mut s = state.write().await;
@@ -11631,6 +11790,24 @@ mod tests {
             "present entry is not compensated"
         );
         assert!(state.read().await.pending_question.is_some());
+    }
+
+    #[tokio::test]
+    async fn replacing_turn_refuses_a_new_question_and_a_cleared_flag_keeps_it() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("rq", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        {
+            let state = mgr.get_state("rq").await.unwrap();
+            state.write().await.replacing_turn = true;
+        }
+        assert!(mgr.register_question("rq", q_spec()).await.is_none());
+        assert!(mgr.register_plan_approval("rq", "tc".into(), "plan".into()).await.is_none());
+        {
+            let state = mgr.get_state("rq").await.unwrap();
+            state.write().await.replacing_turn = false;
+        }
+        assert!(mgr.register_question("rq", q_spec()).await.is_some());
     }
 
     #[tokio::test]

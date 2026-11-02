@@ -235,6 +235,11 @@ pub mod mock {
         /// exercise a parent cancel landing in the spawn window. `None`
         /// (default) = no gate, return immediately.
         pub spawn_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        /// When set, `cancel` signals `teardown_entered` then awaits this
+        /// receiver before returning. `disconnect` has not run yet, so a
+        /// resume gate test can observe teardown-in-progress without sleeping.
+        pub teardown_hold: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        pub teardown_entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +323,22 @@ pub mod mock {
             let (tx, rx) = tokio::sync::oneshot::channel();
             *self.spawn_gate.lock().await = Some(rx);
             tx
+        }
+
+        /// Hold the next `cancel` after it records the id. Returns `(release,
+        /// entered)`. `entered` fires once cancel is inside the hold, before
+        /// disconnect.
+        pub async fn install_teardown_hold(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        ) {
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            *self.teardown_hold.lock().await = Some(release_rx);
+            *self.teardown_entered.lock().await = Some(entered_tx);
+            (release_tx, entered_rx)
         }
     }
 
@@ -436,6 +457,14 @@ pub mod mock {
 
         async fn cancel(&self, conn_id: &str) -> Result<(), SpawnerError> {
             self.cancels.lock().await.push(conn_id.to_string());
+            let entered = self.teardown_entered.lock().await.take();
+            let hold = self.teardown_hold.lock().await.take();
+            if let Some(entered) = entered {
+                let _ = entered.send(());
+            }
+            if let Some(hold) = hold {
+                let _ = hold.await;
+            }
             Ok(())
         }
 

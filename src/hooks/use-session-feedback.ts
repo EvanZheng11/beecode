@@ -154,6 +154,9 @@ export function useSessionFeedback({
   // leaving this true would keep offering "insert into current turn" while
   // notes actually land on the pull path.
   const [nativeSteering, setNativeSteering] = useState(false)
+  // OpenCode: same insert copy and submit entry as native steering. The
+  // backend does not set `native_steering_available` (no `_session/steering`).
+  const [replaceSteer, setReplaceSteer] = useState(false)
   // Latch for that downgrade: once set, a stale pre-downgrade snapshot that
   // resolves late can never flip the channel back to native. Reset with the
   // rest of the per-connection state.
@@ -198,6 +201,7 @@ export function useSessionFeedback({
     setNotes([])
     setToolAvailable(false)
     setNativeSteering(false)
+    setReplaceSteer(false)
     steeringDowngradedRef.current = false
     consumedRef.current = new Map()
     // `dismissedRef` deliberately survives this reset: note ids are uuids, so a
@@ -219,6 +223,7 @@ export function useSessionFeedback({
         if (snap.native_steering_available && !steeringDowngradedRef.current) {
           setNativeSteering(true)
         }
+        if (snap.steer_replaces_turn) setReplaceSteer(true)
         // A new turn started while the fetch was in flight — the snapshot holds
         // the previous turn's (already-cleared) notes; drop them.
         if (turnGenRef.current !== startGen) return
@@ -248,7 +253,13 @@ export function useSessionFeedback({
   // connection is actually live, re-read (only while either is still unknown —
   // a `false` no-ops so this can't loop, and it stops once both are known).
   useEffect(() => {
-    if (!enabled || !connectionId || (toolAvailable && nativeSteering)) return
+    if (
+      !enabled ||
+      !connectionId ||
+      (toolAvailable && nativeSteering) ||
+      replaceSteer
+    )
+      return
     if (connStatus !== "connected" && connStatus !== "prompting") return
     let cancelled = false
     void acpGetSessionSnapshot(connectionId)
@@ -259,12 +270,20 @@ export function useSessionFeedback({
         if (snap?.native_steering_available && !steeringDowngradedRef.current) {
           setNativeSteering(true)
         }
+        if (snap?.steer_replaces_turn) setReplaceSteer(true)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [enabled, connectionId, connStatus, toolAvailable, nativeSteering])
+  }, [
+    enabled,
+    connectionId,
+    connStatus,
+    toolAvailable,
+    nativeSteering,
+    replaceSteer,
+  ])
 
   // Build the note list from the live event stream, scoped to this connection.
   useAcpEvent(
@@ -380,7 +399,7 @@ export function useSessionFeedback({
       // session — close the dialog instead. NOTE: a merely-ended turn keeps
       // `enabled`/`toolAvailable` true, so it still flows to the submit below and
       // gets rerouted via the no-active-turn fallback (draft preserved).
-      if (!enabled || (!toolAvailable && !nativeSteering)) {
+      if (!enabled || (!toolAvailable && !nativeSteering && !replaceSteer)) {
         setDialogOpen(false)
         return
       }
@@ -418,6 +437,7 @@ export function useSessionFeedback({
       enabled,
       toolAvailable,
       nativeSteering,
+      replaceSteer,
       onResendAsPrompt,
       reconcileChannel,
       t,
@@ -489,9 +509,13 @@ export function useSessionFeedback({
   // channel to offer — the composer would surface a mid-turn send whose only
   // possible outcome is `steer`'s "nothing to steer" rejection.
   const steerAvailable =
-    Boolean(connectionId) && (toolAvailable || nativeSteering)
+    Boolean(connectionId) && (toolAvailable || nativeSteering || replaceSteer)
   const canSubmit = enabled && steerAvailable && isPrompting
-  const channel: "native" | "pull" = nativeSteering ? "native" : "pull"
+  // Replace uses the native insert copy. It is not `nativeSteering`, so a
+  // snapshot that correctly reports `native_steering_available: false` must
+  // not downgrade it back to a pull note.
+  const channel: "native" | "pull" =
+    nativeSteering || replaceSteer ? "native" : "pull"
   // Drop the notes the transcript is already rendering as user turns. Kept as
   // a derivation rather than a filter on `setNotes` so a note stays recoverable
   // as a strip if the transcript never took it.
