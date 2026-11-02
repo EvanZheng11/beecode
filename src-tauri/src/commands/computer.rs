@@ -2482,14 +2482,13 @@ pub async fn computer_open_permission_settings(
 /// Settings' list by hand, should it not be listed there after a request.
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
-pub async fn computer_reveal_helper(app: AppHandle) -> Result<(), AppCommandError> {
+pub async fn computer_reveal_helper() -> Result<(), AppCommandError> {
     let helper = crate::computer::local::helper_to_reveal()
         .await
         .map_err(backend_error)?;
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .reveal_item_in_dir(helper)
-        .map_err(|e| AppCommandError::configuration_invalid(e.to_string()))
+    // Same crash as the file tree: the opener plugin's reveal calls AppKit
+    // off the main thread. The server handler already shells out.
+    crate::commands::open_in::reveal_path(helper).await
 }
 
 /// Every window, for the share picker.

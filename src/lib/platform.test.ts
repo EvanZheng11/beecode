@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   getActiveRemoteConnectionId: vi.fn<() => string | null>(() => null),
   tauriOpenUrl: vi.fn(async () => {}),
   tauriOpenPath: vi.fn(async () => {}),
-  tauriReveal: vi.fn(async () => {}),
+  invoke: vi.fn(async () => {}),
   tauriDialogOpen: vi.fn<(options: unknown) => Promise<unknown>>(
     async () => null
   ),
@@ -32,7 +32,10 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: mocks.tauriOpenUrl,
   openPath: mocks.tauriOpenPath,
-  revealItemInDir: mocks.tauriReveal,
+}))
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: mocks.invoke,
 }))
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -104,16 +107,41 @@ describe("openPath", () => {
 
 describe("revealItemInDir", () => {
   beforeEach(() => {
-    mocks.tauriReveal.mockReset()
-    mocks.tauriReveal.mockResolvedValue(undefined)
+    mocks.invoke.mockReset()
+    mocks.invoke.mockResolvedValue(undefined)
+    mocks.tauriOpenPath.mockReset()
   })
 
-  it("reveals the item itself when the shell can take it", async () => {
+  it("asks the app command, not the opener plugin, to reveal the item", async () => {
     mocks.isDesktop.mockReturnValue(true)
     await revealItemInDir("C:\\Users\\a\\Downloads\\file.zip")
-    expect(mocks.tauriReveal).toHaveBeenCalledWith(
-      "C:\\Users\\a\\Downloads\\file.zip"
-    )
+    expect(mocks.invoke).toHaveBeenCalledWith("reveal_in_file_manager", {
+      path: "C:\\Users\\a\\Downloads\\file.zip",
+    })
+    expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
+  })
+
+  it("sends a second click through as well", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await revealItemInDir("/repo/a")
+    await revealItemInDir("/repo/b")
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "reveal_in_file_manager", {
+      path: "/repo/a",
+    })
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "reveal_in_file_manager", {
+      path: "/repo/b",
+    })
+  })
+
+  it("reports a missing path instead of opening its parent", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.invoke.mockRejectedValue({
+      code: "not_found",
+      message: "Resource not found",
+    })
+    await expect(revealItemInDir("/repo/gone")).rejects.toMatchObject({
+      code: "not_found",
+    })
     expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
   })
 
@@ -123,7 +151,7 @@ describe("revealItemInDir", () => {
   // there.
   it("opens the containing folder when the item cannot be revealed", async () => {
     mocks.isDesktop.mockReturnValue(true)
-    mocks.tauriReveal.mockRejectedValue(new Error("to ITEMIDLIST"))
+    mocks.invoke.mockRejectedValue(new Error("to ITEMIDLIST"))
     await revealItemInDir("\\\\Mac\\Home\\Downloads\\file.zip")
     expect(mocks.tauriOpenPath).toHaveBeenCalledWith("\\\\Mac\\Home\\Downloads")
   })
@@ -132,7 +160,7 @@ describe("revealItemInDir", () => {
   // last slash, not the one before the backslash.
   it("does not cut a unix path at a backslash in the file name", async () => {
     mocks.isDesktop.mockReturnValue(true)
-    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    mocks.invoke.mockRejectedValue(new Error("nope"))
     await revealItemInDir("/Users/me/Downloads/report\\2026.pdf")
     expect(mocks.tauriOpenPath).toHaveBeenCalledWith("/Users/me/Downloads")
   })
@@ -140,14 +168,14 @@ describe("revealItemInDir", () => {
   // Windows takes either separator, and a path may mix them.
   it("cuts a windows path at whichever separator comes last", async () => {
     mocks.isDesktop.mockReturnValue(true)
-    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    mocks.invoke.mockRejectedValue(new Error("nope"))
     await revealItemInDir("C:\\Users/me\\Downloads\\file.zip")
     expect(mocks.tauriOpenPath).toHaveBeenCalledWith("C:\\Users/me\\Downloads")
   })
 
   it("rethrows when there is no folder to fall back to", async () => {
     mocks.isDesktop.mockReturnValue(true)
-    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    mocks.invoke.mockRejectedValue(new Error("nope"))
     await expect(revealItemInDir("\\\\Mac")).rejects.toThrow("nope")
     expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
   })

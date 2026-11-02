@@ -1891,6 +1891,7 @@ mod tauri_app {
                 folders::open_folder_in_workspace,
                 folders::open_folder_by_id,
                 open_in::open_in_code,
+                open_in::reveal_in_file_manager,
                 folders::remove_folder_from_workspace,
                 folders::list_folder_groups,
                 folders::create_folder_group,

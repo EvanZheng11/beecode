@@ -3276,7 +3276,11 @@ export function FileTreeTab() {
                           terminalLabel={t("openInTerminal")}
                           codeLabel={t("openInCode")}
                           onOpenExplorer={() => {
-                            void revealItemInDir(folder.path)
+                            void revealItemInDir(folder.path).catch((error) => {
+                              toast.error(t("toasts.openDirectoryFailed"), {
+                                description: toErrorMessage(error),
+                              })
+                            })
                           }}
                           onOpenTerminal={() => {
                             void handleOpenDirInTerminal(

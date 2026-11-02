@@ -219,6 +219,93 @@ fn spawn_vscode(launch: &VsCodeLaunch, target: &Path) -> Result<(), AppCommandEr
     })
 }
 
+/// `open -R` argv. The path is its own argument, never a shell line.
+#[cfg_attr(
+    not(any(test, all(feature = "tauri-runtime", target_os = "macos"))),
+    allow(dead_code)
+)]
+fn finder_reveal_invocation(path: &Path) -> (&'static str, Vec<OsString>) {
+    (
+        "/usr/bin/open",
+        vec![OsString::from("-R"), path.as_os_str().to_owned()],
+    )
+}
+
+/// The leaf has to be there. `symlink_metadata` does not follow a dangling
+/// link, and it does not rewrite a Windows path into the `\\?\` form the
+/// shell refuses.
+#[cfg_attr(not(any(test, feature = "tauri-runtime")), allow(dead_code))]
+fn ensure_reveal_target(path: &Path) -> Result<PathBuf, AppCommandError> {
+    if path.as_os_str().is_empty() {
+        return Err(AppCommandError::invalid_input("path is required"));
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(err) => Err(AppCommandError::io(err)),
+    }
+}
+
+/// Spawn `program` and reap it. A non-zero exit is an error, not a panic.
+#[cfg_attr(
+    not(any(test, all(feature = "tauri-runtime", target_os = "macos"))),
+    allow(dead_code)
+)]
+fn reveal_status(program: &Path, args: &[OsString]) -> Result<(), AppCommandError> {
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let status = command.status().map_err(|err| {
+        AppCommandError::external_command("failed to open the file manager", err.to_string())
+    })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AppCommandError::external_command(
+            "the file manager could not show the path",
+            status.to_string(),
+        ))
+    }
+}
+
+#[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
+fn reveal_blocking(path: &Path) -> Result<(), AppCommandError> {
+    let target = ensure_reveal_target(path)?;
+    // Same target the plugin's canonicalize would have handed Finder, when
+    // that resolve works. Not an in-process `NSWorkspace` call: the opener
+    // plugin runs that off the main thread (`spawn_blocking`), and AppKit
+    // aborts the process.
+    let shown = std::fs::canonicalize(&target).unwrap_or(target);
+    let (program, args) = finder_reveal_invocation(&shown);
+    reveal_status(Path::new(program), &args)
+}
+
+#[cfg(all(feature = "tauri-runtime", not(target_os = "macos")))]
+fn reveal_blocking(path: &Path) -> Result<(), AppCommandError> {
+    let target = ensure_reveal_target(path)?;
+    tauri_plugin_opener::reveal_item_in_dir(&target).map_err(|err| {
+        AppCommandError::external_command("failed to show the path", err.to_string())
+    })
+}
+
+/// Show `path` in the system file manager. Desktop only.
+#[cfg(feature = "tauri-runtime")]
+pub async fn reveal_path(path: PathBuf) -> Result<(), AppCommandError> {
+    tauri::async_runtime::spawn_blocking(move || reveal_blocking(&path))
+        .await
+        .map_err(|err| {
+            AppCommandError::task_execution_failed(format!("reveal task failed: {err}"))
+        })?
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn reveal_in_file_manager(path: String) -> Result<(), AppCommandError> {
+    reveal_path(PathBuf::from(path)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +419,91 @@ mod tests {
                 "{paths:?}"
             );
         }
+    }
+
+    #[test]
+    fn finder_reveal_keeps_the_path_as_its_own_argument() {
+        let path = Path::new("/Users/me/My Files/a\"b");
+        let (program, args) = finder_reveal_invocation(path);
+        assert_eq!(program, "/usr/bin/open");
+        assert_eq!(
+            args,
+            vec![OsString::from("-R"), path.as_os_str().to_owned()]
+        );
+    }
+
+    #[test]
+    fn reveal_target_missing_is_not_found() {
+        let err = ensure_reveal_target(Path::new("/definitely/not/a/codeg/reveal/path"))
+            .expect_err("missing");
+        assert!(
+            matches!(err.code, crate::app_error::AppErrorCode::NotFound),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn reveal_target_empty_is_rejected() {
+        let err = ensure_reveal_target(Path::new("")).expect_err("empty");
+        assert!(
+            matches!(err.code, crate::app_error::AppErrorCode::InvalidInput),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn reveal_target_accepts_an_existing_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let resolved = ensure_reveal_target(dir.path()).expect("existing");
+        assert_eq!(resolved, dir.path());
+    }
+
+    #[test]
+    fn reveal_target_accepts_a_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.txt");
+        fs::write(&file, b"x").expect("write");
+        assert_eq!(ensure_reveal_target(&file).expect("file"), file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reveal_target_keeps_a_dangling_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let link = dir.path().join("gone-link");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &link).expect("symlink");
+        assert_eq!(ensure_reveal_target(&link).expect("link"), link);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reveal_status_reaps_and_reports_a_failure_without_panicking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("marker.txt");
+        let stub = dir.path().join("open-stub");
+        crate::process::write_test_script(
+            &stub,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > \"{}\"\nexit \"$3\"\n",
+                marker.display()
+            ),
+        );
+
+        let path = OsString::from("/tmp/a b\"c");
+        let args = vec![OsString::from("-R"), path.clone(), OsString::from("0")];
+        reveal_status(&stub, &args).expect("exit 0");
+        let recorded = fs::read_to_string(&marker).expect("marker");
+        assert_eq!(recorded, format!("-R\n{}\n", path.to_string_lossy()));
+
+        let fail = vec![OsString::from("-R"), path, OsString::from("1")];
+        let err = reveal_status(&stub, &fail).expect_err("exit 1");
+        assert!(
+            matches!(
+                err.code,
+                crate::app_error::AppErrorCode::ExternalCommandFailed
+            ),
+            "{err:?}"
+        );
     }
 
     /// Run the stub against `dir/<target_name>` and return what it recorded as

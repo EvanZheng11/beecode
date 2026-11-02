@@ -1,3 +1,4 @@
+import { isNotFoundError } from "./app-error"
 import {
   getActiveRemoteConnectionId,
   isDesktop,
@@ -157,17 +158,25 @@ function containingDirectory(path: string): string | null {
  * into the extended `\\?\UNC\…` form that `ILCreateFromPath` refuses — so
  * "show in folder" is otherwise dead for anyone whose downloads land on a
  * share or a redirected folder. The fallback loses the selection, not the
- * errand.
+ * errand. A path that is not there is reported instead — opening its parent
+ * would hide the miss.
+ *
+ * The webview does not call the opener plugin's reveal. On macOS that
+ * call is `NSWorkspace` from a `spawn_blocking` thread, and AppKit aborts
+ * the process. The command shells out (`/usr/bin/open -R`) there.
  */
 export async function revealItemInDir(path: string): Promise<void> {
   if (!isDesktop() || getActiveRemoteConnectionId() !== null) return
-  const opener = await import("@tauri-apps/plugin-opener")
+  const { invoke } = await import("@tauri-apps/api/core")
   try {
-    await opener.revealItemInDir(path)
+    await invoke("reveal_in_file_manager", { path })
   } catch (error) {
+    if (isNotFoundError(error)) throw error
     const dir = containingDirectory(path)
     if (!dir) throw error
-    await opener.openPath(dir)
+    const { openPath: tauriOpenPath } =
+      await import("@tauri-apps/plugin-opener")
+    await tauriOpenPath(dir)
   }
 }
 
