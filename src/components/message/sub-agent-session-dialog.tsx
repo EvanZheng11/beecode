@@ -38,7 +38,11 @@ import {
   DelegationIdentityAvatar,
   DelegationIdentityName,
 } from "@/components/message/delegation-identity"
-import { LiveTranscriptView } from "@/components/message/live-transcript-view"
+import {
+  LiveTranscriptView,
+  useConnectionStateById,
+} from "@/components/message/live-transcript-view"
+import { pickModelFromTurns } from "@/components/conversations/active-session-details"
 import { Button } from "@/components/ui/button"
 import {
   Drawer,
@@ -51,8 +55,21 @@ import { SidePanelResizeHandle } from "@/components/ui/side-panel-resize"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import type { DelegationIdentity } from "@/hooks/use-delegation-card-model"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
+import { useModelLabels } from "@/hooks/use-model-labels"
 import { notifyDelegationCompletion } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { isModelConfigOption } from "@/lib/model-config-groups"
+import type { SessionConfigOptionInfo } from "@/lib/types"
+
+function selectedLabel(option: SessionConfigOptionInfo | undefined) {
+  if (option?.kind.type !== "select") return null
+  const { current_value, options } = option.kind
+  return (
+    options.find((item) => item.value === current_value)?.name ||
+    current_value ||
+    null
+  )
+}
 
 interface Props {
   open: boolean
@@ -94,6 +111,28 @@ export function SubAgentSessionDialog({
     enabled: false,
   })
   const taskId = detail?.summary.delegation_call_id ?? null
+  const connection = useConnectionStateById(open ? childConnectionId : null)
+  const modelLabel = useModelLabels(connection?.agentType ?? identity.agentType)
+  // 只读子会话实际返回的配置，不使用助手当前的默认配置替代运行值。
+  const configOptions = connection?.configOptions ?? []
+  const effortOption = configOptions.find(
+    (option) =>
+      option.category === "thought_level" ||
+      ["reasoning_effort", "thought_level", "thinking", "effort"].includes(
+        option.id
+      )
+  )
+  const modelOption =
+    configOptions.find((option) => option.id === "model") ??
+    configOptions.find(
+      (option) => option !== effortOption && isModelConfigOption(option)
+    )
+  const model =
+    selectedLabel(modelOption) ??
+    modelLabel(pickModelFromTurns(detail?.turns ?? []) ?? detail?.summary.model)
+  const runtimeLabel = [model, selectedLabel(effortOption)]
+    .filter(Boolean)
+    .join(" · ")
   // 按钮只看 task id，不看本地状态：详情只在打开弹框时拉一次（结束后刻意不
   // 重拉，避免和转录文件写入抢时序），所以「开着弹框看它跑完」这个最常见场景
   // 里，本地 status 会一直停在 in_progress。真正的状态由后端判定——任务还在
@@ -155,10 +194,20 @@ export function SubAgentSessionDialog({
                 the column it titles. `pr-12` clears the close button. */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2.5 pr-12">
               <DelegationIdentityAvatar identity={identity} size="header" />
-              <DelegationIdentityName
-                identity={identity}
-                className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
-              />
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <DelegationIdentityName
+                  identity={identity}
+                  className="min-w-0 truncate text-sm font-semibold text-foreground"
+                />
+                {runtimeLabel && (
+                  <span
+                    className="min-w-0 truncate text-xs text-muted-foreground"
+                    title={runtimeLabel}
+                  >
+                    {runtimeLabel}
+                  </span>
+                )}
+              </div>
               {taskId ? (
                 <Button
                   type="button"
