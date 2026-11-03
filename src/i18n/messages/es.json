@@ -3753,6 +3753,15 @@
         "downloadFailed": "No se pudo descargar {name}"
       },
       "messageList": {
+        "searchOpen": "Buscar mensajes",
+        "searchPlaceholder": "Buscar mensajes",
+        "searchLoading": "Cargando historial...",
+        "searchIncomplete": "Historial incompleto",
+        "searchRetry": "Reintentar carga",
+        "searchPrevious": "Coincidencia anterior",
+        "searchNext": "Siguiente coincidencia",
+        "searchClose": "Cerrar búsqueda",
+        "searchExcerpt": "Fragmento coincidente",
         "loading": "Cargando...",
         "loadBackgroundActivity": "Cargar actividad en segundo plano",
         "loadEarlier": "Cargar mensajes anteriores",

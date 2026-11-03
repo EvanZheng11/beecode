@@ -3753,6 +3753,15 @@
         "downloadFailed": "{name} 다운로드 실패"
       },
       "messageList": {
+        "searchOpen": "메시지 검색",
+        "searchPlaceholder": "메시지 검색",
+        "searchLoading": "기록 불러오는 중...",
+        "searchIncomplete": "기록이 불완전함",
+        "searchRetry": "기록 다시 불러오기",
+        "searchPrevious": "이전 일치",
+        "searchNext": "다음 일치",
+        "searchClose": "검색 닫기",
+        "searchExcerpt": "일치하는 원문",
         "loading": "불러오는 중...",
         "loadBackgroundActivity": "백그라운드 활동 불러오기",
         "loadEarlier": "이전 메시지 불러오기",

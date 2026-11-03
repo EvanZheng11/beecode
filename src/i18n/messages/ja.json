@@ -3753,6 +3753,15 @@
         "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
+        "searchOpen": "メッセージを検索",
+        "searchPlaceholder": "メッセージを検索",
+        "searchLoading": "履歴を読み込み中...",
+        "searchIncomplete": "履歴が未完了",
+        "searchRetry": "履歴の読み込みを再試行",
+        "searchPrevious": "前の一致",
+        "searchNext": "次の一致",
+        "searchClose": "検索を閉じる",
+        "searchExcerpt": "一致した原文",
         "loading": "読み込み中...",
         "loadBackgroundActivity": "バックグラウンドの動作を読み込む",
         "loadEarlier": "以前のメッセージを読み込む",

@@ -3753,6 +3753,15 @@
         "downloadFailed": "فشل تنزيل {name}"
       },
       "messageList": {
+        "searchOpen": "بحث في الرسائل",
+        "searchPlaceholder": "بحث في الرسائل",
+        "searchLoading": "جار تحميل السجل...",
+        "searchIncomplete": "السجل غير مكتمل",
+        "searchRetry": "إعادة تحميل السجل",
+        "searchPrevious": "النتيجة السابقة",
+        "searchNext": "النتيجة التالية",
+        "searchClose": "إغلاق البحث",
+        "searchExcerpt": "مقتطف مطابق",
         "loading": "جارٍ التحميل...",
         "loadBackgroundActivity": "تحميل نشاط الخلفية",
         "loadEarlier": "تحميل الرسائل السابقة",

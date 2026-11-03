@@ -8,7 +8,14 @@
  * thread) and the overlays themselves are stubbed — the list stub exposes the
  * scroll handle so a navigator jump is observable.
  */
-import { act, cleanup, render, screen } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import type { ReactNode, RefObject } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -251,6 +258,22 @@ afterEach(() => {
 })
 
 describe("MessageListView insights", () => {
+  it("jumps to the virtual thread row containing a search hit", async () => {
+    seed()
+    renderTranscript(false)
+    fireEvent.click(screen.getByLabelText("searchOpen"))
+    fireEvent.change(screen.getByLabelText("searchPlaceholder"), {
+      target: { value: "Read the code" },
+    })
+    expect(screen.getByText("1 / 1")).toBeInTheDocument()
+    await waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(3, {
+        align: "start",
+        smooth: false,
+      })
+    )
+  })
+
   it("keeps the plan and sub-agent chips on a transcript without a side panel", () => {
     seed()
     renderTranscript(false)

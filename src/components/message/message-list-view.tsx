@@ -129,6 +129,11 @@ import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
+import {
+  SearchExcerpt,
+  TranscriptSearchBar,
+  useTranscriptSearch,
+} from "./transcript-search"
 
 interface MessageListViewProps {
   conversationId: number
@@ -1782,6 +1787,42 @@ export function MessageListView({
     mergedRunCache,
   ])
   const { threadItems, nonStreamingAdapted, lastAssistantRunning } = threadState
+  const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
+  const searchRows = useMemo(
+    () =>
+      threadItems.map((item) => {
+        if (item.kind === "turn") return item.sourceTurns
+        if (item.kind === "compaction") {
+          const turn = timelineTurns.find(
+            ({ turn }) => `${turn.role}-${turn.id}` === item.key
+          )?.turn
+          return turn ? [turn] : []
+        }
+        return []
+      }),
+    [threadItems, timelineTurns]
+  )
+  const loadAllSearchTurns = useCallback(
+    () => loadOlderTurnsThrough(conversationId, 0),
+    [conversationId, loadOlderTurnsThrough]
+  )
+  const search = useTranscriptSearch({
+    scope: conversationId,
+    rows: searchRows,
+    hasOlder: hasOlderTurns,
+    loadAll: loadAllSearchTurns,
+  })
+  const searchHit = search.hit
+  useEffect(() => {
+    if (!searchHit) return
+    const frame = requestAnimationFrame(() =>
+      scrollApiRef.current?.scrollToIndex(searchHit.index, {
+        align: "start",
+        smooth: false,
+      })
+    )
+    return () => cancelAnimationFrame(frame)
+  }, [searchHit])
 
   // See `ReplyFoldState`. Derived during render rather than in an effect so a
   // send and the fold it causes land in the same commit — an effect would paint
@@ -1822,7 +1863,9 @@ export function MessageListView({
   const forkBusy = connStatus === "prompting"
 
   const renderThreadItem = useCallback(
-    (item: ThreadRenderItem) => {
+    (item: ThreadRenderItem, index: number) => {
+      const excerpt =
+        searchHit?.index === index ? <SearchExcerpt hit={searchHit} /> : null
       switch (item.kind) {
         case "turn": {
           const pt = item.isRoleTransition ? 16 : 0
@@ -1841,6 +1884,7 @@ export function MessageListView({
                   <span aria-hidden="true" className="h-px flex-1 bg-border" />
                 </div>
               ) : null}
+              {excerpt}
               <HistoricalMessageGroup
                 group={item.group}
                 dimmed={item.phase === "optimistic"}
@@ -1871,6 +1915,7 @@ export function MessageListView({
           // Chrome-less centered divider between turns (no avatar / stats footer).
           return (
             <div className="px-1 py-2">
+              {excerpt}
               <ContextCompactionCard
                 state={item.state}
                 meta={item.meta}
@@ -1883,6 +1928,7 @@ export function MessageListView({
       }
     },
     [
+      searchHit,
       userTurnHeader,
       fold.armed,
       fold.roundOpen,
@@ -1959,7 +2005,6 @@ export function MessageListView({
   // --- Message navigator ------------------------------------------------------
   // Lifted scroll handle so the navigator — in the Session Details side panel,
   // outside the MessageScrollProvider subtree — can drive scrollToIndex.
-  const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   // The per-message rows are computed only while the side panel shows them:
   // grouping them parses every turn's diffs.
   const navDemanded = useTranscriptNavDemanded(
@@ -2226,6 +2271,7 @@ export function MessageListView({
         ref={selectionBoxRef}
         className="chat-motion-scope relative flex h-full min-h-0 flex-col"
       >
+        <TranscriptSearchBar search={search} />
         <MessageThread
           className="flex-1 min-h-0"
           resize={

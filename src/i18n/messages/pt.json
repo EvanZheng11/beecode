@@ -3753,6 +3753,15 @@
         "downloadFailed": "Falha ao baixar {name}"
       },
       "messageList": {
+        "searchOpen": "Pesquisar mensagens",
+        "searchPlaceholder": "Pesquisar mensagens",
+        "searchLoading": "Carregando histórico...",
+        "searchIncomplete": "Histórico incompleto",
+        "searchRetry": "Tentar carregar novamente",
+        "searchPrevious": "Ocorrência anterior",
+        "searchNext": "Próxima ocorrência",
+        "searchClose": "Fechar pesquisa",
+        "searchExcerpt": "Trecho correspondente",
         "loading": "Carregando...",
         "loadBackgroundActivity": "Carregar atividade em segundo plano",
         "loadEarlier": "Carregar mensagens anteriores",

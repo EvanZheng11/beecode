@@ -3753,6 +3753,15 @@
         "downloadFailed": "Failed to download {name}"
       },
       "messageList": {
+        "searchOpen": "Search messages",
+        "searchPlaceholder": "Search messages",
+        "searchLoading": "Loading history...",
+        "searchIncomplete": "History incomplete",
+        "searchRetry": "Retry loading history",
+        "searchPrevious": "Previous match",
+        "searchNext": "Next match",
+        "searchClose": "Close search",
+        "searchExcerpt": "Matching excerpt",
         "loading": "Loading...",
         "loadBackgroundActivity": "Load background activity",
         "loadEarlier": "Load earlier messages",

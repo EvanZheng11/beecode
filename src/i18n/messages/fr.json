@@ -3753,6 +3753,15 @@
         "downloadFailed": "Échec du téléchargement de {name}"
       },
       "messageList": {
+        "searchOpen": "Rechercher des messages",
+        "searchPlaceholder": "Rechercher des messages",
+        "searchLoading": "Chargement de l’historique...",
+        "searchIncomplete": "Historique incomplet",
+        "searchRetry": "Réessayer le chargement",
+        "searchPrevious": "Résultat précédent",
+        "searchNext": "Résultat suivant",
+        "searchClose": "Fermer la recherche",
+        "searchExcerpt": "Extrait correspondant",
         "loading": "Chargement...",
         "loadBackgroundActivity": "Charger l'activité en arrière-plan",
         "loadEarlier": "Charger les messages précédents",

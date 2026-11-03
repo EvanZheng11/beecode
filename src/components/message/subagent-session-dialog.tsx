@@ -32,6 +32,11 @@ import { Loader2 } from "lucide-react"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import {
+  SearchExcerpt,
+  TranscriptSearchBar,
+  useTranscriptSearch,
+} from "@/components/message/transcript-search"
 import { DelegationStatusIndexProvider } from "@/components/message/delegation-status-index-context"
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import {
@@ -131,6 +136,23 @@ export function SubagentSessionDialog({
   useHistoryBackDismiss(open, () => onOpenChange(false))
   const pageHandoffName = usePageHandoffName()
   const [messages, setMessages] = useState<AdaptedMessage[] | null>(null)
+  const [rawTranscript, setRawTranscript] = useState<{
+    sessionId: string
+    turns: MessageTurn[]
+  } | null>(null)
+  const searchRows = useMemo(
+    () =>
+      rawTranscript?.sessionId === sessionId
+        ? rawTranscript.turns.map((turn) => [turn])
+        : [],
+    [rawTranscript, sessionId]
+  )
+  const search = useTranscriptSearch({ scope: sessionId, rows: searchRows })
+  const searchHit = search.hit
+  const hitRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (searchHit) hitRef.current?.scrollIntoView({ block: "start" })
+  }, [searchHit])
   const [error, setError] = useState<string | null>(null)
   // Only the FIRST load blanks the body: a refresh that lands mid-read must not
   // flash the transcript away and bounce the scroll position.
@@ -161,6 +183,7 @@ export function SubagentSessionDialog({
       try {
         const detail = await getConversation(agentType, sessionId)
         if (!mountedRef.current || seq !== seqRef.current) return
+        setRawTranscript({ sessionId, turns: detail.turns })
         setMessages(
           adaptMessageTurns(
             detail.turns,
@@ -256,6 +279,7 @@ export function SubagentSessionDialog({
           ) : null}
         </header>
 
+        <TranscriptSearchBar search={search} />
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {loading && messages == null ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
@@ -280,6 +304,11 @@ export function SubagentSessionDialog({
                         "rounded-lg bg-muted/50 px-3 py-2 text-sm"
                     )}
                   >
+                    {searchHit?.index === i && (
+                      <div ref={hitRef}>
+                        <SearchExcerpt hit={searchHit} />
+                      </div>
+                    )}
                     <ContentPartsRenderer
                       parts={message.content}
                       role={message.role}
