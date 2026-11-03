@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useId, useMemo, useState, type RefObject } from "react"
 import { ChevronDown, ChevronUp, RefreshCw, Search, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import type { MessageTurn } from "@/lib/types"
@@ -117,13 +117,14 @@ export function useTranscriptSearch({
     query: "",
     selected: 0,
     retry: 0,
+    jump: 0,
   })
   if (state.scope !== scope)
-    setState({ scope, open: false, query: "", selected: 0, retry: 0 })
+    setState({ scope, open: false, query: "", selected: 0, retry: 0, jump: 0 })
   const current =
     state.scope === scope
       ? state
-      : { scope, open: false, query: "", selected: 0, retry: 0 }
+      : { scope, open: false, query: "", selected: 0, retry: 0, jump: 0 }
   const [result, setResult] = useState<{
     scope: string | number
     attempt: number
@@ -165,15 +166,17 @@ export function useTranscriptSearch({
     query: current.query,
     hits,
     selected,
+    jump: current.jump,
     loading,
     hit: hits[selected] ?? null,
     setOpen: (open: boolean) =>
       setState((s) => ({ ...s, open, retry: open ? s.retry + 1 : s.retry })),
     setQuery: (query: string) =>
-      setState((s) => ({ ...s, query, selected: 0 })),
+      setState((s) => ({ ...s, query, selected: 0, jump: s.jump + 1 })),
     move: (delta: number) =>
       setState((s) => ({
         ...s,
+        jump: s.jump + 1,
         selected: hits.length
           ? (selected + delta + hits.length) % hits.length
           : 0,
@@ -215,6 +218,7 @@ export function TranscriptSearchBar({
         aria-label={t("searchPlaceholder")}
         onChange={(e) => search.setQuery(e.target.value)}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return
           if (e.key === "Enter") {
             e.preventDefault()
             search.move(e.shiftKey ? -1 : 1)
@@ -286,6 +290,7 @@ export function SearchExcerpt({ hit }: { hit: SearchHit }) {
   const after = Math.min(hit.text.length, hit.end + 100)
   return (
     <div
+      data-search-excerpt=""
       className="my-2 whitespace-pre-wrap break-words rounded border bg-muted/50 px-3 py-2 text-xs"
       aria-label={t("searchExcerpt")}
     >
@@ -296,4 +301,63 @@ export function SearchExcerpt({ hit }: { hit: SearchHit }) {
       {after < hit.text.length && "…"}
     </div>
   )
+}
+
+export function TranscriptTextHighlights({
+  containerRef,
+  query,
+}: {
+  containerRef: RefObject<HTMLElement | null>
+  query: string
+}) {
+  const name = `transcript-search-${useId().replace(/[^a-zA-Z0-9-]/g, "")}`
+  useEffect(() => {
+    const root = containerRef.current
+    if (!root || !query || typeof Highlight === "undefined" || !CSS.highlights)
+      return
+    let frame = 0
+    const update = () => {
+      const highlight = new Highlight()
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      const pattern = new RegExp(
+        query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "giu"
+      )
+      let node: Node | null
+      while ((node = walker.nextNode())) {
+        if (
+          node.parentElement?.closest(
+            "button,input,textarea,style,script,[data-search-excerpt]"
+          )
+        )
+          continue
+        pattern.lastIndex = 0
+        for (const match of (node.textContent ?? "").matchAll(pattern)) {
+          const range = document.createRange()
+          range.setStart(node, match.index)
+          range.setEnd(node, match.index + match[0].length)
+          highlight.add(range)
+        }
+      }
+      CSS.highlights.set(name, highlight)
+    }
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(update)
+    })
+    update()
+    observer.observe(root, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    })
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+      CSS.highlights.delete(name)
+    }
+  }, [containerRef, name, query])
+  return query ? (
+    <style>{`::highlight(${name}) { background-color: #fde047; color: #171717; }`}</style>
+  ) : null
 }

@@ -272,6 +272,14 @@ describe("MessageListView insights", () => {
         smooth: false,
       })
     )
+    scrollToIndex.mockClear()
+    act(() => seed())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(scrollToIndex).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByLabelText("searchNext"))
+    await waitFor(() => expect(scrollToIndex).toHaveBeenCalledTimes(1))
   })
 
   it("keeps the plan and sub-agent chips on a transcript without a side panel", () => {

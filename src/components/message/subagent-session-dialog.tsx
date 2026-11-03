@@ -35,6 +35,7 @@ import { ContentPartsRenderer } from "@/components/message/content-parts-rendere
 import {
   SearchExcerpt,
   TranscriptSearchBar,
+  TranscriptTextHighlights,
   useTranscriptSearch,
 } from "@/components/message/transcript-search"
 import { DelegationStatusIndexProvider } from "@/components/message/delegation-status-index-context"
@@ -150,9 +151,12 @@ export function SubagentSessionDialog({
   const search = useTranscriptSearch({ scope: sessionId, rows: searchRows })
   const searchHit = search.hit
   const hitRef = useRef<HTMLDivElement>(null)
+  const searchBodyRef = useRef<HTMLDivElement>(null)
+  const searchTargetIndex = searchHit?.index
   useEffect(() => {
-    if (searchHit) hitRef.current?.scrollIntoView({ block: "start" })
-  }, [searchHit])
+    if (searchTargetIndex !== undefined)
+      hitRef.current?.scrollIntoView({ block: "start" })
+  }, [searchTargetIndex, search.jump])
   const [error, setError] = useState<string | null>(null)
   // Only the FIRST load blanks the body: a refresh that lands mid-read must not
   // flash the transcript away and bounce the scroll position.
@@ -280,7 +284,14 @@ export function SubagentSessionDialog({
         </header>
 
         <TranscriptSearchBar search={search} />
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <TranscriptTextHighlights
+          containerRef={searchBodyRef}
+          query={search.open ? search.query : ""}
+        />
+        <div
+          ref={searchBodyRef}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+        >
           {loading && messages == null ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
               <Loader2 className="mr-2 size-3.5 animate-spin" />

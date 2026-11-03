@@ -132,6 +132,7 @@ import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-i
 import {
   SearchExcerpt,
   TranscriptSearchBar,
+  TranscriptTextHighlights,
   useTranscriptSearch,
 } from "./transcript-search"
 
@@ -1813,16 +1814,17 @@ export function MessageListView({
     loadAll: loadAllSearchTurns,
   })
   const searchHit = search.hit
+  const searchTargetIndex = searchHit?.index
   useEffect(() => {
-    if (!searchHit) return
+    if (searchTargetIndex === undefined) return
     const frame = requestAnimationFrame(() =>
-      scrollApiRef.current?.scrollToIndex(searchHit.index, {
+      scrollApiRef.current?.scrollToIndex(searchTargetIndex, {
         align: "start",
         smooth: false,
       })
     )
     return () => cancelAnimationFrame(frame)
-  }, [searchHit])
+  }, [searchTargetIndex, search.jump])
 
   // See `ReplyFoldState`. Derived during render rather than in an effect so a
   // send and the fold it causes land in the same commit — an effect would paint
@@ -2272,6 +2274,10 @@ export function MessageListView({
         className="chat-motion-scope relative flex h-full min-h-0 flex-col"
       >
         <TranscriptSearchBar search={search} />
+        <TranscriptTextHighlights
+          containerRef={selectionBoxRef}
+          query={search.open ? search.query : ""}
+        />
         <MessageThread
           className="flex-1 min-h-0"
           resize={
