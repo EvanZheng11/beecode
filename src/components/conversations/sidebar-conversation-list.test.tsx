@@ -366,7 +366,7 @@ function conv(
   folderId: number,
   overrides: Partial<DbConversationSummary> = {}
 ): DbConversationSummary {
-  const createdAt = new Date(FIXED - 5 * MINUTE).toISOString()
+  const createdAt = new Date(Date.now() - 5 * MINUTE).toISOString()
   return {
     id,
     folder_id: folderId,
@@ -450,6 +450,96 @@ beforeEach(() => {
   dialogCtl.cloneOpen = false
   dialogCtl.browserOpen = false
   appearanceCtl.zoomLevel = 100
+})
+
+describe("SidebarConversationList — 三天自动归档", () => {
+  const THREE_DAYS = 72 * 60 * MINUTE
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: FIXED })
+    const folders = [folder(1, "项目")]
+    const old = new Date(FIXED - THREE_DAYS - 1).toISOString()
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        conv(11, 1, { updated_at: old }),
+        conv(12, 1, { updated_at: old, kind: "chat" }),
+        conv(13, 1, { updated_at: old, pinned_at: old }),
+        conv(14, 1, { updated_at: old, status: "in_progress" }),
+        conv(15, 1, {
+          created_at: old,
+          updated_at: new Date(FIXED).toISOString(),
+        }),
+      ],
+    })
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  function archiveTree(showArchived = false) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          showArchived={showArchived}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  it("从项目、聊天和最近会话隐藏旧会话，保留置顶、运行中和最近更新的会话", () => {
+    render(archiveTree())
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+    expect(screen.queryAllByText("conv-12")).toHaveLength(0)
+    for (const id of [13, 14, 15]) {
+      expect(screen.getAllByText(`conv-${id}`).length).toBeGreaterThan(0)
+    }
+    expect(useAppWorkspaceStore.getState().conversations).toHaveLength(5)
+    expect(useAppWorkspaceStore.getState().conversations[0].status).toBe(
+      "pending"
+    )
+  })
+
+  it("打开显示开关后旧会话可见，关闭后再次隐藏", () => {
+    const { rerender } = render(archiveTree())
+    rerender(archiveTree(true))
+    expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("conv-12").length).toBeGreaterThan(0)
+    rerender(archiveTree())
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+  })
+
+  it("静置越过三天后自动隐藏，无需刷新列表", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1, {
+          updated_at: new Date(FIXED - THREE_DAYS).toISOString(),
+        }),
+      ],
+    })
+    render(archiveTree())
+    expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
+    act(() => vi.advanceTimersByTime(MINUTE))
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+    expect(
+      screen.getByText(enMessages.Folder.sidebar.archivedConversationsHint)
+    ).toBeTruthy()
+  })
+
+  it("归档会话收到新更新时间后自动回到目录", () => {
+    render(archiveTree())
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+    act(() => {
+      useAppWorkspaceStore.setState((state) => ({
+        conversations: state.conversations.map((c) =>
+          c.id === 11 ? { ...c, updated_at: new Date(FIXED).toISOString() } : c
+        ),
+      }))
+    })
+    expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
+  })
 })
 
 describe("SidebarConversationList — single status event re-render scope", () => {

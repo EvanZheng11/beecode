@@ -192,6 +192,7 @@ import {
 import { cn } from "@/lib/utils"
 import { FolderAliasLabel } from "./folder-alias-label"
 import { toErrorMessage } from "@/lib/app-error"
+import { isConversationAutoArchived } from "@/lib/conversation-auto-archive"
 
 // Layout effect on the client (so the sticky overlay is positioned before
 // paint) but a no-op-safe passive effect during the static-export prerender.
@@ -944,6 +945,7 @@ export interface SidebarConversationListHandle {
 
 export interface SidebarConversationListProps {
   showCompleted?: boolean
+  showArchived?: boolean
   sortMode?: SidebarSortMode
   sectionOrder?: SidebarSectionOrder
   /** When on, each repo's worktree child folders render as indented sub-groups
@@ -965,6 +967,7 @@ export interface SidebarConversationListProps {
 export function SidebarConversationList({
   ref,
   showCompleted = true,
+  showArchived = false,
   sortMode = "created",
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
@@ -1444,9 +1447,15 @@ export function SidebarConversationList({
     [folders, titleNeedle, titleQueryActive]
   )
   const shownConversations = useMemo(() => {
+    // 复用相对时间标签的分钟时钟，静置时也会归档；有新更新就自动重新显示。
+    const visible = showArchived
+      ? conversations
+      : conversations.filter(
+          (c) => !isConversationAutoArchived(c, now, c.status === "in_progress")
+        )
     const tagged = tagFilterActive
-      ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
-      : conversations
+      ? visible.filter((c) => matchesTagFilter(c, tagFilter))
+      : visible
     if (!titleQueryActive) return tagged
     return tagged.filter(
       (c) =>
@@ -1455,6 +1464,8 @@ export function SidebarConversationList({
     )
   }, [
     conversations,
+    showArchived,
+    now,
     tagFilter,
     tagFilterActive,
     titleNeedle,
@@ -1597,6 +1608,20 @@ export function SidebarConversationList({
     }
     return map
   }, [conversations, displayChildToParent])
+
+  const autoArchivedFolderIds = useMemo(() => {
+    const ids = new Set<number>()
+    if (!showArchived) {
+      for (const conv of conversations) {
+        if (
+          isConversationAutoArchived(conv, now, conv.status === "in_progress")
+        ) {
+          ids.add(displayChildToParent.get(conv.folder_id) ?? conv.folder_id)
+        }
+      }
+    }
+    return ids
+  }, [conversations, displayChildToParent, showArchived, now])
 
   // Running (`in_progress`) sessions per display group — what the folder header
   // badge shows. Counted off the FULL conversation list rather than `byFolder`
@@ -3263,7 +3288,9 @@ export function SidebarConversationList({
           <span className="relative truncate">
             {row.totalConversationCount === 0
               ? t("emptyFolderHint")
-              : t("noUnfinishedConversations")}
+              : autoArchivedFolderIds.has(row.folderId)
+                ? t("archivedConversationsHint")
+                : t("noUnfinishedConversations")}
           </span>
         </div>
       )

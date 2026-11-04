@@ -34,6 +34,7 @@ const spies = vi.hoisted(() => ({
   listProps: null as {
     showWorktrees?: boolean
     showCompleted?: boolean
+    showArchived?: boolean
     showRecent?: boolean
     sectionOrder?: readonly string[]
   } | null,
@@ -62,6 +63,7 @@ vi.mock("@/components/conversations/sidebar-conversation-list", async () => {
       ref?: Ref<SidebarConversationListHandle>
       showWorktrees?: boolean
       showCompleted?: boolean
+      showArchived?: boolean
       showRecent?: boolean
       sectionOrder?: readonly string[]
     }) => {
@@ -337,6 +339,44 @@ describe("Sidebar — Show completed default", () => {
     localStorage.setItem("workspace:sidebar-show-completed", "true")
     renderSidebar()
     expect(spies.listProps?.showCompleted).toBe(true)
+  })
+})
+
+describe("Sidebar — 归档会话显示开关", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.listProps = null
+  })
+
+  it("默认隐藏归档会话", () => {
+    renderSidebar()
+    expect(spies.listProps?.showArchived).toBe(false)
+  })
+
+  it("挂载时恢复已保存的归档显示偏好", () => {
+    localStorage.setItem("workspace:sidebar-show-archived", "true")
+    renderSidebar()
+    expect(spies.listProps?.showArchived).toBe(true)
+  })
+
+  it("通过菜单显示归档会话，保存偏好且不关闭菜单", async () => {
+    const { unmount } = renderSidebar()
+    await openViewOptionsGroup("Conversation list")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", {
+        name: "Show archived conversations",
+      })
+    )
+    expect(spies.listProps?.showArchived).toBe(true)
+    expect(localStorage.getItem("workspace:sidebar-show-archived")).toBe("true")
+    expect(
+      screen.getByRole("menuitemcheckbox", {
+        name: "Show archived conversations",
+      })
+    ).toHaveAttribute("aria-checked", "true")
+    unmount()
+    renderSidebar()
+    expect(spies.listProps?.showArchived).toBe(true)
   })
 })
 

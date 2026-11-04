@@ -5,6 +5,7 @@ import { EMPTY_TAG_FILTER, type TagFilter } from "@/lib/conversation-tags"
 const FOLDER_EXPANDED_KEY = "workspace:sidebar-folder-expanded"
 const FOLDER_GROUP_EXPANDED_KEY = "workspace:sidebar-folder-group-expanded"
 const SHOW_COMPLETED_KEY = "workspace:sidebar-show-completed"
+const SHOW_ARCHIVED_KEY = "workspace:sidebar-show-archived"
 const SHOW_WORKTREES_KEY = "workspace:sidebar-show-worktrees"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
 const RECENT_FILTER_KEY = "workspace:sidebar-recent-filter"
@@ -269,6 +270,25 @@ export function saveShowCompleted(value: boolean): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(SHOW_COMPLETED_KEY, String(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 自动归档只控制侧栏显示，不改写会话状态或历史记录。 */
+export function loadShowArchived(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return localStorage.getItem(SHOW_ARCHIVED_KEY) === "true"
+  } catch {
+    return false
+  }
+}
+
+export function saveShowArchived(value: boolean): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SHOW_ARCHIVED_KEY, String(value))
   } catch {
     /* ignore */
   }

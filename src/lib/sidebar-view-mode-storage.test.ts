@@ -7,12 +7,14 @@ import {
   loadSectionCollapsed,
   loadSectionOrder,
   loadShowRecent,
+  loadShowArchived,
   loadTagFilter,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveRecentFilter,
   saveSectionOrder,
   saveShowRecent,
+  saveShowArchived,
   saveTagFilter,
   type SidebarRecentFilter,
 } from "./sidebar-view-mode-storage"
@@ -137,6 +139,24 @@ describe("loadShowRecent", () => {
     expect(loadShowRecent()).toBe(false)
     saveShowRecent(true)
     expect(loadShowRecent()).toBe(true)
+  })
+})
+
+describe("归档会话显示偏好", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("默认隐藏归档会话，保存后可重新读取", () => {
+    expect(loadShowArchived()).toBe(false)
+    saveShowArchived(true)
+    expect(localStorage.getItem("workspace:sidebar-show-archived")).toBe("true")
+    expect(loadShowArchived()).toBe(true)
+    saveShowArchived(false)
+    expect(loadShowArchived()).toBe(false)
+  })
+
+  it("非法存储值不打开归档显示", () => {
+    localStorage.setItem("workspace:sidebar-show-archived", "invalid")
+    expect(loadShowArchived()).toBe(false)
   })
 })
 

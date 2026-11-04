@@ -74,6 +74,7 @@ import {
   loadTagFilter,
   saveTagFilter,
   loadShowCompleted,
+  loadShowArchived,
   loadShowRecent,
   loadShowWorktrees,
   loadSortMode,
@@ -81,6 +82,7 @@ import {
   moveSectionInOrder,
   saveNavItemVisibility,
   saveShowCompleted,
+  saveShowArchived,
   saveShowRecent,
   saveShowWorktrees,
   saveSortMode,
@@ -277,6 +279,7 @@ export function Sidebar() {
   // value matches its own default so the pre-hydration render doesn't flash as
   // the stored preference is applied.
   const [showCompleted, setShowCompleted] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
   // Empty = every nav row shown, which is also the hydrated default — so the
@@ -323,6 +326,7 @@ export function Sidebar() {
     // Hydrate from localStorage after mount to keep SSR/CSR markup consistent.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowCompleted(loadShowCompleted())
+    setShowArchived(loadShowArchived())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
     setNavItems(loadNavItemVisibility())
@@ -339,6 +343,11 @@ export function Sidebar() {
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
     saveShowCompleted(value)
+  }, [])
+
+  const handleSetShowArchived = useCallback((value: boolean) => {
+    setShowArchived(value)
+    saveShowArchived(value)
   }, [])
 
   const handleSetShowWorktrees = useCallback((value: boolean) => {
@@ -548,6 +557,14 @@ export function Sidebar() {
                     onSelect={(event) => event.preventDefault()}
                   >
                     {t("showCompleted")}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showArchived}
+                    onCheckedChange={handleSetShowArchived}
+                    onSelect={(event) => event.preventDefault()}
+                    title={t("autoArchiveHint")}
+                  >
+                    {t("showArchived")}
                   </DropdownMenuCheckboxItem>
                   <DropdownMenuCheckboxItem
                     checked={showWorktrees}
@@ -841,6 +858,7 @@ export function Sidebar() {
             <SidebarConversationList
               ref={listRef}
               showCompleted={showCompleted}
+              showArchived={showArchived}
               showWorktrees={showWorktrees}
               showRecent={showRecent}
               sortMode={sortMode}
