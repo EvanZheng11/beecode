@@ -1882,16 +1882,13 @@ export function GitLogTab() {
       setNewBranchTarget(null)
       setNewBranchName("")
       // `checkout -b` also switched to the new branch: refresh branch metadata
-      // (currentBranch drives reset gating), and reload the HEAD view, which
-      // now starts at that commit. A branch at an existing commit leaves every
-      // other view's commits unchanged. The reload starts at once: the modal
-      // dialog has kept the filter as it was until now, so it can't overwrite
+      // (currentBranch drives reset gating), and reload the current view: even
+      // a pinned view needs fresh branch labels and HEAD decorations. Start at
+      // once: the modal has kept the filter as it was until now, so it can't overwrite
       // a filter picked while the branch refresh is still pending.
-      const headViewReload = isHeadFilter(selectedBranch)
-        ? fetchLog({ inline: true })
-        : undefined
+      const logReload = fetchLog({ inline: true })
       await refreshBranches()
-      await headViewReload
+      await logReload
       toast.success(t("toasts.createdAndSwitchedNewBranch"), {
         description: t("toasts.newBranchFromCommit", {
           name,
@@ -1912,7 +1909,6 @@ export function GitLogTab() {
     newBranchName,
     newBranchTarget,
     refreshBranches,
-    selectedBranch,
     t,
   ])
 
@@ -2015,8 +2011,8 @@ export function GitLogTab() {
     }
   }, [refreshBranches, refreshCurrentUser, fetchLog])
 
-  // Keep the HEAD filter honest across checkouts made OUTSIDE the app. In-app
-  // branch switches already refresh through folder://git-branch-changed; a
+  // Keep HEAD and all views' decorations honest across changes OUTSIDE the app.
+  // In-app branch switches refresh through folder://git-branch-changed; a
   // `git checkout` in a terminal emits nothing, so we ride the active folder's
   // existing git-HEAD poll (app-workspace-context, every ~10s) and refresh when
   // it reports a different HEAD. Read from `gitHeads` — written ONLY by that
@@ -2026,13 +2022,12 @@ export function GitLogTab() {
   const polledHead = useAppWorkspaceStore((s) =>
     folder ? (s.gitHeads.get(folder.id) ?? null) : null
   )
-  // What the poll last saw HEAD pointing at: the branch name, or the commit when
-  // detached (a detached HEAD has no name, so branch↔detached and
-  // detached→another-commit checkouts would otherwise be invisible). null while
-  // the folder is unpolled / not a repo — never compared against.
+  // Include the branch AND commit: commits/resets on the same branch also move
+  // its tip and HEAD badge. null while the folder is unpolled / not a repo —
+  // never compared against.
   const polledHeadSignature =
     polledHead?.is_repo === true
-      ? (polledHead.branch ?? polledHead.short_sha)
+      ? JSON.stringify([polledHead.branch, polledHead.short_sha])
       : null
   const lastPolledHeadRef = useRef<{
     folderId: number
@@ -2055,12 +2050,11 @@ export function GitLogTab() {
     ) {
       return
     }
-    // Only the HEAD view is dynamic — every other selection pins a fixed ref.
-    // Recording above stays unconditional so a filter change never compares
-    // against a signature from several checkouts ago.
-    if (folderStale || !isHeadFilter(selectedBranch)) return
+    // A fixed ref keeps the same query, but its HEAD/branch decorations can
+    // change even when the visible commit set does not.
+    if (folderStale) return
     onGitEventRef.current()
-  }, [folder?.id, polledHeadSignature, folderStale, selectedBranch])
+  }, [folder?.id, polledHeadSignature, folderStale])
 
   // Refresh branches & log on branch change, commit, or push. Keyed on the
   // numeric folder id (not the folder object) so a same-id object replacement

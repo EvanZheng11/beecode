@@ -21,6 +21,11 @@ type PendingBranchList = {
 }
 
 type TestFolder = { id: number; path: string }
+type PolledHead = {
+  is_repo: boolean
+  branch: string | null
+  short_sha: string | null
+}
 
 const state = vi.hoisted(() => ({
   folder: { id: 1, path: "/worktrees/a" } as TestFolder,
@@ -32,6 +37,7 @@ const state = vi.hoisted(() => ({
   deferBranches: false,
   pendingBranches: [] as PendingBranchList[],
   listeners: new Map<string, (payload: { folder_id: number }) => void>(),
+  polledHead: null as PolledHead | null,
 }))
 
 // The tab reads the folder through useDeferredValue, which lags a switch until
@@ -121,8 +127,13 @@ vi.mock("@/hooks/use-git-quick-actions", () => ({
 
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (
-    selector: (state: { gitHeads: Map<number, unknown> }) => unknown
-  ) => selector({ gitHeads: new Map() }),
+    selector: (snapshot: { gitHeads: Map<number, PolledHead> }) => unknown
+  ) =>
+    selector({
+      gitHeads: state.polledHead
+        ? new Map([[state.folder.id, state.polledHead]])
+        : new Map(),
+    }),
 }))
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
@@ -177,6 +188,7 @@ describe("Commits tab branch query", () => {
     state.deferBranches = false
     state.pendingBranches = []
     state.listeners.clear()
+    state.polledHead = null
   })
   afterEach(() => cleanup())
 
@@ -439,6 +451,75 @@ describe("Commits tab branch query", () => {
       false
     )
   })
+
+  it.each([null, "mainA"])(
+    "moves the HEAD decoration after creating a branch in the %s view",
+    async (branch) => {
+      saveSelection(state.folder.path, { branch, author: null })
+      const target = {
+        ...COMMIT,
+        full_hash: "older",
+        hash: "older",
+        message: "Older commit",
+      }
+      state.gitLog.mockResolvedValue({
+        entries: [
+          {
+            ...COMMIT,
+            parents: [target.full_hash],
+            refs: [{ name: "mainA", kind: "local", is_head: true }],
+          },
+          { ...target, parents: [], refs: [] },
+        ],
+      })
+      renderTab()
+      const row = await screen.findByText(target.message)
+      await screen.findByTitle("Current branch (HEAD): mainA")
+      state.gitLog.mockResolvedValue({
+        entries: [
+          {
+            ...COMMIT,
+            parents: [target.full_hash],
+            refs: [{ name: "mainA", kind: "local", is_head: false }],
+          },
+          {
+            ...target,
+            parents: [],
+            refs: [{ name: "fix", kind: "local", is_head: true }],
+          },
+        ],
+      })
+      await createBranchFrom(row, "fix")
+      expect(
+        await screen.findByTitle("Current branch (HEAD): fix")
+      ).toBeVisible()
+      expect(screen.queryByTitle("Current branch (HEAD): mainA")).toBeNull()
+    }
+  )
+
+  it.each([
+    [null, "fix", "222"],
+    ["mainA", "fix", "222"],
+    [null, "mainA", "222"],
+    ["HEAD", "mainA", "222"],
+  ])(
+    "reloads decorations after the HEAD poll changes in the %s view to %s/%s",
+    async (branch, nextBranch, nextSha) => {
+      saveSelection(state.folder.path, { branch, author: null })
+      state.polledHead = { is_repo: true, branch: "mainA", short_sha: "111" }
+      state.gitLog.mockResolvedValue({ entries: [COMMIT] })
+      const view = renderTab()
+      await screen.findByText(COMMIT.message)
+      const calls = state.gitLog.mock.calls.length
+      state.polledHead = {
+        is_repo: true,
+        branch: nextBranch,
+        short_sha: nextSha,
+      }
+      view.rerender(tabTree())
+      await waitFor(() => expect(state.gitLog).toHaveBeenCalledTimes(calls + 1))
+    }
+  )
 
   it("lets a filter picked during the post-create branch refresh win", async () => {
     state.gitLog.mockResolvedValue({ entries: [COMMIT] })

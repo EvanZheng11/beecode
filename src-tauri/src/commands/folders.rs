@@ -6112,6 +6112,14 @@ pub async fn git_log(
         // while staying close to the default chronological listing.
         "--date-order".to_string(),
         "--decorate=full".to_string(),
+        // Workbench labels need actual branch/tag tips, independent of a
+        // terminal's log.initialDecorationSet / log.excludeDecoration config.
+        // A nonempty CLI exclusion overrides the latter (empty does not).
+        "--decorate-refs=HEAD".to_string(),
+        "--decorate-refs=refs/heads/*".to_string(),
+        "--decorate-refs=refs/remotes/*".to_string(),
+        "--decorate-refs=refs/tags/*".to_string(),
+        "--decorate-refs-exclude=refs/stash".to_string(),
         format!(
             "--format=__COMMIT__%x00%h%x00%H%x00%an%x00%aI%x00%P%x00%D%n%B%n{MESSAGE_END_MARKER}"
         ),
@@ -7364,6 +7372,9 @@ mod tests {
         let c1 = git_capture(p, &["rev-parse", "HEAD"]);
         git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
         git_run(p, &["tag", "v2"]);
+        // A terminal decoration filter must not turn an attached HEAD into a
+        // bare HEAD decoration, falsely presented as detached in the UI.
+        git_run(p, &["config", "log.excludeDecoration", "refs/heads/main"]);
 
         let result = git_log(
             p.to_string_lossy().to_string(),
