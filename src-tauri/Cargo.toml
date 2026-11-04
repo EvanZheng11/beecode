@@ -1,6 +1,6 @@
 [package]
 name = "beecode"
-version = "0.41.5"
+version = "0.41.6"
 description = "BeeCode 多智能体编码工作台"
 authors = ["feitao"]
 edition = "2021"
