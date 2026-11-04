@@ -144,10 +144,9 @@ pub fn run_credential_helper() {
     // genuine errors (DB connection failure, runtime build failure) are
     // surfaced. This avoids polluting the agent's terminal output and
     // leaking the local data-dir path on every GitLab/enterprise URL.
-    let host = read_host_from_stdin();
-    if host.is_empty() {
+    let Some((protocol, host)) = read_credential_request() else {
         return;
-    }
+    };
 
     // Prefer the path passed by the helper script; only fall back to the
     // hardcoded Tauri-style location for stale scripts written before the
@@ -169,7 +168,7 @@ pub fn run_credential_helper() {
         }
     };
 
-    match rt.block_on(lookup_credential(&app_data_dir, &host)) {
+    match rt.block_on(lookup_credential(&app_data_dir, &protocol, &host)) {
         Ok(Some((username, token))) => {
             println!("username={username}");
             println!("password={token}");
@@ -182,11 +181,11 @@ pub fn run_credential_helper() {
     }
 }
 
-/// Read host from git's credential protocol on stdin. Returns empty string
-/// on EOF or if no `host=` line was provided.
-fn read_host_from_stdin() -> String {
+/// 读取 Git credential 协议，不响应 HTTP(S) 之外的请求。
+fn read_credential_request() -> Option<(String, String)> {
     use std::io::BufRead;
     let mut host = String::new();
+    let mut protocol = String::new();
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = match line {
@@ -199,8 +198,15 @@ fn read_host_from_stdin() -> String {
         if let Some(value) = line.strip_prefix("host=") {
             host = value.to_string();
         }
+        if let Some(value) = line.strip_prefix("protocol=") {
+            protocol = value.to_string();
+        }
     }
-    host
+    if !host.is_empty() && matches!(protocol.as_str(), "http" | "https") {
+        Some((protocol, host))
+    } else {
+        None
+    }
 }
 
 /// Look up a (username, token) pair for the given host using the codeg
@@ -221,6 +227,7 @@ fn read_host_from_stdin() -> String {
 /// lookup path without spawning a subprocess.
 pub(crate) async fn lookup_credential(
     app_data_dir: &Path,
+    protocol: &str,
     host: &str,
 ) -> Result<Option<(String, String)>, String> {
     let db_path = app_data_dir.join(crate::db::database_file_name());
@@ -247,15 +254,29 @@ pub(crate) async fn lookup_credential(
         None => return Ok(None),
     };
 
-    let remote_url = format!("https://{host}");
-    let account = match find_matching_account(&settings.accounts, &remote_url) {
+    // host 是 Git 协议的 authority，不能包含 userinfo、路径或查询。
+    if !matches!(protocol, "http" | "https")
+        || host.is_empty()
+        || host.contains(['/', '@', '?', '#', '\\', '\r', '\n'])
+    {
+        return Ok(None);
+    }
+    let remote_url = format!("{protocol}://{host}");
+    let account = match find_matching_http_account(&settings.accounts, &remote_url) {
         Some(a) => a,
         None => return Ok(None),
     };
 
+    let username = git_username_for(account);
     match crate::keyring_store::get_token(&account.id) {
-        Some(token) => Ok(Some((account.username.clone(), token))),
-        None => Ok(None),
+        Some(token)
+            if !token.is_empty()
+                && !token.contains(['\r', '\n'])
+                && !username.contains(['\r', '\n']) =>
+        {
+            Ok(Some((username.to_string(), token)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -412,17 +433,15 @@ pub async fn get_remote_url_by_name(repo_path: &str, remote_name: &str) -> Optio
 fn extract_host(remote_url: &str) -> Option<String> {
     let url = remote_url.trim();
 
-    // HTTPS: https://github.com/...
-    if let Some(after_scheme) = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-    {
-        // Strip optional user@ prefix (e.g. https://user@github.com/...)
-        let after_at = after_scheme
-            .find('@')
-            .map(|i| &after_scheme[i + 1..])
-            .unwrap_or(after_scheme);
-        return after_at.split('/').next().map(|h| h.to_lowercase());
+    // 使用标准 URL 解析器，只从 authority 提取 host，保留非默认端口。
+    if let Ok(parsed) = url::Url::parse(url) {
+        if matches!(parsed.scheme(), "http" | "https") {
+            let host = parsed.host()?.to_string().to_lowercase();
+            return Some(match parsed.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host,
+            });
+        }
     }
 
     // SSH: git@github.com:user/repo.git
@@ -467,6 +486,26 @@ pub fn find_matching_account<'a>(
         .copied()
 }
 
+/// 凭据仅在账号与请求的 HTTP(S) 协议、host 和端口均匹配时提供。
+fn find_matching_http_account<'a>(
+    accounts: &'a [GitHubAccount],
+    remote_url: &str,
+) -> Option<&'a GitHubAccount> {
+    let remote = url::Url::parse(remote_url).ok()?;
+    if !matches!(remote.scheme(), "http" | "https") || !remote_url.contains("://") {
+        return None;
+    }
+    let host = extract_host(remote_url)?;
+    let mut matching = accounts.iter().filter(|account| {
+        url::Url::parse(&account.server_url).is_ok_and(|url| url.scheme() == remote.scheme())
+            && extract_host(&account.server_url).as_deref() == Some(host.as_str())
+    });
+    matching
+        .clone()
+        .find(|account| account.is_default)
+        .or_else(|| matching.next())
+}
+
 /// Load GitHub accounts from the database.
 pub async fn load_github_accounts(conn: &DatabaseConnection) -> Option<GitHubAccountsSettings> {
     let raw = app_metadata_service::get_value(conn, GITHUB_ACCOUNTS_KEY)
@@ -503,13 +542,122 @@ pub async fn resolve_commit_author(
     Some((account.username.clone(), email))
 }
 
-/// Resolve credentials for a git repository and inject them into the command.
-///
-/// This is the main entry point: given a repo path and a git command,
-/// it finds the matching GitHub account and injects credentials.
-/// When `remote_name` is provided, uses that remote's URL for credential matching;
-/// otherwise defaults to "origin".
-/// Returns `true` if credentials were injected.
+/// 配置按 Git 实际请求 host 查询账号的 helper，适用于 upstream、pushurl 和 fetch --all。
+/// token 不写入脚本，也不依赖本地化的 askpass 提示。
+pub fn inject_stored_accounts(cmd: &mut tokio::process::Command, app_data_dir: &Path) -> bool {
+    let Some(env) = crate::commands::terminal::prepare_credential_env(app_data_dir) else {
+        return false;
+    };
+    let Some(helper) = env.get("GIT_CONFIG_VALUE_0") else {
+        return false;
+    };
+    inject_credential_helper(cmd, helper)
+}
+
+/// 查询配置时沿用待执行命令的目录及环境覆盖，不启动任何远程操作。
+fn git_in_command_context(cmd: &tokio::process::Command) -> std::process::Command {
+    let original = cmd.as_std();
+    let mut git = crate::process::std_command("git");
+    if let Some(cwd) = original.get_current_dir() {
+        git.current_dir(cwd);
+    }
+    for (key, value) in original.get_envs() {
+        if let Some(value) = value {
+            git.env(key, value);
+        } else {
+            git.env_remove(key);
+        }
+    }
+    git
+}
+
+fn inject_credential_helper(cmd: &mut tokio::process::Command, helper: &str) -> bool {
+    // 文件配置先于环境配置。先保存原 helper 链，按最后一次空值 reset 截断，
+    // 再配置 reset → BeeCode → 系统 helper，保证优先级和未命中回退。
+    let Ok(output) = git_in_command_context(cmd)
+        .args(["config", "--null", "--get-all", "credential.helper"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() && output.status.code() != Some(1) {
+        return false;
+    }
+    let Ok(config) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+    let mut helpers = Vec::new();
+    for value in config.split_terminator('\0') {
+        if value.is_empty() {
+            helpers.clear();
+        } else {
+            helpers.push(value);
+        }
+    }
+    cmd.env("GIT_CONFIG_COUNT", (helpers.len() + 2).to_string())
+        .env("GIT_CONFIG_KEY_0", "credential.helper")
+        .env("GIT_CONFIG_VALUE_0", "")
+        .env("GIT_CONFIG_KEY_1", "credential.helper")
+        .env("GIT_CONFIG_VALUE_1", helper)
+        .env("GIT_ASKPASS", "false")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for (index, value) in helpers.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{}", index + 2), "credential.helper")
+            .env(format!("GIT_CONFIG_VALUE_{}", index + 2), value);
+    }
+    true
+}
+
+/// 显式输入的凭据仅响应指定 URL 的协议与 authority，store/erase 不持久化。
+pub fn inject_credentials_for_url(
+    cmd: &mut tokio::process::Command,
+    remote_url: &str,
+    username: &str,
+    token: &str,
+) {
+    let Ok(url) = url::Url::parse(remote_url) else {
+        return;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
+    }
+    let Some(_) = extract_host(remote_url) else {
+        return;
+    };
+    if username.contains(['\r', '\n']) || token.contains(['\r', '\n']) {
+        return;
+    }
+    // Git 的 host 字段保留显式默认端口，不能使用 URL 解析器归一化后的 authority。
+    let Some((_, address)) = remote_url.split_once("://") else {
+        return;
+    };
+    let authority = address
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap()
+        .rsplit('@')
+        .next()
+        .unwrap();
+    let helper = r#"!f() {
+[ "$1" = get ] || exit 0
+protocol= host=
+while IFS= read -r line && [ -n "$line" ]; do
+  case "$line" in protocol=*) protocol=${line#protocol=} ;; host=*) host=${line#host=} ;; esac
+done
+[ "$protocol" = "$CODEG_GIT_PROTOCOL" ] && [ "$host" = "$CODEG_GIT_HOST" ] || exit 0
+printf 'username=%s\npassword=%s\n' "$CODEG_GIT_USERNAME" "$CODEG_GIT_PASSWORD"
+}; f"#;
+    if !inject_credential_helper(cmd, helper) {
+        return;
+    }
+    cmd.env("CODEG_GIT_PROTOCOL", url.scheme())
+        .env("CODEG_GIT_HOST", authority)
+        .env("CODEG_GIT_USERNAME", username)
+        .env("CODEG_GIT_PASSWORD", token);
+}
+
+/// Git 请求凭据时才匹配账号，不提前假定 origin 或 fetch URL。
+/// 返回 true 表示已配置 helper，实际账号/token 是否可用由请求时决定。
 pub async fn try_inject_for_repo(
     cmd: &mut tokio::process::Command,
     repo_path: &str,
@@ -519,7 +667,7 @@ pub async fn try_inject_for_repo(
     try_inject_for_repo_remote(cmd, repo_path, None, conn, app_data_dir).await
 }
 
-/// Same as `try_inject_for_repo` but allows specifying the remote name.
+/// 先检查操作涉及的 remote 是否有可用账号；实际凭据仍由 Git 请求 host 决定。
 pub async fn try_inject_for_repo_remote(
     cmd: &mut tokio::process::Command,
     repo_path: &str,
@@ -527,118 +675,202 @@ pub async fn try_inject_for_repo_remote(
     conn: &DatabaseConnection,
     app_data_dir: &Path,
 ) -> bool {
-    let settings = match load_github_accounts(conn).await {
-        Some(s) if !s.accounts.is_empty() => s,
-        _ => {
-            tracing::info!("[GIT_CRED] no accounts configured");
-            return false;
-        }
+    let Some(settings) = load_github_accounts(conn).await else {
+        return false;
     };
-
-    let target_remote = remote_name.unwrap_or("origin");
-    let remote_url = match get_remote_url_by_name(repo_path, target_remote).await {
-        Some(url) => url,
-        None => {
-            tracing::info!(
-                "[GIT_CRED] no remote URL found for {} (remote: {})",
-                repo_path, target_remote
-            );
-            return false;
+    let mut query = tokio::process::Command::from(git_in_command_context(cmd));
+    query.current_dir(repo_path);
+    let all = cmd.as_std().get_args().any(|arg| arg == "--all");
+    if all {
+        query.args(["remote", "-v"]);
+    } else if cmd.as_std().get_args().any(|arg| arg == "push") {
+        query.args([
+            "remote",
+            "get-url",
+            "--push",
+            "--all",
+            remote_name.unwrap_or("origin"),
+        ]);
+    } else {
+        query.args(["ls-remote", "--get-url"]);
+        if let Some(remote) = remote_name {
+            query.arg(remote);
         }
+    }
+    let Ok(output) = query.output().await else {
+        return false;
     };
-
-    // Only inject for HTTPS URLs (SSH uses keys, not tokens)
-    if !remote_url.starts_with("https://") && !remote_url.starts_with("http://") {
-        tracing::warn!("[GIT_CRED] skipping non-HTTPS URL: {}", remote_url);
+    if !output.status.success() {
         return false;
     }
-
-    let account = match find_matching_account(&settings.accounts, &remote_url) {
-        Some(a) => a,
-        None => {
-            tracing::info!(
-                "[GIT_CRED] no matching account for remote {}. Available hosts: {}",
-                remote_url,
-                settings
-                    .accounts
-                    .iter()
-                    .map(|a| a.server_url.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            return false;
-        }
-    };
-
-    let askpass = match ensure_askpass_script(app_data_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("[GIT_CRED] failed to create askpass script: {}", e);
-            return false;
-        }
-    };
-
-    let token = match crate::keyring_store::get_token(&account.id) {
-        Some(t) => t,
-        None => {
-            tracing::info!("[GIT_CRED] no token in keyring for account {}", account.id);
-            return false;
-        }
-    };
-
-    tracing::info!(
-        "[GIT_CRED] injecting credentials for {} (user: {})",
-        remote_url, account.username
-    );
-    inject_credentials(cmd, git_username_for(account), &token, &askpass);
-    true
+    let urls = String::from_utf8_lossy(&output.stdout);
+    let matched = urls.lines().any(|line| {
+        let candidate = if all {
+            line.split_whitespace().nth(1).unwrap_or("")
+        } else {
+            line
+        };
+        find_matching_http_account(&settings.accounts, candidate).is_some()
+    });
+    matched && inject_stored_accounts(cmd, app_data_dir)
 }
 
-/// Same as `try_inject_for_repo` but for clone operations where
-/// we don't have a repo path yet — just a URL.
+/// Clone 同样按 Git 实际请求的 host 查询账号。
 pub async fn try_inject_for_url(
     cmd: &mut tokio::process::Command,
     clone_url: &str,
     conn: &DatabaseConnection,
     app_data_dir: &Path,
 ) -> bool {
-    if !clone_url.starts_with("https://") && !clone_url.starts_with("http://") {
+    let Some(settings) = load_github_accounts(conn).await else {
         return false;
-    }
-
-    let settings = match load_github_accounts(conn).await {
-        Some(s) if !s.accounts.is_empty() => s,
-        _ => return false,
     };
-
-    let account = match find_matching_account(&settings.accounts, clone_url) {
-        Some(a) => a,
-        None => return false,
-    };
-
-    let token = match crate::keyring_store::get_token(&account.id) {
-        Some(t) => t,
-        None => {
-            tracing::info!("[GIT_CRED] no token in keyring for account {}", account.id);
-            return false;
-        }
-    };
-
-    let askpass = match ensure_askpass_script(app_data_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("[GIT_CRED] failed to create askpass script: {}", e);
-            return false;
-        }
-    };
-
-    inject_credentials(cmd, git_username_for(account), &token, &askpass);
-    true
+    find_matching_http_account(&settings.accounts, clone_url).is_some()
+        && inject_stored_accounts(cmd, app_data_dir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scoped_credentials_preserve_system_fallback_and_reset_order() {
+        use tokio::io::AsyncWriteExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("gitconfig");
+        std::fs::write(&config, "[credential]\n helper = \"!f() { echo username=discarded; echo password=discarded; }; f\"\n helper =\n helper = \"!f() { echo username=sys-user; echo password=sys-fake; }; f\"\n").unwrap();
+        for (host, expected) in [
+            ("GIT.example:443", "codeg-fake"),
+            ("unknown.example", "sys-fake"),
+        ] {
+            let mut cmd = tokio::process::Command::new("git");
+            cmd.env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .env("HOME", tmp.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", &config)
+                .env("SSH_ASKPASS", "/unchanged-ssh-askpass")
+                .current_dir(tmp.path())
+                .args(["credential", "fill"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            inject_credentials_for_url(
+                &mut cmd,
+                "https://GIT.example:443/repo",
+                "codeg-user",
+                "codeg-fake",
+            );
+            let ssh_askpass_unchanged = cmd.as_std().get_envs().any(|(key, value)| {
+                key == "SSH_ASKPASS"
+                    && value == Some(std::ffi::OsStr::new("/unchanged-ssh-askpass"))
+            });
+            let mut child = cmd.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("protocol=https\nhost={host}\n\n").as_bytes())
+                .await
+                .unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains(&format!("password={expected}"))
+            );
+            if host == "unknown.example" {
+                assert!(ssh_askpass_unchanged);
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_credentials_reject_noncanonical_url_and_protocol_newlines() {
+        for (url, username, token) in [
+            ("http:git.example/repo", "user", "fake-token"),
+            (
+                "https://git.example/repo",
+                "user\npassword=bad",
+                "fake-token",
+            ),
+            ("https://git.example/repo", "user", "fake-token\n"),
+        ] {
+            let mut cmd = tokio::process::Command::new("git");
+            inject_credentials_for_url(&mut cmd, url, username, token);
+            assert!(!cmd
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "CODEG_GIT_PASSWORD"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scoped_credentials_only_answer_matching_authority() {
+        use tokio::io::AsyncWriteExt;
+        let tmp = tempfile::tempdir().unwrap();
+        for (protocol, host, expected) in [
+            ("https", "git.example:8443", true),
+            ("https", "other.example:8443", false),
+            ("https", "git.example", false),
+            ("http", "git.example:8443", false),
+            ("https", "GIT.example:443", false),
+        ] {
+            let mut cmd = tokio::process::Command::new("git");
+            cmd.env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .env("HOME", tmp.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("LC_ALL", "zh_CN.UTF-8")
+                .current_dir(tmp.path())
+                .args(["credential", "fill"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            inject_credentials_for_url(
+                &mut cmd,
+                "https://git.example:8443/repo",
+                "test-user",
+                "fake-$'token",
+            );
+            let mut child = cmd.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes())
+                .await
+                .unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            assert_eq!(output.status.success(), expected, "{protocol} {host}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(stdout.contains("password=fake-$'token"), expected);
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("fake-$'token"));
+        }
+        assert!(!tmp.path().join(".git-credentials").exists());
+    }
+
+    #[test]
+    fn test_extract_host_does_not_treat_path_as_authority() {
+        assert_eq!(
+            extract_host("https://other.example/repo@github.com/org"),
+            Some("other.example".into())
+        );
+        assert_eq!(
+            extract_host("https://github.com:8443/org"),
+            Some("github.com:8443".into())
+        );
+        assert_eq!(
+            extract_host("https://github.com:443/org"),
+            Some("github.com".into())
+        );
+    }
 
     #[test]
     fn test_extract_host_https() {
@@ -1064,7 +1296,7 @@ mod tests {
 
                 // Lookup must round-trip the seeded credentials. Pass an absolute
                 // data_dir to mirror the production helper invocation.
-                let result = lookup_credential(&data_dir, "github.com")
+                let result = lookup_credential(&data_dir, "https", "github.com")
                     .await
                     .expect("lookup should not error");
                 assert_eq!(
@@ -1073,9 +1305,17 @@ mod tests {
                     "lookup_credential should resolve seeded github.com account"
                 );
 
+                assert!(
+                    lookup_credential(&data_dir, "http", "github.com")
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "HTTPS 账号不能响应 HTTP 请求"
+                );
+
                 // Negative case: an unseeded host must return Ok(None), never
                 // fall back to a default account or a hard error.
-                let miss = lookup_credential(&data_dir, "gitlab.example.com")
+                let miss = lookup_credential(&data_dir, "https", "gitlab.example.com")
                     .await
                     .expect("miss should be Ok(None), not Err");
                 assert!(miss.is_none(), "unrelated host must not match");
