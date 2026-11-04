@@ -90,12 +90,12 @@ describe("会话目录管理交互", () => {
   })
   it("排序取消不写入，保存才提交完整布局", async () => {
     renderDialog()
-    fireEvent.click(screen.getByRole("button", { name: "排序", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
     fireEvent.click(screen.getByLabelText("上移 项目2"))
     expect(state.applySidebarLayout).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "取消排序" }))
     expect(state.applySidebarLayout).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole("button", { name: "排序", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
     fireEvent.click(screen.getByLabelText("上移 项目2"))
     fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
     await waitFor(() =>
@@ -108,7 +108,7 @@ describe("会话目录管理交互", () => {
   })
   it("从分组添加文件夹会传递预选分组", () => {
     renderDialog()
-    fireEvent.click(screen.getByRole("button", { name: "文件夹", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: /^文件夹$/ }))
     expect(screen.getByTestId("folder-picker")).toHaveTextContent("分组 10")
   })
   it("归档状态可过滤并恢复", async () => {
@@ -119,9 +119,7 @@ describe("会话目录管理交互", () => {
     })
     expect(screen.queryByText("项目2")).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText("选择 项目1"))
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "恢复", exact: true })[0]
-    )
+    fireEvent.click(screen.getAllByRole("button", { name: /^恢复$/ })[0])
     await waitFor(() =>
       expect(archives.set).toHaveBeenCalledWith(["/project/1"], false)
     )

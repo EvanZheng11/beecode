@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useState, type CSSProperties } from "react"
 import {
   Archive,
   ArchiveRestore,
@@ -54,7 +54,7 @@ import {
 import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
 
 const COLUMNS =
-  "grid grid-cols-[32px_minmax(180px,1.4fr)_100px_minmax(150px,1fr)_130px] items-center gap-3"
+  "grid grid-cols-[28px_minmax(0,1fr)_92px] items-center gap-2 md:grid-cols-[32px_minmax(180px,1.4fr)_100px_minmax(150px,1fr)_130px] md:gap-3"
 const SELECT_CLASS =
   "h-8 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 
@@ -138,6 +138,17 @@ export function SessionDirectoryDialog({
     [openFolders]
   )
   const archived = useMemo(() => new Set(archivedPaths), [archivedPaths])
+  // 一次性建立位置表，避免逐行 locateEntry 造成 O(n²)
+  const locations = useMemo(() => {
+    const map = new Map<string, { groupId: number | null; index: number }>()
+    layout.top.forEach((e, index) =>
+      map.set(`${e.kind}:${e.id}`, { groupId: null, index })
+    )
+    layout.membersByGroup.forEach((ids, groupId) =>
+      ids.forEach((id, index) => map.set(`folder:${id}`, { groupId, index }))
+    )
+    return map
+  }, [layout])
   const rows = useMemo(
     () =>
       buildDirectoryRows({
@@ -218,6 +229,13 @@ export function SessionDirectoryDialog({
   }
   const close = (value: boolean) => {
     if (busy) return
+    if (
+      !value &&
+      draft &&
+      !window.confirm("排序尚未保存，确定放弃修改并关闭吗？")
+    )
+      return
+    setDraft(null)
     onOpenChange(value)
   }
   const sorting = draft !== null
@@ -230,7 +248,7 @@ export function SessionDirectoryDialog({
               <Settings2 className="size-5 text-primary" />
               会话目录设置
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="hidden sm:block">
               集中管理分组和文件夹，整理工作区中的会话目录。
             </DialogDescription>
           </DialogHeader>
@@ -308,6 +326,9 @@ export function SessionDirectoryDialog({
             ) : (
               <>
                 <span>已选择 {selectedFolders.length} 项</span>
+                <span className="text-muted-foreground/80">
+                  归档仅在本设备隐藏，不会删除磁盘文件或会话
+                </span>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -352,7 +373,7 @@ export function SessionDirectoryDialog({
               role="row"
               className={cn(
                 COLUMNS,
-                "min-w-[740px] shrink-0 border-b bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground"
+                "md:min-w-[740px] shrink-0 border-b bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground"
               )}
             >
               <div role="columnheader">
@@ -368,12 +389,16 @@ export function SessionDirectoryDialog({
                 />
               </div>
               <div role="columnheader">名称</div>
-              <div role="columnheader">状态</div>
-              <div role="columnheader">路径 / 分组</div>
+              <div role="columnheader" className="hidden md:block">
+                状态
+              </div>
+              <div role="columnheader" className="hidden md:block">
+                路径 / 分组
+              </div>
               <div role="columnheader">操作</div>
             </div>
             <div
-              className="min-h-0 min-w-[740px] flex-1 overflow-y-auto"
+              className="min-h-0 md:min-w-[740px] flex-1 overflow-y-auto"
               onDragOver={(e) => {
                 if (sorting) {
                   e.preventDefault()
@@ -409,7 +434,7 @@ export function SessionDirectoryDialog({
                       row.kind === "group" ||
                       (!!folder && rootIds.has(folder.id))
                     const entry: SidebarEntry = { kind: row.kind, id: row.id }
-                    const location = locateEntry(layout, entry)
+                    const location = locations.get(`${entry.kind}:${entry.id}`)
                     const hasChildren =
                       row.kind === "group" || parentIds.has(row.id)
                     return (
@@ -476,8 +501,8 @@ export function SessionDirectoryDialog({
                         </div>
                         <div
                           role="gridcell"
-                          className="flex min-w-0 items-center gap-2"
-                          style={{ paddingLeft: row.depth * 20 }}
+                          className="flex min-w-0 items-center gap-2 pl-[calc(var(--depth)*12px)] md:pl-[calc(var(--depth)*20px)]"
+                          style={{ "--depth": row.depth } as CSSProperties}
                         >
                           {hasChildren ? (
                             <button
@@ -504,13 +529,18 @@ export function SessionDirectoryDialog({
                           <span className="truncate" title={name}>
                             {name}
                           </span>
+                          {folder && (isArchived || !inWorkspace) && (
+                            <span className="shrink-0 rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground md:hidden">
+                              {isArchived ? "已归档" : "已移出"}
+                            </span>
+                          )}
                           {row.kind === "group" && (
                             <span className="rounded bg-muted px-1.5 text-xs text-muted-foreground">
                               {row.selectableIds.length}
                             </span>
                           )}
                         </div>
-                        <div role="gridcell">
+                        <div role="gridcell" className="hidden md:block">
                           {folder ? (
                             <span
                               className={cn(
@@ -536,7 +566,7 @@ export function SessionDirectoryDialog({
                         </div>
                         <div
                           role="gridcell"
-                          className="truncate text-xs text-muted-foreground"
+                          className="hidden truncate text-xs text-muted-foreground md:block"
                           title={folder?.path}
                         >
                           {folder?.path ?? "文件夹分组"}
@@ -634,7 +664,7 @@ export function SessionDirectoryDialog({
             {sorting && (
               <div
                 className={cn(
-                  "min-w-[740px] shrink-0 border-t border-dashed py-3 text-center text-xs",
+                  "md:min-w-[740px] shrink-0 border-t border-dashed py-3 text-center text-xs",
                   dropKey === "root"
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground"
@@ -657,8 +687,8 @@ export function SessionDirectoryDialog({
               </div>
             )}
           </div>
-          <DialogFooter className="items-center px-6 py-4">
-            <span className="mr-auto text-xs text-muted-foreground">
+          <DialogFooter className="flex-row items-center justify-end px-6 py-4">
+            <span className="mr-auto hidden text-xs text-muted-foreground sm:inline">
               {folders.length} 个文件夹 · {groups.length} 个分组 ·
               无分页虚拟滚动
             </span>
