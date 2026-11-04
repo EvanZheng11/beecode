@@ -674,6 +674,13 @@ impl TerminalRuntime {
             }
         };
 
+        if let Some(pid) = child.id() {
+            crate::resource_monitor::register_spawn(
+                pid,
+                "terminal",
+                Some(request.session_id.to_string()),
+            );
+        }
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 

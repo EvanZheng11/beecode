@@ -51,6 +51,19 @@ pub fn build_router_with_proxy_auth(
     let token_for_cli_hello = token.clone();
 
     let api = Router::new()
+        .route(
+            "/resource-monitor/settings",
+            get(crate::resource_monitor::http::settings)
+                .put(crate::resource_monitor::http::enabled),
+        )
+        .route(
+            "/resource-monitor/snapshot",
+            get(crate::resource_monitor::http::snapshot),
+        )
+        .route(
+            "/resource-monitor/action",
+            post(crate::resource_monitor::http::action),
+        )
         .route("/health", post(health_check))
         // Debug endpoint: operator-facing snapshot of `EventBusMetrics`
         // (emit volume, lag/eviction counts, attach decision counts).

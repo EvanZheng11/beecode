@@ -719,6 +719,9 @@ impl<Counterpart: AcpAgentCounterpartRole> ConnectTo<Counterpart> for AcpAgent {
         use futures::io::BufReader;
 
         let (child_stdin, child_stdout, child_stderr, child) = self.spawn_process()?;
+        if let Some(pid) = child.id() {
+            crate::resource_monitor::register_spawn(pid, "session", None);
+        }
 
         // Publish the OS pid to the spawn callback so the host can kill the
         // process tree deterministically at shutdown rather than relying solely
