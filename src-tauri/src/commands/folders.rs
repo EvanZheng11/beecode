@@ -3283,6 +3283,16 @@ pub async fn git_add_files(path: String, files: Vec<String>) -> Result<(), AppCo
     Ok(())
 }
 
+#[path = "merged_worktrees.rs"]
+mod merged_worktrees;
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn git_list_merged_worktrees(path: String) -> Result<Vec<String>, AppCommandError> {
+    tokio::task::spawn_blocking(move || merged_worktrees::list(&path))
+        .await
+        .map_err(|error| AppCommandError::io(std::io::Error::other(error.to_string())))
+}
+
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn git_list_all_branches(path: String) -> Result<GitBranchList, AppCommandError> {
     ensure_git_repo(&path)?;

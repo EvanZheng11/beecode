@@ -2825,6 +2825,11 @@ export async function gitListBranches(path: string): Promise<string[]> {
   return getTransport().call("git_list_branches", { path })
 }
 
+/** 已确认合并且干净的附属 worktree 路径；失败按未知处理。 */
+export async function gitListMergedWorktrees(path: string): Promise<string[]> {
+  return getTransport().call("git_list_merged_worktrees", { path })
+}
+
 export async function gitListAllBranches(path: string): Promise<GitBranchList> {
   return getTransport().call("git_list_all_branches", { path })
 }

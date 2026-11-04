@@ -31,6 +31,13 @@ import { InputGroupButton } from "@/components/ui/input-group"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -56,6 +63,7 @@ import { isDesktop, openFileDialog } from "@/lib/platform"
 import { parentFsPath } from "@/lib/path-utils"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toErrorMessage } from "@/lib/app-error"
+import { setFoldersArchived } from "@/lib/folder-archive"
 import {
   basenameOf,
   linkNameKey,
@@ -82,6 +90,7 @@ interface WorkspaceFolderDialogProps {
    * before moving on.
    */
   folder?: FolderDetail | null
+  defaultGroupId?: number | null
   /** Called once the workspace folder has been opened (creation flow only). */
   onFolderOpened?: (folder: FolderDetail) => void
 }
@@ -99,11 +108,14 @@ export function WorkspaceFolderDialog({
   open,
   onOpenChange,
   folder,
+  defaultGroupId,
   onFolderOpened,
 }: WorkspaceFolderDialogProps) {
   const t = useTranslations("Folder.workspaceDialog")
   const tBrowser = useTranslations("DirectoryBrowser")
   const openFolder = useAppWorkspaceStore((s) => s.openFolder)
+  const folderGroups = useAppWorkspaceStore((s) => s.folderGroups)
+  const setFolderGroup = useAppWorkspaceStore((s) => s.setFolderGroup)
 
   const manageMode = !!folder
   const [view, setView] = useState<View>(manageMode ? "links" : "pick-root")
@@ -113,6 +125,12 @@ export function WorkspaceFolderDialog({
   const [rootPath, setRootPath] = useState("")
   const [browserBusy, setBrowserBusy] = useState(false)
   const [openingRoot, setOpeningRoot] = useState(false)
+  const [groupId, setGroupId] = useState<number | null>(defaultGroupId ?? null)
+  const [groupChanged, setGroupChanged] = useState(defaultGroupId !== undefined)
+  const openingRootRef = useRef(false)
+  const openedRootRef = useRef<{ path: string; detail: FolderDetail } | null>(
+    null
+  )
   const rootBrowserRef = useRef<DirectoryBrowserHandle>(null)
 
   // Link targets being picked in the "add" view.
@@ -146,6 +164,9 @@ export function WorkspaceFolderDialog({
     setView(folder ? "links" : "pick-root")
     setRootFolder(folder ?? null)
     setRootPath(folder?.path ?? "")
+    setGroupId(defaultGroupId ?? null)
+    setGroupChanged(defaultGroupId !== undefined)
+    openedRootRef.current = null
     setTargetPath("")
     setPickedTargets([])
     setPending([])
@@ -156,7 +177,7 @@ export function WorkspaceFolderDialog({
     setOpeningRoot(false)
     setCreating(false)
     setPreviewing(false)
-  }, [open, folder])
+  }, [open, folder, defaultGroupId])
 
   const refreshLinks = useCallback(async (folderId: number) => {
     setLoadingLinks(true)
@@ -178,26 +199,43 @@ export function WorkspaceFolderDialog({
 
   const commitRoot = useCallback(
     async (path: string) => {
+      if (openingRootRef.current) return
+      openingRootRef.current = true
       setOpeningRoot(true)
       try {
-        const detail = await openFolder(path)
-        setRootFolder(detail)
-        onFolderOpened?.(detail)
+        const detail =
+          openedRootRef.current?.path === path
+            ? openedRootRef.current.detail
+            : await openFolder(path)
+        openedRootRef.current = { path, detail }
+        const targetGroup = groupChanged ? groupId : detail.group_id
+        if (detail.group_id !== targetGroup) {
+          await setFolderGroup(detail.id, targetGroup)
+        }
+        setFoldersArchived([detail.path], false)
+        const grouped = { ...detail, group_id: targetGroup }
+        openedRootRef.current = null
+        setRootFolder(grouped)
         setView("links")
+        return grouped
       } catch (err) {
         toast.error(t("openFailed"), { description: toErrorMessage(err) })
       } finally {
+        openingRootRef.current = false
         setOpeningRoot(false)
       }
     },
-    [openFolder, onFolderOpened, t]
+    [openFolder, setFolderGroup, groupId, groupChanged, t]
   )
 
   const handleConfirmRoot = useCallback(async () => {
     if (openingRoot || browserBusy) return
     const selected = await rootBrowserRef.current?.confirm()
-    if (selected) await commitRoot(selected)
-  }, [openingRoot, browserBusy, commitRoot])
+    if (selected) {
+      const detail = await commitRoot(selected)
+      if (detail) onFolderOpened?.(detail)
+    }
+  }, [openingRoot, browserBusy, commitRoot, onFolderOpened])
 
   // The picker fills the path box and stops there. It sits inside that box, so
   // it has to behave like typing into it — opening the folder outright would
@@ -400,12 +438,40 @@ export function WorkspaceFolderDialog({
 
         {view === "pick-root" ? (
           <>
+            <div className="flex items-center gap-3">
+              <label htmlFor="workspace-folder-group" className="text-sm">
+                {t("groupLabel")}
+              </label>
+              <Select
+                value={groupId === null ? "none" : String(groupId)}
+                onValueChange={(value) => {
+                  setGroupId(value === "none" ? null : Number(value))
+                  setGroupChanged(true)
+                }}
+                disabled={openingRoot}
+              >
+                <SelectTrigger id="workspace-folder-group" className="min-w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{t("noGroup")}</SelectItem>
+                  {folderGroups.map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <DirectoryBrowser
               ref={rootBrowserRef}
               active={open && view === "pick-root"}
               value={rootPath}
               onValueChange={setRootPath}
-              onQuickSelect={commitRoot}
+              onQuickSelect={async (path) => {
+                const detail = await commitRoot(path)
+                if (detail) onFolderOpened?.(detail)
+              }}
               onBusyChange={setBrowserBusy}
               // A new project often starts as an empty folder: make it here,
               // land in it, and "Next" opens it.

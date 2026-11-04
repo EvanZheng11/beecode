@@ -2,6 +2,10 @@
 
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
+  useMergedWorktreePaths,
+  visibleWorktreeFolders,
+} from "./sidebar-merged-worktrees"
+import {
   memo,
   useCallback,
   useEffect,
@@ -45,6 +49,10 @@ import {
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import {
+  excludeArchivedFolders,
+  useArchivedFolderPaths,
+} from "@/lib/folder-archive"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
@@ -986,7 +994,17 @@ export function SidebarConversationList({
   const { themeColor: appThemeColor } = useThemeColor()
   const { createTerminalInDirectory } = useTerminalContext()
   const { zoomLevel } = useZoomLevel()
-  const folders = useAppWorkspaceStore((s) => s.folders)
+  const workspaceFolders = useAppWorkspaceStore((s) => s.folders)
+  const archivedFolderPaths = useArchivedFolderPaths()
+  const mergedPaths = useMergedWorktreePaths(workspaceFolders)
+  const folders = useMemo(
+    () =>
+      excludeArchivedFolders(
+        visibleWorktreeFolders(workspaceFolders, mergedPaths),
+        archivedFolderPaths
+      ),
+    [workspaceFolders, mergedPaths, archivedFolderPaths]
+  )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   // Live HEAD branch per folder, for the container repos' "root" sub-group
