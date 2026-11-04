@@ -476,7 +476,7 @@ fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
     if identity(parent) != Some(parent_start) {
         return None;
     }
-    identity(pid)
+    identity(pid).filter(|start| *start >= parent_start)
 }
 
 #[cfg(test)]
@@ -826,6 +826,42 @@ mod tests {
             .json(&serde_json::json!({"pid":u32::MAX,"startTime":1,"action":"kill"}))
             .await;
         assert_eq!(denied.status_code(), 403);
+        #[cfg(target_os = "linux")]
+        {
+            let mut child = sleeper();
+            let pid = child.0.id();
+            let start = identity(pid).unwrap();
+            register_spawn(pid, "service", Some("HTTP 合成测试".into()));
+            let request = serde_json::json!({"pid":pid,"startTime":start,"action":"kill"});
+            // 即使已登记进程，关闭时也不能绕过界面直接控制。
+            let disabled = server
+                .post("/api/resource-monitor/action")
+                .add_header("authorization", "Bearer monitor-test")
+                .json(&request)
+                .await;
+            assert_eq!(disabled.status_code(), 403);
+            assert!(child.0.try_wait().unwrap().is_none());
+            server
+                .put("/api/resource-monitor/settings")
+                .add_header("authorization", "Bearer monitor-test")
+                .json(&serde_json::json!({"enabled":true}))
+                .await
+                .assert_status_ok();
+            let success = server
+                .post("/api/resource-monitor/action")
+                .add_header("authorization", "Bearer monitor-test")
+                .json(&request)
+                .await;
+            success.assert_status_ok();
+            assert_eq!(success.json::<serde_json::Value>(), serde_json::Value::Null);
+            assert!(!child.0.wait().unwrap().success());
+            server
+                .put("/api/resource-monitor/settings")
+                .add_header("authorization", "Bearer monitor-test")
+                .json(&serde_json::json!({"enabled":false}))
+                .await
+                .assert_status_ok();
+        }
     }
 
     #[test]
@@ -863,10 +899,18 @@ pub mod http {
     ) -> Result<Json<Snapshot>, AppCommandError> {
         get_snapshot(&state.db.conn).await.map(Json)
     }
-    pub async fn action(Json(params): Json<ActionParams>) -> Result<(), AppCommandError> {
+    pub async fn action(
+        Extension(state): Extension<Arc<AppState>>,
+        Json(params): Json<ActionParams>,
+    ) -> Result<Json<()>, AppCommandError> {
+        let settings = loaded_settings(&state.db.conn).await;
+        if !settings.as_ref().unwrap().enabled {
+            return Err(AppCommandError::permission_denied("资源监控未开启"));
+        }
         tokio::task::spawn_blocking(move || process_action(params))
             .await
-            .map_err(|_| AppCommandError::task_execution_failed("进程控制任务失败"))?
+            .map_err(|_| AppCommandError::task_execution_failed("进程控制任务失败"))??;
+        Ok(Json(()))
     }
 }
 
@@ -895,10 +939,15 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn resource_monitor_process_action(
+        db: tauri::State<'_, AppDatabase>,
         pid: u32,
         start_time: u64,
         action: Action,
     ) -> Result<(), AppCommandError> {
+        let settings = loaded_settings(&db.conn).await;
+        if !settings.as_ref().unwrap().enabled {
+            return Err(AppCommandError::permission_denied("资源监控未开启"));
+        }
         tokio::task::spawn_blocking(move || {
             process_action(ActionParams {
                 pid,
