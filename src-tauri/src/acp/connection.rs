@@ -16107,7 +16107,13 @@ async fn run_conversation_loop(
                                     // 其他错误不重发，避免重复消费；草稿由调用者保留。
                                     if matches!(native_outcome, None | Some(Ok(SteerOutcome::PromptRequired))) {
                                         if completion_notice {
-                                            let _ = reply.send(Err(AcpError::FeedbackDeferred));
+                                            // 原生明确未消费时保留普通 prompt 唤醒路径；通知不能取消当前轮次。
+                                            let outcome = if native_outcome.is_some() {
+                                                Ok(SteerOutcome::PromptRequired)
+                                            } else {
+                                                Err(AcpError::FeedbackDeferred)
+                                            };
+                                            let _ = reply.send(outcome);
                                             continue;
                                         }
                                         if let Some(pending) = replace.as_mut() {
@@ -36877,6 +36883,46 @@ mod tests {
             assert!(run.ended().await.0.is_ok());
             agent.closed().await;
         }
+    }
+
+    /// 通知未被原生消费时，由通知器改发普通 prompt，不能丢弃或取消父轮次。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn completion_notice_prompt_required_keeps_prompt_fallback_without_cancel() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(
+            agent_end,
+            HandshakeScript {
+                hold_prompt_until_cancel: true,
+                steering_outcome: Some("promptRequired"),
+                ..Default::default()
+            },
+        );
+        let run = HandshakeRun::start_as(client_end, AgentType::Codex).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        run.prompt("original").await;
+        assert_eq!(agent.next_request().await, "session/prompt: original");
+        run.state.write().await.native_steering_available = true;
+        let (reply, result) = oneshot::channel();
+        run.cmd_tx
+            .send(ConnectionCommand::Steer {
+                blocks: vec![PromptInputBlock::Text {
+                    text: "[system] Sub-agent task t1 finished with status: Completed.".into(),
+                }],
+                reply,
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent.next_request().await, "_session/steering");
+        assert!(matches!(
+            result.await.unwrap().unwrap(),
+            SteerOutcome::PromptRequired
+        ));
+        assert!(agent.seen.try_recv().is_err(), "完成通知不得取消父轮次");
+        run.cmd_tx.send(ConnectionCommand::Disconnect).await.unwrap();
+        assert!(run.ended().await.0.is_ok());
+        agent.closed().await;
     }
 
     /// CodeBuddy 的下一条消息必须越过取消保护窗口。
