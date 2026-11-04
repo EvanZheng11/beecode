@@ -291,7 +291,7 @@ fn chrono_duration(duration: std::time::Duration) -> chrono::Duration {
 pub struct RegisteredQuestion {
     pub question_id: String,
     pub answer_rx: oneshot::Receiver<QuestionOutcome>,
-    /// 等待期限的共享句柄；`None` 表示这次提问没有倒计时（原生 agent 提问）。
+    /// 等待期限的共享句柄；`None` 仅供无期限底层调用与兼容测试桩。
     pub deadline: Option<QuestionDeadline>,
 }
 
@@ -325,6 +325,36 @@ pub trait SessionQuestionAccess: Send + Sync {
         let _ = timeout;
         self.register_question(parent_connection_id, questions).await
     }
+
+    /// 原生提问带期限注册；生产必须保留 `survives_turn=false`。
+    async fn register_native_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        let _ = timeout;
+        self.register_question(parent_connection_id, questions).await
+    }
+
+    /// 原生重提必须原子替换旧题，防止 Stop 落在撤题与注册之间后又出现新卡。
+    /// 默认仅兼容测试桩；生产必须覆盖为同一注册表临界区内替换。
+    async fn retry_native_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        if !self.cancel_question(parent_connection_id, question_id).await {
+            return None;
+        }
+        self.register_native_question_with_timeout(parent_connection_id, questions, timeout)
+            .await
+    }
+
+    /// 等待耗尽且禁止自动选择时，停止宿主任务。测试桩默认无操作。
+    async fn stop_question_task(&self, _parent_connection_id: &str) {}
 
     /// 把提问的倒计时清空、转为无限等待（最终保留表单时由等待循环调用）。
     /// 默认无操作，测试桩可以忽略。

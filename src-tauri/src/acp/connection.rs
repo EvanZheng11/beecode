@@ -10052,7 +10052,14 @@ async fn handle_grok_ask_user_question(
     // register_question consumes the specs; keep a copy to render the answered
     // in-stream card once the user submits.
     let card_specs = specs.clone();
-    let Some(registered) = questions.register_question(connection_id, specs).await else {
+    let Some(registered) = crate::acp::native_question::NativeQuestion::register(
+        Arc::clone(questions),
+        connection_id,
+        specs,
+        ask_cfg.snapshot().await,
+    )
+    .await
+    else {
         // Connection gone, or an ask is already pending on this connection.
         let _ = responder.respond_with_internal_error("could not register ask_user_question");
         return;
@@ -10062,9 +10069,13 @@ async fn handle_grok_ask_user_question(
     // free — then reply to grok's blocked ext request.
     let state = Arc::clone(state);
     let emitter = emitter.clone();
+    let cancellation = responder.cancellation();
     tokio::spawn(async move {
-        match registered.answer_rx.await {
-            Ok(outcome) => {
+        match registered
+            .wait(async { cancellation.cancelled().await })
+            .await
+        {
+            Some(outcome) => {
                 // Surface the answered "提问回答" capsule in-stream — the codeg-mcp
                 // ask parity grok's native tool never emits into the ACP stream (it
                 // resolves the answer over THIS ext round-trip). Emit BEFORE
@@ -10101,7 +10112,7 @@ async fn handle_grok_ask_user_question(
             }
             // Sender dropped: the ask was canceled or the connection tore down —
             // nothing to render; let grok fall back via skip_interview.
-            Err(_) => {
+            None => {
                 let _ = responder.respond(crate::acp::question::grok_ext_skip_response());
             }
         }
@@ -10315,28 +10326,29 @@ async fn try_bridge_pi_select_ask(
     perms.lock().await.park_detached(abort_tx);
     // `register_question` consumes the spec; keep the ask to map the answer back
     // to pi's option id and to render the answered in-stream card.
-    let Some(registered) = questions
-        .register_question(connection_id, vec![ask.spec.clone()])
-        .await
+    let Some(registered) = crate::acp::native_question::NativeQuestion::register(
+        Arc::clone(questions),
+        connection_id,
+        vec![ask.spec.clone()],
+        ask_cfg.snapshot().await,
+    )
+    .await
     else {
         return Err(responder);
     };
     let state = Arc::clone(state);
     let emitter = emitter.clone();
-    let questions = Arc::clone(questions);
-    let connection_id = connection_id.to_string();
-    let question_id = registered.question_id;
-    // The user answers out-of-band (the `answer_question` endpoint resolves the
-    // one-shot below), so await it on a task — keeping the ACP dispatch loop free
-    // — then unblock pi.
+    let cancellation = responder.cancellation();
+    // 等待器统一清理当前轮次；权限队列 drain 和对端撤回都属于取消。
     tokio::spawn(async move {
-        // `biased` so an answer that lands in the same instant as a drain still
-        // counts: the user clicked, and pi can still be told what they picked.
-        let answer = tokio::select! {
-            biased;
-            answered = registered.answer_rx => answered.ok(),
-            _ = abort_rx => None,
-        };
+        let answer = registered
+            .wait(async {
+                tokio::select! {
+                    () = cancellation.cancelled() => {},
+                    _ = abort_rx => {},
+                }
+            })
+            .await;
         match answer {
             Some(outcome) => {
                 let option_id = crate::acp::question::pi_select_option_id(&outcome, &ask);
@@ -10398,7 +10410,6 @@ async fn try_bridge_pi_select_ask(
             // the ask so the NEXT select can register, and unblock pi with the
             // cancel it would have gotten from the drained permission queue.
             None => {
-                questions.cancel_question(&connection_id, &question_id).await;
                 let _ = responder.respond(RequestPermissionResponse::new(
                     RequestPermissionOutcome::Cancelled,
                 ));
@@ -10475,9 +10486,13 @@ async fn try_bridge_antigravity_ask(
     let (abort_tx, abort_rx) = oneshot::channel();
     perms.lock().await.park_detached(abort_tx);
 
-    let Some(registered) = questions
-        .register_question(connection_id, vec![ask.spec.clone()])
-        .await
+    let Some(registered) = crate::acp::native_question::NativeQuestion::register(
+        Arc::clone(questions),
+        connection_id,
+        vec![ask.spec.clone()],
+        ask_cfg.snapshot().await,
+    )
+    .await
     else {
         tracing::warn!(
             "[ACP] Antigravity interaction bridge could not register question conn={} tool_call_id={}",
@@ -10496,16 +10511,17 @@ async fn try_bridge_antigravity_ask(
 
     let state = Arc::clone(state);
     let emitter = emitter.clone();
-    let questions = Arc::clone(questions);
-    let connection_id = connection_id.to_string();
-    let question_id = registered.question_id;
+    let cancellation = responder.cancellation();
 
     tokio::spawn(async move {
-        let answer = tokio::select! {
-            biased;
-            answered = registered.answer_rx => answered.ok(),
-            _ = abort_rx => None,
-        };
+        let answer = registered
+            .wait(async {
+                tokio::select! {
+                    () = cancellation.cancelled() => {},
+                    _ = abort_rx => {},
+                }
+            })
+            .await;
         match answer {
             Some(outcome) => {
                 let option_id = crate::acp::question::antigravity_option_id(&outcome, &ask);
@@ -10531,9 +10547,6 @@ async fn try_bridge_antigravity_ask(
                 let _ = responder.respond(RequestPermissionResponse::new(response_outcome));
             }
             None => {
-                questions
-                    .cancel_question(&connection_id, &question_id)
-                    .await;
                 let _ = responder.respond(RequestPermissionResponse::new(
                     RequestPermissionOutcome::Cancelled,
                 ));
@@ -10696,7 +10709,14 @@ async fn handle_cursor_ask_question(
         .map(str::to_string);
     let specs: Vec<_> = parsed.iter().map(|q| q.spec.clone()).collect();
     let card_specs = specs.clone();
-    let Some(registered) = questions.register_question(connection_id, specs).await else {
+    let Some(registered) = crate::acp::native_question::NativeQuestion::register(
+        Arc::clone(questions),
+        connection_id,
+        specs,
+        ask_cfg.snapshot().await,
+    )
+    .await
+    else {
         let _ = responder.respond(crate::acp::cursor_ext::cursor_ask_skip_response_with_reason(
             "the host could not open a question card (one is already pending, or the session is gone)",
         ));
@@ -10704,9 +10724,13 @@ async fn handle_cursor_ask_question(
     };
     let state = Arc::clone(state);
     let emitter = emitter.clone();
+    let cancellation = responder.cancellation();
     tokio::spawn(async move {
-        match registered.answer_rx.await {
-            Ok(outcome) => {
+        match registered
+            .wait(async { cancellation.cancelled().await })
+            .await
+        {
+            Some(outcome) => {
                 if let Some(tool_call_id) = tool_call_id {
                     emit_with_state(
                         &state,
@@ -10735,7 +10759,7 @@ async fn handle_cursor_ask_question(
                     &parsed, &outcome,
                 ));
             }
-            Err(_) => {
+            None => {
                 let _ = responder.respond(crate::acp::cursor_ext::cursor_ask_skip_response());
             }
         }
@@ -10981,9 +11005,13 @@ async fn handle_elicitation_request(
             // register_question consumes the specs; `questions` keeps its copy
             // to correlate the answer back to each field when building the
             // response.
-            let Some(registered) = question_access
-                .register_question(connection_id, questions.specs.clone())
-                .await
+            let Some(registered) = crate::acp::native_question::NativeQuestion::register(
+                Arc::clone(question_access),
+                connection_id,
+                questions.specs.clone(),
+                ask_cfg.snapshot().await,
+            )
+            .await
             else {
                 // Connection gone, or an ask is already pending on this connection.
                 let _ = responder.respond(unanswered());
@@ -11004,29 +11032,13 @@ async fn handle_elicitation_request(
             // is retired the moment codex stops waiting for it, rather than
             // lingering as a question whose answer would reach nobody.
             let cancellation = responder.cancellation();
-            let withdraw_access = Arc::clone(question_access);
-            let withdraw_conn = connection_id.to_string();
-            let question_id = registered.question_id;
-            let answer_rx = registered.answer_rx;
             tokio::spawn(async move {
-                let answer = tokio::select! {
-                    // Withdrawal wins a tie: an answer that crosses it would
-                    // reach nobody, so it must not render as a delivered one.
-                    biased;
-                    () = cancellation.cancelled() => None,
-                    answer = answer_rx => Some(answer),
-                };
+                let answer = registered
+                    .wait(async { cancellation.cancelled().await })
+                    .await;
                 let response = match answer {
-                    None => {
-                        tracing::info!(
-                            "[codex elicitation] question {question_id} withdrawn by the agent"
-                        );
-                        withdraw_access
-                            .cancel_question(&withdraw_conn, &question_id)
-                            .await;
-                        crate::acp::question::elicitation_cancel_response()
-                    }
-                    Some(Ok(outcome)) => {
+                    None => crate::acp::question::elicitation_cancel_response(),
+                    Some(outcome) => {
                         // Surface the answered "提问回答" capsule in-stream — the
                         // parity codex's `request_user_input` never emits itself: it
                         // resolves the answer over THIS elicitation round-trip and
@@ -11090,9 +11102,6 @@ async fn handle_elicitation_request(
                         }
                         response
                     }
-                    // Sender dropped: canceled or the connection tore down.
-                    // Decline so codex proceeds with its own judgment.
-                    Some(Err(_)) => crate::acp::question::elicitation_decline_response(),
                 };
                 let _ = responder.respond(serde_json::to_value(response).unwrap_or_default());
             });
