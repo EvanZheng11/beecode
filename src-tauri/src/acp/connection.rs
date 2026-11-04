@@ -13766,7 +13766,16 @@ async fn wait_replace_ready(
     stashed: &mut VecDeque<ConnectionCommand>,
     agent_type: AgentType,
 ) -> ReplaceReady {
-    let teardown_deadline = tokio::time::Instant::now() + crate::acp::turn_replace::REPLACE_TEARDOWN_WAIT;
+    let teardown_deadline =
+        tokio::time::Instant::now() + crate::acp::turn_replace::REPLACE_TEARDOWN_WAIT;
+    // CodeBuddy 在取消回复后仍有保护窗口，不能立即发送下一条 prompt。
+    let release_at = tokio::time::Instant::now()
+        + if agent_type == AgentType::CodeBuddy {
+            CODEBUDDY_CANCEL_BARRIER
+        } else {
+            std::time::Duration::ZERO
+        };
+    let mut teardown_done = false;
     loop {
         tokio::select! {
             biased;
@@ -13784,18 +13793,26 @@ async fn wait_replace_ready(
                             disconnect: true,
                         };
                     }
-                    Some(ConnectionCommand::Steer { blocks, reply })
-                        if registry::steering_replaces_turn(agent_type) =>
-                    {
-                        pending.blocks.extend(blocks);
-                        pending.replies.push(reply);
+                    Some(ConnectionCommand::Steer { blocks, reply }) => {
+                        if crate::acp::turn_replace::blocks_are_completion_notice(&blocks) {
+                            let _ = reply.send(Err(AcpError::FeedbackDeferred));
+                        } else {
+                            pending.blocks.extend(blocks);
+                            pending.replies.push(reply);
+                        }
                     }
                     Some(other) => stashed.push_back(other),
                 }
             }
-            result = &mut pending.teardown => {
+            result = &mut pending.teardown, if !teardown_done => {
                 let _ = result;
                 pending.resume_ok = true;
+                teardown_done = true;
+                if tokio::time::Instant::now() >= release_at {
+                    return ReplaceReady::Send(pending);
+                }
+            }
+            _ = tokio::time::sleep_until(release_at), if teardown_done => {
                 return ReplaceReady::Send(pending);
             }
             _ = tokio::time::sleep_until(teardown_deadline) => {
@@ -15492,6 +15509,18 @@ async fn run_conversation_loop(
                                         turn_started_at_ms =
                                             crate::acp_transcript::now_epoch_ms();
                                         probe = TurnOutputProbe::new(stderr_tail.mark());
+                                        // 替换也是新 prompt，不能让旧轮次的计量和调用映射串入。
+                                        zcode_turn = crate::acp::zcode_turn::TurnTracker::default();
+                                        cb_state.open_subagents.clear();
+                                        cb_state.closed_subagents.clear();
+                                        cb_state.grok_progress_eligible.clear();
+                                        cb_state.grok_pending_spawn_ids.clear();
+                                        cb_state.hosted_terminal_calls.clear();
+                                        cb_state.claude_viewed_results.clear();
+                                        cb_state.claude_fork_awaiting_result.clear();
+                                        cb_state.qoder_ask_questions.clear();
+                                        cb_state.codex_context_readings.turn_started();
+                                        cb_state.kiro_calls.clear();
                                         cb_state.opencode.turn_started();
                                         match poll_prompt_now(&mut prompt_response).await {
                                             Some(Err(e)) => {
@@ -16051,7 +16080,36 @@ async fn run_conversation_loop(
                                     }
                                 }
                                 Some(ConnectionCommand::Steer { blocks, reply }) => {
-                                    if registry::steering_replaces_turn(agent_type) {
+                                    let completion_notice =
+                                        crate::acp::turn_replace::blocks_are_completion_notice(&blocks);
+                                    let use_native = {
+                                        let s = state.read().await;
+                                        if completion_notice
+                                            && (s.notice_hold > 0 || s.prompt_barrier || s.replacing_turn)
+                                        {
+                                            let _ = reply.send(Err(AcpError::FeedbackDeferred));
+                                            continue;
+                                        }
+                                        s.native_steering_available
+                                            && !(s.pending_permission.is_some()
+                                                && registry::steering_waits_out_open_permission(agent_type))
+                                            && replace.is_none()
+                                    };
+                                    let native_outcome = if use_native {
+                                        if let Some(inj) = delegation_injection {
+                                            inj.questions.cancel_questions_by_parent(conn_id).await;
+                                        }
+                                        Some(send_steer_request(&cx, &sid, &blocks).await)
+                                    } else {
+                                        None
+                                    };
+                                    // promptRequired 明确表示未消费，可安全改走取消后替换。
+                                    // 其他错误不重发，避免重复消费；草稿由调用者保留。
+                                    if matches!(native_outcome, None | Some(Ok(SteerOutcome::PromptRequired))) {
+                                        if completion_notice {
+                                            let _ = reply.send(Err(AcpError::FeedbackDeferred));
+                                            continue;
+                                        }
                                         if let Some(pending) = replace.as_mut() {
                                             pending.blocks.extend(blocks);
                                             pending.replies.push(reply);
@@ -16119,10 +16177,11 @@ async fn run_conversation_loop(
                                     // keeps the old meaning — redirecting the agent drops
                                     // its question — and the agent reads the
                                     // decline beside the steer.
-                                    if let Some(inj) = delegation_injection {
-                                        inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    let outcome = native_outcome.expect("native outcome checked above");
+                                    if matches!(outcome, Ok(SteerOutcome::StartedNewTurn)) {
+                                        // 立即锁存降级，避免已排入命令队列的下一条仍走原生。
+                                        state.write().await.native_steering_available = false;
                                     }
-                                    let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
                                     // agent's OWN transcript: as a user record
                                     // when it runs as a turn of its own, and as
@@ -36140,6 +36199,8 @@ mod tests {
         hold_inserted: bool,
         /// On an inserted prompt, ask for permission and wait before ending.
         permission_on_inserted: bool,
+        /// 模拟原生注入结果，未提供时不声明原生能力。
+        steering_outcome: Option<&'static str>,
     }
 
     fn scripted_permission_request() -> agent_client_protocol::schema::v1::RequestPermissionRequest
@@ -36174,7 +36235,10 @@ mod tests {
 
     impl HandshakeAgent {
         fn start(agent_end: agent_client_protocol::Channel, script: HandshakeScript) -> Self {
-            use agent_client_protocol::schema::v1::{InitializeResponse, PromptResponse};
+            use agent_client_protocol::schema::v1::{
+                InitializeResponse, PromptResponse, SetSessionConfigOptionResponse,
+                SetSessionModeResponse,
+            };
 
             let HandshakeScript {
                 stall_initialize,
@@ -36186,6 +36250,7 @@ mod tests {
                 close_after_cancel_answer,
                 hold_inserted,
                 permission_on_inserted,
+                steering_outcome,
                 load_error,
                 resume_error,
             } = script;
@@ -36210,6 +36275,7 @@ mod tests {
             let die_slot = Arc::new(std::sync::Mutex::new(Some(die_tx)));
             let task = tokio::spawn(async move {
                 let cancel_seen = prompt_seen.clone();
+                let steering_seen = prompt_seen.clone();
                 let _ = Agent
                     .builder()
                     .on_receive_request(
@@ -36309,56 +36375,90 @@ mod tests {
                             let prompt_seen = prompt_seen.clone();
                             let prompt_release = Arc::clone(&prompt_release);
                             async move |req: PromptRequest,
-                                    responder: Responder<PromptResponse>,
-                                    cx: ConnectionTo<Client>| {
-                            let text: String = req
-                                .prompt
-                                .iter()
-                                .filter_map(|block| match block {
-                                    ContentBlock::Text(text) => Some(text.text.as_str()),
-                                    _ => None,
-                                })
-                                .collect();
-                            let _ = prompt_seen.send(format!("session/prompt: {text}"));
-                            if permission_on_inserted && text.contains("INSERTED") {
-                                let seen = prompt_seen.clone();
-                                tokio::spawn(async move {
-                                    let result = cx
-                                        .send_request_to(Client, scripted_permission_request())
-                                        .block_task()
-                                        .await;
-                                    let _ = seen.send(format!("permission: {result:?}"));
-                                    let _ = responder
+                                        responder: Responder<PromptResponse>,
+                                        cx: ConnectionTo<Client>| {
+                                let text: String = req
+                                    .prompt
+                                    .iter()
+                                    .filter_map(|block| match block {
+                                        ContentBlock::Text(text) => Some(text.text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                let _ = prompt_seen.send(format!("session/prompt: {text}"));
+                                if permission_on_inserted && text.contains("INSERTED") {
+                                    let seen = prompt_seen.clone();
+                                    tokio::spawn(async move {
+                                        let result = cx
+                                            .send_request_to(Client, scripted_permission_request())
+                                            .block_task()
+                                            .await;
+                                        let _ = seen.send(format!("permission: {result:?}"));
+                                        let _ = responder
+                                            .respond(PromptResponse::new(StopReason::EndTurn));
+                                    });
+                                    return Ok(());
+                                }
+                                let hold = (hold_prompt_until_cancel && !text.contains("INSERTED"))
+                                    || (hold_inserted && text.contains("HOLD"));
+                                if !hold {
+                                    return responder
                                         .respond(PromptResponse::new(StopReason::EndTurn));
-                                });
-                                return Ok(());
-                            }
-                            let hold = (hold_prompt_until_cancel && !text.contains("INSERTED"))
-                                || (hold_inserted && text.contains("HOLD"));
-                            if !hold {
-                                return responder
-                                    .respond(PromptResponse::new(StopReason::EndTurn));
-                            }
-                            let seen = prompt_seen.clone();
-                            let prompt_release = Arc::clone(&prompt_release);
-                            let release_held = Arc::clone(&release_held);
-                            let die_slot = Arc::clone(&die_slot);
-                            tokio::spawn(async move {
-                                tokio::select! {
-                                    _ = prompt_release.notified() => {}
-                                    _ = release_held.notified() => {}
                                 }
-                                let _ = seen.send("prompt-answered".to_string());
-                                let _ = responder
-                                    .respond(PromptResponse::new(StopReason::Cancelled));
-                                if close_after_cancel_answer {
-                                    if let Some(tx) = die_slot.lock().expect("die").take() {
-                                        let _ = tx.send(());
+                                let seen = prompt_seen.clone();
+                                let prompt_release = Arc::clone(&prompt_release);
+                                let release_held = Arc::clone(&release_held);
+                                let die_slot = Arc::clone(&die_slot);
+                                tokio::spawn(async move {
+                                    tokio::select! {
+                                        _ = prompt_release.notified() => {}
+                                        _ = release_held.notified() => {}
                                     }
-                                }
-                            });
-                            Ok(())
-                        }
+                                    let _ = seen.send("prompt-answered".to_string());
+                                    let _ = responder
+                                        .respond(PromptResponse::new(StopReason::Cancelled));
+                                    if close_after_cancel_answer {
+                                        if let Some(tx) = die_slot.lock().expect("die").take() {
+                                            let _ = tx.send(());
+                                        }
+                                    }
+                                });
+                                Ok(())
+                            }
+                        },
+                        on_receive_request!(),
+                    )
+                    // ZCode 建会话后必须先确认模式，假代理也遵守该握手契约。
+                    .on_receive_request(
+                        async |_req: SetSessionModeRequest,
+                               responder: Responder<SetSessionModeResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(SetSessionModeResponse::new())
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async |req: SetSessionConfigOptionRequest,
+                               responder: Responder<SetSessionConfigOptionResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            let mode = req.value.as_value_id().expect("模式选择值");
+                            let options = serde_json::from_value(serde_json::json!([{
+                                "id": "mode", "name": "Mode", "category": "mode", "type": "select",
+                                "currentValue": mode,
+                                "options": [{"value": mode, "name": mode}]
+                            }])).expect("模式选项");
+                            responder.respond(SetSessionConfigOptionResponse::new(options))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: TestSteeringRequest,
+                                    responder: Responder<serde_json::Value>,
+                                    _cx: ConnectionTo<Client>| {
+                            let _ = steering_seen.send("_session/steering".into());
+                            responder.respond(serde_json::json!({
+                                "outcome": steering_outcome.unwrap_or("injected"),
+                            }))
                         },
                         on_receive_request!(),
                     )
@@ -36374,12 +36474,12 @@ mod tests {
                                         .block_task()
                                         .await;
                                     let _ = seen.send(format!("permission: {result:?}"));
-                                    release.notify_waiters();
+                                    release.notify_one();
                                 });
                                 return Ok(());
                             }
                             if hold_prompt_until_cancel && !hold_through_cancel {
-                                prompt_release_for_cancel.notify_waiters();
+                                prompt_release_for_cancel.notify_one();
                             }
                             Ok(())
                         },
@@ -36405,7 +36505,7 @@ mod tests {
         }
 
         fn release_held(&self) {
-            self.release_held.notify_waiters();
+            self.release_held.notify_one();
         }
 
         async fn next_request(&mut self) -> String {
@@ -36510,6 +36610,9 @@ mod tests {
                         cwd.join("claude-projects"),
                         Arc::new(StderrTail::new()),
                     ));
+                    if let Err(error) = &ended {
+                        eprintln!("测试连接 {agent_type:?} 退出: {error}");
+                    }
                     let _ = ended_tx.send(ended);
                 })
                 .expect("connection thread");
@@ -36618,6 +36721,184 @@ mod tests {
             .expect("connection alive");
         let _ = run.ended().await;
         agent.closed().await;
+    }
+
+    /// 所有智能体必须等待旧 prompt 真正结束，期间并发插入合并且通知不抢占。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_agent_insert_waits_for_old_prompt_and_merges_concurrent_messages() {
+        for agent_type in crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .chain(std::iter::once(AgentType::Custom("insert-test")))
+        {
+            eprintln!("验证插入智能体: {agent_type:?}");
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+            let mut agent = HandshakeAgent::start(
+                agent_end,
+                HandshakeScript {
+                    hold_prompt_until_cancel: true,
+                    hold_through_cancel: true,
+                    ..Default::default()
+                },
+            );
+            let run = HandshakeRun::start_as(client_end, agent_type).await;
+            assert_eq!(agent.next_request().await, "initialize");
+            assert_eq!(agent.next_request().await, "session/new");
+            agent.open_session.notify_one();
+            run.prompt("original").await;
+            assert_eq!(agent.next_request().await, "session/prompt: original");
+            let mut replies = Vec::new();
+            for text in ["INSERTED first", "INSERTED second"] {
+                let (reply, result) = oneshot::channel();
+                run.cmd_tx
+                    .send(ConnectionCommand::Steer {
+                        blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                        reply,
+                    })
+                    .await
+                    .unwrap();
+                replies.push(result);
+            }
+            assert_eq!(agent.next_request().await, "session/cancel");
+            let (reply, result) = oneshot::channel();
+            run.cmd_tx
+                .send(ConnectionCommand::Steer {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: "[system] Sub-agent task t1 finished".into(),
+                    }],
+                    reply,
+                })
+                .await
+                .unwrap();
+            assert!(matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), result)
+                    .await
+                    .expect("完成通知应立即延期，不得等待旧 prompt")
+                    .unwrap(),
+                Err(AcpError::FeedbackDeferred)
+            ));
+            assert!(
+                agent.seen.try_recv().is_err(),
+                "旧 prompt 未结束不得重叠发送: {agent_type:?}"
+            );
+            agent.release_held();
+            assert_eq!(agent.next_request().await, "prompt-answered");
+            let inserted = agent.next_request().await;
+            assert!(
+                inserted.contains("INSERTED first"),
+                "{agent_type:?}: {inserted}"
+            );
+            assert!(
+                inserted.contains("INSERTED second"),
+                "{agent_type:?}: {inserted}"
+            );
+            assert!(!inserted.contains("Sub-agent task"));
+            for result in replies {
+                assert!(matches!(
+                    result.await.unwrap().unwrap(),
+                    SteerOutcome::Injected
+                ));
+            }
+            run.cmd_tx
+                .send(ConnectionCommand::Disconnect)
+                .await
+                .unwrap();
+            assert!(run.ended().await.0.is_ok());
+            agent.closed().await;
+        }
+    }
+
+    /// 原生可靠时不取消；明确未消费时立即替换；已消费但失信时后续降级。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_insert_keeps_injection_and_falls_back_without_queueing() {
+        for outcome in ["injected", "promptRequired", "startedNewTurn"] {
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+            let mut agent = HandshakeAgent::start(
+                agent_end,
+                HandshakeScript {
+                    hold_prompt_until_cancel: true,
+                    steering_outcome: Some(outcome),
+                    ..Default::default()
+                },
+            );
+            let run = HandshakeRun::start_as(client_end, AgentType::Codex).await;
+            assert_eq!(agent.next_request().await, "initialize");
+            assert_eq!(agent.next_request().await, "session/new");
+            agent.open_session.notify_one();
+            run.prompt("original").await;
+            assert_eq!(agent.next_request().await, "session/prompt: original");
+            run.state.write().await.native_steering_available = true;
+            let (reply, result) = oneshot::channel();
+            run.cmd_tx
+                .send(ConnectionCommand::Steer {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: "INSERTED first".into(),
+                    }],
+                    reply,
+                })
+                .await
+                .unwrap();
+            assert_eq!(agent.next_request().await, "_session/steering");
+            if outcome == "promptRequired" {
+                assert_eq!(agent.next_request().await, "session/cancel");
+                assert_eq!(agent.next_request().await, "prompt-answered");
+                assert!(agent.next_request().await.contains("INSERTED first"));
+            }
+            let accepted = result.await.unwrap().unwrap();
+            if outcome == "startedNewTurn" {
+                assert!(matches!(accepted, SteerOutcome::StartedNewTurn));
+                assert!(!run.state.read().await.native_steering_available);
+                let (reply, result) = oneshot::channel();
+                run.cmd_tx
+                    .send(ConnectionCommand::Steer {
+                        blocks: vec![PromptInputBlock::Text {
+                            text: "INSERTED second".into(),
+                        }],
+                        reply,
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(agent.next_request().await, "session/cancel");
+                assert_eq!(agent.next_request().await, "prompt-answered");
+                let inserted = agent.next_request().await;
+                assert!(inserted.contains("INSERTED second"));
+                assert!(!inserted.contains("INSERTED first"), "已消费内容不得重发");
+                assert!(matches!(
+                    result.await.unwrap().unwrap(),
+                    SteerOutcome::Injected
+                ));
+            } else {
+                assert!(matches!(accepted, SteerOutcome::Injected));
+            }
+            run.cmd_tx
+                .send(ConnectionCommand::Disconnect)
+                .await
+                .unwrap();
+            assert!(run.ended().await.0.is_ok());
+            agent.closed().await;
+        }
+    }
+
+    /// CodeBuddy 的下一条消息必须越过取消保护窗口。
+    #[tokio::test]
+    async fn codebuddy_replace_waits_for_cancel_barrier() {
+        let (reply, _result) = oneshot::channel();
+        let pending = ReplacePending {
+            blocks: vec![PromptInputBlock::Text {
+                text: "next".into(),
+            }],
+            replies: vec![reply],
+            interrupted: Vec::new(),
+            teardown: ready_teardown(),
+            deadline: tokio::time::Instant::now(),
+            resume_ok: true,
+        };
+        let (_tx, mut rx) = mpsc::channel(4);
+        let started = tokio::time::Instant::now();
+        let ready =
+            wait_replace_ready(pending, &mut rx, &mut VecDeque::new(), AgentType::CodeBuddy).await;
+        assert!(matches!(ready, ReplaceReady::Send(_)));
+        assert!(started.elapsed() >= CODEBUDDY_CANCEL_BARRIER);
     }
 
     /// A permission the cancelled prompt emits after the first drain must be
@@ -47866,6 +48147,8 @@ mod tests {
             } else {
                 state
             };
+            // 模拟初始化已确认可靠原生能力的 Claude 连接。
+            state.write().await.native_steering_available = true;
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
@@ -50612,21 +50895,12 @@ mod tests {
                     custom_text("Building the page."),
                 ]])
                 .await;
-                lp.steer_outcomes.lock().unwrap().extend([
-                    serde_json::json!({"outcome": "promptRequired"}),
-                    serde_json::json!({"outcome": "startedNewTurn"}),
+                lp.state.write().await.native_steering_available = true;
+                lp.steer_outcomes.lock().unwrap().push_back(
                     serde_json::json!({"outcome": "bogus"}),
-                ]);
+                );
 
                 lp.open_turn("build the page", "Building the page.").await;
-                assert!(matches!(
-                    lp.steer("not taken in").await,
-                    Ok(SteerOutcome::PromptRequired)
-                ));
-                assert!(matches!(
-                    lp.steer("detached").await,
-                    Ok(SteerOutcome::StartedNewTurn)
-                ));
                 assert!(lp.steer("garbled").await.is_err());
                 assert!(matches!(
                     lp.steer("make it blue").await,

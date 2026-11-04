@@ -589,20 +589,13 @@ pub struct SessionState {
     /// Backend-only.
     pub antigravity_answered_interactions: BTreeSet<String>,
 
-    /// Whether live-feedback notes for THIS session go over the native ACP
-    /// `_session/steering` push channel instead of the `check_user_feedback`
-    /// pull tool. Synthesized ONCE at initialize from three gates (extension
-    /// advertised + registry policy + `agent_info.version` runtime proof — see
-    /// `connection.rs::init_advertises_steering`) so every consumer reads one
-    /// authoritative bool and the frontend never re-derives it from agent
-    /// type. Downgraded to `false` for the rest of the session if a steer ever
-    /// comes back `startedNewTurn` (adapter ignored the `promptRequired`
-    /// opt-in), rerouting subsequent notes to the MCP pull path.
+    /// 本会话是否支持可靠的原生 `_session/steering` 注入。
+    /// 初始化时确认扩展声明、注册表策略和实际适配器版本。
+    /// 收到 `startedNewTurn` 后锁存为 false，后续用户消息改用取消后同会话插入。
     pub native_steering_available: bool,
 
-    /// OpenCode insert: same user entry as native steering, but the connection
-    /// replaces the running prompt instead of calling `_session/steering`.
-    /// Not a native-capability claim. Set once at initialize.
+    /// 所有 ACP 智能体的取消后同会话插入能力；原生注入可靠时仍优先使用。
+    /// 不代表原生能力，初始化时设置。
     pub steer_replaces_turn: bool,
 
     /// In-flight replace inserts. Completion notices must not prompt or steer
@@ -2680,9 +2673,8 @@ pub struct LiveSessionSnapshot {
     /// like `feedback_tool_available` so the frontend can rely on it.
     #[serde(default)]
     pub native_steering_available: bool,
-    /// OpenCode uses the same insert entry as native steering, but does not
-    /// speak `_session/steering`. Absent on older payloads → false. Omitted
-    /// when false so other agents' snapshots stay unchanged.
+    /// 支持取消后在同一会话插入，供所有 ACP 智能体复用插入入口。
+    /// 不代表原生能力；旧快照缺省为 false，false 时省略字段。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub steer_replaces_turn: bool,
     pub modes: Option<SessionModeStateInfo>,

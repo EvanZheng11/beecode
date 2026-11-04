@@ -1,7 +1,5 @@
-//! OpenCode has no `_session/steering`. The Codex insert entry still submits
-//! here, but the connection cancels the running prompt and, only after that
-//! prompt has actually ended (and this cancel's child teardown has finished),
-//! sends the note as the next `session/prompt` on the same session.
+//! 无可靠原生注入时，取消当前 prompt，等待它真正结束及本次子任务清理后，
+//! 在同一会话发送插入消息。适用于所有内置和自定义 ACP 智能体。
 //!
 //! The suffix tells the new turn which tasks that cancel interrupted. It is
 //! not a resume reason and must not carry the user's new instructions —

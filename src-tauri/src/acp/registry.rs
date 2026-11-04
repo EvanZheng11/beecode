@@ -544,17 +544,14 @@ pub fn steering_prompt_required_min_version(agent_type: AgentType) -> Option<&'s
     }
 }
 
-/// OpenCode has no `_session/steering` (do not report it as native). The same
-/// insert entry cancels the running prompt and, once that prompt has actually
-/// ended, sends the note as the next `session/prompt` on the same session.
-pub fn steering_replaces_turn(agent_type: AgentType) -> bool {
-    matches!(agent_type, AgentType::OpenCode)
+/// 所有 ACP 智能体均支持取消后在同一会话插入；可靠的原生注入仍优先。
+/// 这是后备能力，实际通道由连接当前的原生能力和权限卡状态决定。
+pub fn steering_replaces_turn(_agent_type: AgentType) -> bool {
+    true
 }
 
-/// Whether a live-feedback note that would be steered natively goes to the
-/// next-turn queue instead while a permission card is open on the session
-/// (`ConnectionManager::submit_feedback_native` answers `NoActiveTurn`, the
-/// reroute the composer already handles).
+/// Codex 在权限卡打开时会丢弃原生注入内容，因此该场景应取消旧卡后同会话插入。
+/// 未开启替换能力的旧连接仍返回 `NoActiveTurn`，交由调用者保留草稿。
 ///
 /// codex holds a steer injected during an approval as the turn's pending
 /// input until the model's next step. Its command and file-change approvals
@@ -7581,7 +7578,8 @@ mod tests {
         // introduced the opt-in — every 0.64.x settles the prompt early (#934).
         // codex-acp's active path always kept the prompt in flight, and 2.4.0
         // (#593) is the first release with the opt-in. Everyone else stays
-        // None and rides the MCP pull channel. Flipping an agent on here
+        // None 表示没有可靠原生能力，用户插入使用取消后替换。
+        // Flipping an agent on here
         // without the runtime `agent_info.version` proof is not enough by
         // design.
         assert_eq!(
@@ -7601,10 +7599,11 @@ mod tests {
             AgentType::Custom("acme"),
         ] {
             assert_eq!(steering_prompt_required_min_version(agent), None);
-            assert_eq!(steering_replaces_turn(agent), agent == AgentType::OpenCode);
+            assert!(steering_replaces_turn(agent));
         }
-        assert!(!steering_replaces_turn(AgentType::Codex));
-        assert!(!steering_replaces_turn(AgentType::ClaudeCode));
+        for &agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            assert!(steering_replaces_turn(agent));
+        }
     }
 
     #[test]

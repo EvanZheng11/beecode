@@ -3435,19 +3435,10 @@ impl ConnectionManager {
     /// them. (There is deliberately no per-turn COUNT cap: the set is cleared
     /// every turn, so its size scales with human typing, not unboundedly.)
     ///
-    /// Rejected with [`AcpError::NoActiveTurn`] unless a turn is in flight —
-    /// feedback is mid-turn steering, pulled by the agent via the
-    /// `check_user_feedback` MCP tool; with no active turn there is nothing to
-    /// steer and the note would strand (the frontend falls back to an ordinary
-    /// prompt). The native channel also answers `NoActiveTurn` while a
-    /// permission card is open on an agent that would drop the note
-    /// (`registry::steering_waits_out_open_permission`). The append rides
-    /// `emit_with_state` so `SessionState.feedback`, the ring buffer, and
-    /// every attached client stay in lockstep.
-    /// `blocks`, when present, is the full prompt-block draft (text plus
-    /// image attachments) to deliver on the native wire instead of the bare
-    /// `text` — `text` then serves as the recorded note. Only the native
-    /// channel can carry blocks; see the pull-path gate below.
+    /// 无运行轮次时返回 [`AcpError::NoActiveTurn`]，由前端转为普通 prompt。
+    /// 用户消息优先走可靠原生注入，否则取消后在同会话插入；完成通知保留
+    /// 非打断式原生或 `check_user_feedback` 通道。
+    /// `blocks` 是含附件的完整草稿，插入通道原样投递，`text` 用于记录。
     pub async fn submit_feedback(
         &self,
         conn_id: &str,
@@ -3476,14 +3467,7 @@ impl ConnectionManager {
                 conn.emitter.clone(),
             )
         };
-        // Channel-aware eligibility: a note is deliverable natively (the
-        // `_session/steering` push, synthesized at initialize) or through the
-        // `check_user_feedback` pull tool. Reject only when NEITHER channel
-        // exists — e.g. a session launched before the feature was enabled (no
-        // tool) on an adapter without proven native steering.
-        // `native_steering_available` is re-read on every call so a
-        // `startedNewTurn` downgrade mid-session silently reroutes later
-        // notes to the pull path.
+        // 每次读取当前能力；原生失信后用户消息转入替换，完成通知仍保持非打断。
         let (native, tool_available, replaces, notice_hold, prompt_barrier) = {
             let s = state.read().await;
             (
@@ -3507,25 +3491,18 @@ impl ConnectionManager {
             return Err(AcpError::FeedbackDisabled);
         }
 
-        if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
-        }
+        // 用户插入统一持有通知门禁；连接层保留可靠原生通道，降级后替换轮次。
         if replaces && !completion_notice {
             return Self::submit_feedback_replace(conn_id, state, cmd_tx, emitter, text, blocks)
                 .await;
         }
+        if native {
+            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
+                .await;
+        }
 
-        // The pull tool delivers plain text (`PendingFeedback`), so a draft
-        // carrying attachment blocks cannot ride it without silently dropping
-        // them. Two ways to get here: an ordinary pull session (the composer
-        // offers its mid-turn send on every session with a delivery channel,
-        // so a codex/grok/gemini draft with an image lands right here), or a
-        // native session that downgraded between the frontend's channel read
-        // and this call (startedNewTurn latch). `NoActiveTurn` is the
-        // rejection the caller already maps to its queue fallback, which
-        // re-routes the WHOLE draft — attachments included — as the next
-        // turn's prompt.
+        // 完成通知及未初始化替换能力的旧连接仍可走文本拉取通道。
+        // 该通道不能携带附件，拒绝时保留完整草稿供调用者转为普通 prompt。
         if blocks.is_some() {
             return Err(AcpError::NoActiveTurn);
         }
@@ -3552,10 +3529,8 @@ impl ConnectionManager {
         Ok(item)
     }
 
-    /// OpenCode insert. Same `Steer` command and delivered-note result as
-    /// native steering; the connection loop cancels the running prompt and
-    /// sends this note only after that prompt ends. `notice_hold` stays up
-    /// until that reply so a completion notice cannot take the next prompt.
+    /// 用户插入在原生投递或取消后替换期间持有通知门禁，避免子任务通知抢占。
+    /// 连接层仅在旧 prompt 真正结束后才发送替换 prompt。
     async fn submit_feedback_replace(
         conn_id: &str,
         state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
@@ -3633,13 +3608,10 @@ impl ConnectionManager {
             if !s.turn_in_flight {
                 return Err(AcpError::NoActiveTurn);
             }
-            // An agent that drops an injected note when an open card's answer
-            // aborts the turn (codex's `cancel`) takes it as the next prompt
-            // instead — the same reroute as an ended turn. A card that opens
-            // after this read is not covered: the request may already be on
-            // the wire.
+            // 有替换能力的用户插入交给连接层取消旧卡；其余场景保持拒绝语义。
             if s.pending_permission.is_some()
                 && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
+                && (!s.steer_replaces_turn || crate::acp::turn_replace::is_completion_notice(&text))
             {
                 return Err(AcpError::NoActiveTurn);
             }
@@ -3737,9 +3709,9 @@ impl ConnectionManager {
                     })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
-                let steer = reply_rx.await.map_err(|_| {
-                    AcpError::protocol("Steer reply channel closed".to_string())
-                })??;
+                let steer = reply_rx
+                    .await
+                    .map_err(|_| AcpError::protocol("Steer reply channel closed".to_string()))??;
                 match steer {
                     // Honored opt-in: the content was NOT consumed and is
                     // still host-owned. Surface the frontend's existing
@@ -3747,12 +3719,7 @@ impl ConnectionManager {
                     SteerOutcome::PromptRequired => return Err(AcpError::NoActiveTurn),
                     SteerOutcome::Injected => {}
                     SteerOutcome::StartedNewTurn => {
-                        // The adapter ignored the opt-in and detached a turn
-                        // (stale binary lying about its version?). The content
-                        // IS consumed — record it delivered, NEVER resend —
-                        // but this adapter can't be trusted with the idle race
-                        // again: downgrade to the MCP pull channel for the
-                        // rest of the session.
+                        // 内容已消费，绝不重发；后续用户插入改走取消后替换。
                         tracing::warn!(
                             "[ACP][feedback] _session/steering returned startedNewTurn \
                              (conn={conn_id_for_task}); downgrading native steering for \
@@ -10231,6 +10198,69 @@ mod tests {
         );
     }
 
+    /// 所有内置和自定义智能体无原生能力时仍立即发出插入命令，附件保持完整。
+    #[tokio::test]
+    async fn every_agent_insert_preserves_blocks_without_a_feedback_tool() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .chain(std::iter::once(AgentType::Custom("insert-test")))
+        {
+            let mgr = ConnectionManager::new();
+            let rx = mgr
+                .insert_test_connection_live("c1", agent, None, EventEmitter::Noop)
+                .await;
+            {
+                let state = mgr.get_state("c1").await.unwrap();
+                let mut s = state.write().await;
+                s.steer_replaces_turn = crate::acp::registry::steering_replaces_turn(agent);
+                s.turn_in_flight = true;
+            }
+            let blocks = vec![
+                PromptInputBlock::Text {
+                    text: "inspect".into(),
+                },
+                PromptInputBlock::Image {
+                    data: "aGVsbG8=".into(),
+                    mime_type: "image/png".into(),
+                    uri: None,
+                },
+            ];
+            let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+            let item = mgr
+                .submit_feedback("c1", "inspect".into(), Some(blocks.clone()))
+                .await
+                .unwrap();
+            assert_eq!(fake_loop.await.unwrap(), blocks, "{agent:?}");
+            assert_eq!(item.status, FeedbackStatus::Delivered, "{agent:?}");
+            assert!(mgr.read_pending_feedback("c1").await.is_empty());
+        }
+    }
+
+    /// 权限卡不能将用户插入退回等待队列；连接层负责取消旧卡后替换。
+    #[tokio::test]
+    async fn codex_insert_under_permission_uses_replace_command() {
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .steer_replaces_turn = true;
+        open_permission_card(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+        let item = mgr
+            .submit_feedback("c1", "redirect".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        fake_loop.await.unwrap();
+    }
+
     #[tokio::test]
     async fn send_prompt_refuses_a_completion_notice_while_an_insert_holds() {
         let mgr = ConnectionManager::new();
@@ -10795,34 +10825,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_submit_started_new_turn_records_delivered_and_downgrades_to_pull() {
+    async fn native_submit_started_new_turn_records_delivered_and_downgrades_to_replace() {
         let mgr = ConnectionManager::new();
         let rx = mgr
             .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         mark_native_steering_ready(&mgr, "c1").await;
-        set_feedback_tool_available(&mgr, "c1").await;
-        let fake_loop = answer_steer(rx, Ok(SteerOutcome::StartedNewTurn));
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .steer_replaces_turn = true;
+        let fake_loop = answer_steer_n(rx, SteerOutcome::StartedNewTurn, 2);
 
-        // The adapter ignored the opt-in: content consumed → recorded
-        // Delivered (never resent), and the session downgrades to pull.
-        let item = mgr.submit_feedback("c1", "note one".into(), None).await.unwrap();
+        // 已消费的消息不重发；无反馈工具时，后续插入仍走 Steer 而非 Pending。
+        let item = mgr
+            .submit_feedback("c1", "note one".into(), None)
+            .await
+            .unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
-        let _ = fake_loop.await;
         let state = mgr.get_state("c1").await.unwrap();
         assert!(
             !state.read().await.native_steering_available,
             "startedNewTurn must downgrade native steering for the session"
         );
 
-        // The NEXT note rides the pull path: lands Pending, no Steer command
-        // (the loop receiver was consumed above — a native attempt would fail
-        // on the dead channel, so an Ok(Pending) proves the pull branch ran).
-        let second = mgr.submit_feedback("c1", "note two".into(), None).await.unwrap();
-        assert_eq!(second.status, FeedbackStatus::Pending);
-        let pending = mgr.read_pending_feedback("c1").await;
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].text, "note two");
+        let second = mgr
+            .submit_feedback("c1", "note two".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(second.status, FeedbackStatus::Delivered);
+        assert!(mgr.read_pending_feedback("c1").await.is_empty());
+        fake_loop.await.unwrap();
     }
 
     #[tokio::test]
