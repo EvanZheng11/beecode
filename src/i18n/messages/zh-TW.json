@@ -36,6 +36,7 @@
     "authenticating": "驗證中...",
     "invalidCredentials": "憑據無效，請重試。",
     "saveCredentials": "儲存憑據以供後續操作使用",
+    "saveFailed": "憑據無法儲存，下次操作時可能仍需重新驗證。",
     "githubTitle": "GitHub 身份驗證",
     "githubDescription": "輸入個人存取權杖以連線 GitHub。權杖驗證成功後將自動儲存至帳號列表。",
     "githubToken": "個人存取權杖",

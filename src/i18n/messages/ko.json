@@ -36,6 +36,7 @@
     "authenticating": "인증 중...",
     "invalidCredentials": "자격 증명이 유효하지 않습니다. 다시 시도하세요.",
     "saveCredentials": "향후 작업을 위해 자격 증명 저장",
+    "saveFailed": "자격 증명을 저장하지 못했습니다. 다음 작업 시 다시 인증해야 할 수 있습니다.",
     "githubTitle": "GitHub 인증",
     "githubDescription": "개인 액세스 토큰을 입력하여 GitHub에 연결합니다. 토큰 확인 후 계정에 자동으로 저장됩니다.",
     "githubToken": "개인 액세스 토큰",

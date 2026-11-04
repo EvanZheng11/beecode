@@ -36,6 +36,7 @@
     "authenticating": "認証中...",
     "invalidCredentials": "認証情報が無効です。再試行してください。",
     "saveCredentials": "今後の操作のために認証情報を保存する",
+    "saveFailed": "認証情報を保存できませんでした。次回の操作時に再認証が必要になる場合があります。",
     "githubTitle": "GitHub 認証",
     "githubDescription": "個人アクセストークンを入力して GitHub に接続します。トークン検証後、自動的にアカウントに保存されます。",
     "githubToken": "個人アクセストークン",

@@ -36,6 +36,7 @@
     "authenticating": "认证中...",
     "invalidCredentials": "凭据无效，请重试。",
     "saveCredentials": "保存凭据以供后续操作使用",
+    "saveFailed": "凭据未能保存，下次操作时可能仍需重新认证。",
     "githubTitle": "GitHub 身份验证",
     "githubDescription": "输入个人访问令牌以连接 GitHub。令牌验证成功后将自动保存到账号列表。",
     "githubToken": "个人访问令牌",

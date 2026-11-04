@@ -19,6 +19,7 @@ import {
   Loader2,
 } from "lucide-react"
 import { openUrl } from "@/lib/platform"
+import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { Button } from "@/components/ui/button"
@@ -100,9 +101,14 @@ function isAuthError(error: unknown): boolean {
 
 function extractHost(url: string): string | null {
   const trimmed = url.trim()
-  // https://github.com/...
-  const httpsMatch = trimmed.match(/^https?:\/\/(?:[^@]+@)?([^/:]+)/)
-  if (httpsMatch) return httpsMatch[1].toLowerCase()
+  // 保留非默认端口，避免保存到另一台同名服务器的账号下。
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      return new URL(trimmed).host.toLowerCase()
+    } catch {
+      return null
+    }
+  }
   // git@github.com:...
   const sshMatch = trimmed.match(/@([^/:]+)[:/]/)
   if (sshMatch) return sshMatch[1].toLowerCase()
@@ -142,32 +148,29 @@ async function saveGenericAccount(
   host: string | null,
   creds: GitCredentials
 ): Promise<void> {
-  const serverUrl = host ? `https://${host}` : "https://unknown"
-  try {
-    const existing = await getGitHubAccounts()
-    const isDuplicate = existing.accounts.some(
-      (a) => a.username === creds.username && extractHost(a.server_url) === host
-    )
-    if (!isDuplicate) {
-      const newId = randomUUID()
-      await saveAccountToken(newId, creds.password)
-      await updateGitHubAccounts({
-        accounts: [
-          ...existing.accounts,
-          {
-            id: newId,
-            server_url: serverUrl,
-            username: creds.username,
-            scopes: [],
-            avatar_url: null,
-            is_default: existing.accounts.length === 0,
-            created_at: new Date().toISOString(),
-          },
-        ],
-      })
-    }
-  } catch {
-    // Non-critical — just skip saving
+  if (!host) throw new Error("无法识别远程服务器，凭据未保存")
+  const existing = await getGitHubAccounts()
+  const account = existing.accounts.find(
+    (a) => a.username === creds.username && extractHost(a.server_url) === host
+  )
+  // 已有账号也必须刷新令牌，否则下次操作仍会读到旧凭据。
+  const accountId = account?.id ?? randomUUID()
+  await saveAccountToken(accountId, creds.password)
+  if (!account) {
+    await updateGitHubAccounts({
+      accounts: [
+        ...existing.accounts,
+        {
+          id: accountId,
+          server_url: `https://${host}`,
+          username: creds.username,
+          scopes: [],
+          avatar_url: null,
+          is_default: existing.accounts.length === 0,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    })
   }
 }
 
@@ -279,14 +282,16 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
       // Save as GitHub account
       try {
         const existing = await getGitHubAccounts()
-        const isDuplicate = existing.accounts.some(
+        const account = existing.accounts.find(
           (a) =>
             a.username === result.username &&
             extractHost(a.server_url) === remoteHost
         )
-        if (!isDuplicate) {
+        const accountId = account?.id ?? randomUUID()
+        await saveAccountToken(accountId, trimmedToken)
+        if (!account) {
           const newAccount = {
-            id: randomUUID(),
+            id: accountId,
             server_url: serverUrl,
             username: result.username ?? "unknown",
             scopes: result.scopes,
@@ -294,13 +299,13 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
             is_default: existing.accounts.length === 0,
             created_at: new Date().toISOString(),
           }
-          await saveAccountToken(newAccount.id, trimmedToken)
           await updateGitHubAccounts({
             accounts: [...existing.accounts, newAccount],
           })
         }
       } catch {
-        // Saving account failed — not critical, continue with auth
+        // 不展示底层错误，避免凭据存储实现把敏感数据带入提示。
+        toast.warning(t("saveFailed"))
       }
 
       const creds: GitCredentials = {
@@ -354,7 +359,12 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
         // Helper: save credentials after successful operation
         const maybeSave = async (c: GitCredentials) => {
           if (modeRef.current === "generic" && saveCredentialsRef.current) {
-            await saveGenericAccount(remoteHostRef.current, c)
+            try {
+              await saveGenericAccount(remoteHostRef.current, c)
+            } catch {
+              // Git 操作已经成功，保存失败不能触发再次执行。
+              toast.warning(t("saveFailed"))
+            }
           }
           // GitHub mode saves during handleGitHubSubmit, no extra work needed
         }

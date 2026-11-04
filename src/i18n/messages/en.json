@@ -36,6 +36,7 @@
     "authenticating": "Authenticating...",
     "invalidCredentials": "Invalid credentials. Please try again.",
     "saveCredentials": "Save credentials for future operations",
+    "saveFailed": "Credentials could not be saved. You may be asked to authenticate again next time.",
     "githubTitle": "GitHub Authentication",
     "githubDescription": "Enter a personal access token to authenticate with GitHub. The token will be validated and saved to your accounts.",
     "githubToken": "Personal Access Token",

@@ -36,6 +36,7 @@
     "authenticating": "Authentification...",
     "invalidCredentials": "Identifiants invalides. Veuillez réessayer.",
     "saveCredentials": "Enregistrer les identifiants pour les opérations futures",
+    "saveFailed": "Les identifiants n’ont pas pu être enregistrés. Une nouvelle authentification pourra être nécessaire lors de la prochaine opération.",
     "githubTitle": "Authentification GitHub",
     "githubDescription": "Entrez un jeton d'accès personnel pour vous connecter à GitHub. Le jeton sera validé et enregistré automatiquement.",
     "githubToken": "Jeton d'accès personnel",

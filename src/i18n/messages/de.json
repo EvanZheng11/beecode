@@ -36,6 +36,7 @@
     "authenticating": "Authentifizierung...",
     "invalidCredentials": "Ungültige Anmeldedaten. Bitte versuchen Sie es erneut.",
     "saveCredentials": "Anmeldedaten für zukünftige Vorgänge speichern",
+    "saveFailed": "Die Anmeldedaten konnten nicht gespeichert werden. Beim nächsten Vorgang ist möglicherweise eine erneute Anmeldung erforderlich.",
     "githubTitle": "GitHub-Authentifizierung",
     "githubDescription": "Geben Sie ein persönliches Zugriffstoken ein, um sich mit GitHub zu verbinden. Das Token wird validiert und automatisch gespeichert.",
     "githubToken": "Persönliches Zugriffstoken",
