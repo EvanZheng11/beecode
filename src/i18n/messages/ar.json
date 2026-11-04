@@ -3481,6 +3481,7 @@
         "attachFiles": "إرفاق ملفات",
         "addActions": "إضافة",
         "quickMessages": "الرسائل السريعة",
+        "showQuickMessages": "إظهار الرسائل السريعة",
         "quickMessagesEmpty": "لا توجد رسائل سريعة بعد",
         "quickMessagesLoading": "جارٍ التحميل...",
         "pasteAsPlainText": "لصق كنص عادي",

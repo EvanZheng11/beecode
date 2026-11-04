@@ -3483,6 +3483,7 @@
         "attachServerFile": "Pick server file",
         "addActions": "Add",
         "quickMessages": "Quick messages",
+        "showQuickMessages": "Show quick messages",
         "quickMessagesEmpty": "No quick messages yet",
         "quickMessagesLoading": "Loading...",
         "pasteAsPlainText": "Paste as plain text",

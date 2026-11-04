@@ -3481,6 +3481,7 @@
         "attachFiles": "파일 첨부",
         "addActions": "추가",
         "quickMessages": "빠른 메시지",
+        "showQuickMessages": "빠른 메시지 표시",
         "quickMessagesEmpty": "빠른 메시지가 없습니다",
         "quickMessagesLoading": "불러오는 중...",
         "pasteAsPlainText": "일반 텍스트로 붙여넣기",

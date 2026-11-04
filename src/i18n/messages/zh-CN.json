@@ -3483,6 +3483,7 @@
         "attachServerFile": "附加服务端文件",
         "addActions": "添加",
         "quickMessages": "快捷消息",
+        "showQuickMessages": "显示快捷消息",
         "quickMessagesEmpty": "暂无快捷消息",
         "quickMessagesLoading": "加载中...",
         "pasteAsPlainText": "粘贴为纯文本",

@@ -3481,6 +3481,7 @@
         "attachFiles": "ファイルを添付",
         "addActions": "追加",
         "quickMessages": "クイックメッセージ",
+        "showQuickMessages": "クイックメッセージを表示",
         "quickMessagesEmpty": "クイックメッセージはありません",
         "quickMessagesLoading": "読み込み中...",
         "pasteAsPlainText": "プレーンテキストとして貼り付け",

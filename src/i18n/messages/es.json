@@ -3481,6 +3481,7 @@
         "attachFiles": "Adjuntar archivos",
         "addActions": "Añadir",
         "quickMessages": "Mensajes rápidos",
+        "showQuickMessages": "Mostrar mensajes rápidos",
         "quickMessagesEmpty": "Aún no hay mensajes rápidos",
         "quickMessagesLoading": "Cargando...",
         "pasteAsPlainText": "Pegar como texto sin formato",
