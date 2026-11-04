@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   Fragment,
   useCallback,
@@ -31,7 +32,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -842,10 +842,10 @@ export function ConversationManageDialog({
           <div className="flex flex-col gap-2">
             <div className="relative">
               <Search
-                className="pointer-events-none absolute start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                className="pointer-events-none absolute z-10 start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
                 aria-hidden="true"
               />
-              <Input
+              <SearchInput
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("searchPlaceholder")}

@@ -1,11 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { Command as CommandPrimitive } from "cmdk"
+import { Command as CommandPrimitive, useCommandState } from "cmdk"
 import { Search } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { VisuallyHidden } from "radix-ui"
+import {
+  SearchClearButton,
+  clearSearchInput,
+} from "@/components/ui/search-clear-button"
 
 function Command({
   className,
@@ -46,7 +50,7 @@ function CommandDialog({
         </VisuallyHidden.Root>
         <Command
           shouldFilter={shouldFilter}
-          className="[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3"
+          className="[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]]:pe-10 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3"
         >
           {children}
         </Command>
@@ -57,19 +61,30 @@ function CommandDialog({
 
 function CommandInput({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
+  const search = useCommandState((state) => state.search)
+  const inputRef = React.useRef<HTMLInputElement>(null)
   return (
     <div className="flex items-center border-b px-3" cmdk-input-wrapper="">
       <Search className="me-2 h-4 w-4 shrink-0 opacity-50" />
       <CommandPrimitive.Input
+        ref={(node) => {
+          inputRef.current = node
+          if (typeof ref === "function") ref(node)
+          else if (ref) ref.current = node
+        }}
         data-slot="command-input"
         className={cn(
-          "placeholder:text-muted-foreground flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50",
+          "placeholder:text-muted-foreground flex h-10 min-w-0 w-full rounded-md bg-transparent py-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         {...props}
       />
+      {(props.value ?? search) && !props.disabled && !props.readOnly ? (
+        <SearchClearButton onClear={() => clearSearchInput(inputRef.current)} />
+      ) : null}
     </div>
   )
 }

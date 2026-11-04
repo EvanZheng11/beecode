@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   useCallback,
   useEffect,
@@ -25,7 +26,6 @@ import { AgentIcon } from "@/components/agent-icon"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import {
   DropdownMenu,
@@ -528,7 +528,8 @@ export function SkillAgentMatrix({
         {/* Toolbar: search + everything menu. */}
         <div className="flex items-center gap-2 pb-3">
           {searchable && (
-            <Input
+            <SearchInput
+              wrapperClassName="max-w-xs"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={searchPlaceholder ?? t("searchPlaceholder")}

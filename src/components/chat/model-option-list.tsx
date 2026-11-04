@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { Check, Search } from "lucide-react"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
@@ -251,6 +252,7 @@ export function ModelOptionList({
           onKeyDown={handleKeyDown}
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
+        {query && <SearchClearButton />}
       </div>
 
       {optionCount === 0 ? (

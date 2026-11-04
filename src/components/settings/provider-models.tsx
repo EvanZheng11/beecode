@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { SearchInput } from "@/components/ui/search-input"
 import {
   Popover,
   PopoverAnchor,
@@ -512,8 +513,8 @@ export function ModelPickerDialog({
         <div className="space-y-2">
           <div className="flex items-center gap-1">
             <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
+              <Search className="pointer-events-none absolute z-10 start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <SearchInput
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder={t("filter")}

@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
@@ -277,6 +278,7 @@ export function ComposerAddMenu({
                 autoComplete="off"
                 spellCheck={false}
               />
+              {slashSearch && <SearchClearButton />}
             </div>
             <div className="flex-1 overflow-y-auto p-1">
               {filteredSlashCommands.length === 0 ? (

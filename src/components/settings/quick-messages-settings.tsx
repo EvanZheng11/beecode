@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   useCallback,
   useEffect,
@@ -363,7 +364,7 @@ export function QuickMessagesSettings() {
             <div className="min-h-0 h-full min-w-0 rounded-lg border bg-card flex flex-col overflow-hidden lg:rounded-r-none">
               <div className="border-b p-3 space-y-2.5">
                 <div className="flex items-center gap-2">
-                  <Input
+                  <SearchInput
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder={t("searchPlaceholder")}

@@ -15,6 +15,8 @@ import {
   type Ref,
 } from "react"
 
+vi.mock("next-intl", () => ({ useTranslations: () => () => "Clear search" }))
+
 // The list sizes its scroll window in rem, so it reads the live zoom level —
 // which throws outside an AppearanceProvider. Pin it at 100% (1rem = 16px), the
 // baseline every height assertion here is written against. Spread the real

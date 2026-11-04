@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   BookOpenText,
@@ -873,7 +874,7 @@ export function SkillsSettings() {
                   {/* Search only applies to the global list — folder scope
                       already narrows the set via the picker above. */}
                   {skillsScope === "global" && (
-                    <Input
+                    <SearchInput
                       value={searchQuery}
                       onChange={(event) => {
                         setSearchQuery(event.target.value)

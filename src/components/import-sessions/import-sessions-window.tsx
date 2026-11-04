@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -16,7 +17,6 @@ import {
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -562,7 +562,8 @@ export function ImportSessionsWindow({
     <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-3 py-2">
-        <Input
+        <SearchInput
+          wrapperClassName="w-56 shrink-0"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t("searchPlaceholder")}

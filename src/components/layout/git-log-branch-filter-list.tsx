@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import {
   Check,
@@ -551,6 +552,7 @@ export function GitLogBranchFilterList({
           onKeyDown={handleKeyDown}
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
+        {query && <SearchClearButton />}
       </div>
 
       {rows.length === 0 ? (

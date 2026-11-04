@@ -199,7 +199,12 @@ export function MultiSelectFilter({
           {query && (
             <button
               type="button"
-              onClick={() => setQuery("")}
+              onClick={(event) => {
+                setQuery("")
+                event.currentTarget.parentElement
+                  ?.querySelector("input")
+                  ?.focus()
+              }}
               aria-label={t("clearFilter")}
               className="shrink-0 rounded p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >

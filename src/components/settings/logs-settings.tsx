@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   Fragment,
   memo,
@@ -852,7 +853,8 @@ export function LogsSettings() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Input
+            <SearchInput
+              wrapperClassName="max-w-xs"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t("searchPlaceholder")}

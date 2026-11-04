@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { SearchInput } from "@/components/ui/search-input"
 import {
   Select,
   SelectContent,
@@ -258,7 +259,7 @@ export function OpenCodeConnectDialog({
               <label className="text-2xs text-muted-foreground">
                 {t("openCode.connect.pick")}
               </label>
-              <Input
+              <SearchInput
                 value={providerQuery}
                 onChange={(e) => setProviderQuery(e.target.value)}
                 placeholder={

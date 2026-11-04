@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
@@ -21,7 +22,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useProxiedBackgroundThumb } from "@/hooks/use-proxied-background-thumb"
 import { toErrorMessage } from "@/lib/app-error"
@@ -283,7 +283,8 @@ export function WorkspaceBackgroundMarketDialog({
 
         {/* 搜索 + 分类 */}
         <div className="flex flex-wrap items-center gap-2">
-          <Input
+          <SearchInput
+            wrapperClassName="w-56"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder={t("searchPlaceholder")}

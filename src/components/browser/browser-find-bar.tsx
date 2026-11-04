@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ChevronDown, ChevronUp, X } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -130,6 +131,7 @@ export function BrowserFindBar({
             : "border-transparent focus:border-ring/50 focus:ring-2 focus:ring-ring/20"
         )}
       />
+      {query && <SearchClearButton />}
       {missing ? (
         <span className="shrink-0 px-1 text-xs text-muted-foreground">
           {t("noMatches")}

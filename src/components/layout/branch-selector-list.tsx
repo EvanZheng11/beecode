@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import {
   Fragment,
   useCallback,
@@ -763,6 +764,7 @@ export function BranchSelectorList({
             onKeyDown={handleKeyDown}
             className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
+          {query && <SearchClearButton />}
         </div>
 
         {showSpinner ? (

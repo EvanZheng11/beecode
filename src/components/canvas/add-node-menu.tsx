@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useMemo, useState } from "react"
 import { useReactFlow } from "@xyflow/react"
 import {
@@ -236,13 +237,16 @@ export function AddNodeMenu({
             {t("addConversationCard")}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-64">
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("searchConversations")}
-              className="mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onKeyDown={(e) => e.stopPropagation()}
-            />
+            <div className="flex items-center">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("searchConversations")}
+                className="mx-1 mb-1 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+              {query && <SearchClearButton />}
+            </div>
             <div className="max-h-64 overflow-y-auto">
               {recentConversations.length === 0 ? (
                 <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -451,22 +455,25 @@ function AddFileSubmenu({ onPick }: { onPick: (absPath: string) => void }) {
         {t("addFileCard")}
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-72">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={
-            searchFolder
-              ? t("searchFilesIn", {
-                  folder: formatFolderLabelWithAlias(searchFolder),
-                })
-              : t("searchFiles")
-          }
-          disabled={!searchFolder}
-          className="mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          // The menu treats printable keys as type-ahead navigation; the input
-          // owns them while it has focus.
-          onKeyDown={(e) => e.stopPropagation()}
-        />
+        <div className="flex items-center">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={
+              searchFolder
+                ? t("searchFilesIn", {
+                    folder: formatFolderLabelWithAlias(searchFolder),
+                  })
+                : t("searchFiles")
+            }
+            disabled={!searchFolder}
+            className="mx-1 mb-1 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            // The menu treats printable keys as type-ahead navigation; the input
+            // owns them while it has focus.
+            onKeyDown={(e) => e.stopPropagation()}
+          />
+          {query && searchFolder && <SearchClearButton />}
+        </div>
         <div className="max-h-64 overflow-y-auto">
           {items.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">

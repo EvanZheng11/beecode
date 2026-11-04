@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   useCallback,
   useEffect,
@@ -43,7 +44,6 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -805,9 +805,9 @@ export function Sidebar() {
           <div className="relative shrink-0 px-1.5 pt-1.5">
             <Search
               aria-hidden="true"
-              className="pointer-events-none absolute top-1/2 left-3.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+              className="pointer-events-none absolute z-10 top-1/2 left-3.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
             />
-            <Input
+            <SearchInput
               value={titleQuery}
               onChange={(event) => setTitleQuery(event.target.value)}
               // 输入即时过滤，不需要回车；Esc 清空恢复全部。

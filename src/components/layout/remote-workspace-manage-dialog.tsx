@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import {
   useCallback,
   useEffect,
@@ -437,7 +438,7 @@ export function RemoteWorkspaceManageDialog({
                 <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card lg:rounded-r-none">
                   <div className="space-y-2.5 border-b p-3">
                     <div className="flex items-center gap-2">
-                      <Input
+                      <SearchInput
                         value={searchQuery}
                         onChange={(event) => setSearchQuery(event.target.value)}
                         placeholder={t("searchPlaceholder")}

@@ -92,6 +92,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { SearchInput } from "@/components/ui/search-input"
 import {
   InputGroup,
   InputGroupAddon,
@@ -3094,7 +3095,13 @@ export function FileTreeTab() {
                 size="icon-xs"
                 aria-label={t("clearSearch")}
                 title={t("clearSearch")}
-                onClick={() => setSearchQuery("")}
+                onClick={(event) => {
+                  setSearchQuery("")
+                  event.currentTarget
+                    .closest('[data-slot="input-group"]')
+                    ?.querySelector("input")
+                    ?.focus()
+                }}
               >
                 <X className="size-3" />
               </InputGroupButton>
@@ -3643,7 +3650,7 @@ export function FileTreeTab() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <Input
+            <SearchInput
               value={compareBranchFilter}
               onChange={(event) => setCompareBranchFilter(event.target.value)}
               placeholder={t("compareDialog.filterPlaceholder")}

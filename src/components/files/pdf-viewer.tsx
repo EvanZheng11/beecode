@@ -12,6 +12,10 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
+import {
+  SearchClearButton,
+  clearSearchInput,
+} from "@/components/ui/search-clear-button"
 import { useTranslations } from "next-intl"
 import {
   ChevronDown,
@@ -500,8 +504,15 @@ export function PdfViewer({ tab }: { tab: FileWorkspaceTab }) {
               disabled={!ready}
               placeholder={t("pdfFind")}
               aria-label={t("pdfFind")}
-              className="h-5 w-40 min-w-0 rounded border border-border bg-background pr-1 pl-5 text-2xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring disabled:opacity-40"
+              className="h-5 w-40 min-w-0 rounded border border-border bg-background pr-6 pl-5 text-2xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring disabled:opacity-40 [&::-webkit-search-cancel-button]:hidden"
             />
+            {findQuery && ready && (
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 scale-75">
+                <SearchClearButton
+                  onClear={() => clearSearchInput(findInputRef.current)}
+                />
+              </div>
+            )}
           </div>
           {findStatus && (
             <span className="shrink-0 font-mono text-2xs text-muted-foreground">

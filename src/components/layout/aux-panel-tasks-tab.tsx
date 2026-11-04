@@ -243,7 +243,13 @@ export function TasksAuxTab() {
                 size="icon-xs"
                 aria-label={t("clearSearch")}
                 title={t("clearSearch")}
-                onClick={() => setSearchInput("")}
+                onClick={(event) => {
+                  setSearchInput("")
+                  event.currentTarget
+                    .closest('[data-slot="input-group"]')
+                    ?.querySelector("input")
+                    ?.focus()
+                }}
               >
                 <X className="size-3" />
               </InputGroupButton>

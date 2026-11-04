@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchClearButton } from "@/components/ui/search-clear-button"
 import { useEffect, useId, useMemo, useState, type RefObject } from "react"
 import { ChevronDown, ChevronUp, RefreshCw, Search, X } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -230,6 +231,7 @@ export function TranscriptSearchBar({
           }
         }}
       />
+      {search.query && <SearchClearButton />}
       <span
         aria-live="polite"
         className="shrink-0 text-xs text-muted-foreground"

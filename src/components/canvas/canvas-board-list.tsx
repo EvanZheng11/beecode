@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { formatDistance } from "date-fns"
 import {
@@ -28,7 +29,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { dateFnsLocale } from "@/lib/date-fns-locale"
 import type { CanvasBoard, CanvasBoardSummary } from "@/lib/types"
@@ -206,10 +206,11 @@ export function CanvasBoardList() {
             <div className="flex items-center gap-2">
               <div className="relative">
                 <Search
-                  className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  className="pointer-events-none absolute z-10 left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
                   aria-hidden="true"
                 />
-                <Input
+                <SearchInput
+                  wrapperClassName="w-52"
                   type="search"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}

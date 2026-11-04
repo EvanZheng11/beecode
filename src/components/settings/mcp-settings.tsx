@@ -1,5 +1,6 @@
 "use client"
 
+import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Globe,
@@ -1195,7 +1196,7 @@ export function McpSettings() {
               className="h-full min-h-0 pt-2 flex flex-col"
             >
               <div className="pb-2">
-                <Input
+                <SearchInput
                   value={localFilter}
                   onChange={(event) => setLocalFilter(event.target.value)}
                   placeholder={t("local.filterPlaceholder")}
@@ -1327,7 +1328,7 @@ export function McpSettings() {
                 </Select>
 
                 <div className="flex gap-2">
-                  <Input
+                  <SearchInput
                     value={marketQuery}
                     onChange={(event) => setMarketQuery(event.target.value)}
                     placeholder={t("market.searchPlaceholder")}
