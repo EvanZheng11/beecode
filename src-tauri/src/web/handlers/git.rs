@@ -83,6 +83,14 @@ pub async fn git_status(
     Ok(Json(result))
 }
 
+pub async fn git_list_merged_worktrees(
+    Json(params): Json<PathParams>,
+) -> Result<Json<Vec<String>>, AppCommandError> {
+    Ok(Json(
+        folder_commands::git_list_merged_worktrees(params.path).await?,
+    ))
+}
+
 pub async fn git_list_all_branches(
     Json(params): Json<PathParams>,
 ) -> Result<Json<folder_commands::GitBranchList>, AppCommandError> {

@@ -2,6 +2,10 @@
 
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
+  useMergedWorktreePaths,
+  visibleWorktreeFolders,
+} from "./sidebar-merged-worktrees"
+import {
   memo,
   useCallback,
   useEffect,
@@ -986,7 +990,12 @@ export function SidebarConversationList({
   const { themeColor: appThemeColor } = useThemeColor()
   const { createTerminalInDirectory } = useTerminalContext()
   const { zoomLevel } = useZoomLevel()
-  const folders = useAppWorkspaceStore((s) => s.folders)
+  const workspaceFolders = useAppWorkspaceStore((s) => s.folders)
+  const mergedWorktreePaths = useMergedWorktreePaths(workspaceFolders)
+  const folders = useMemo(
+    () => visibleWorktreeFolders(workspaceFolders, mergedWorktreePaths),
+    [workspaceFolders, mergedWorktreePaths]
+  )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   // Live HEAD branch per folder, for the container repos' "root" sub-group
