@@ -67,7 +67,8 @@
       "browser": "Browser Use",
       "computer_use": "Computer Use",
       "quick_messages": "Quick Messages",
-      "logs": "Runtime Logs"
+      "logs": "Runtime Logs",
+      "monitoring": "Monitoring"
     }
   },
   "AppearanceSettings": {
@@ -7785,6 +7786,53 @@
         "bypassed": "This computer's browser engine sends some addresses around the tunnel, so the remote host's pages stay closed rather than load from this computer.",
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
+    }
+  },
+  "ResourceMonitor": {
+    "confirmTitle": "Confirm process action?",
+    "confirmDescription": "Apply {action} to {name} (PID {pid})? This may interrupt a running task or service and lose unsaved data.",
+    "cancel": "Cancel",
+    "confirm": "Confirm action",
+    "title": "Resource Monitor",
+    "enableDescription": "Show live CPU, memory and process usage for the app and the processes it started.",
+    "overheadNote": "Low overhead: samples on demand every 2 seconds only while this page is open and visible. Turning it off stops sampling; hiding the page pauses it.",
+    "saving": "Saving",
+    "retry": "Retry",
+    "disabledHint": "Monitoring is off. Turn on the switch above to start sampling.",
+    "loading": "Loading…",
+    "noData": "No data yet.",
+    "paused": "Page hidden — sampling paused. Data refreshes when you return.",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "processes": "Active processes",
+    "collection": "Sampling time",
+    "cpuNote": "CPU: 100% equals one logical core, so totals can exceed 100%.",
+    "memoryNote": "Memory is the sum of RSS and may count shared pages more than once.",
+    "warnings": "Warnings",
+    "cpuTrend": "CPU trend",
+    "memoryTrend": "Memory trend",
+    "chartEmpty": "Collecting data…",
+    "chartLabel": "{title}, last {count} samples",
+    "processList": "Processes",
+    "empty": "No processes to show.",
+    "status": "Status",
+    "uptime": "Uptime",
+    "actionBusy": "Another action is in progress. Please wait.",
+    "action": {
+      "stop": "Stop",
+      "kill": "Force kill",
+      "restart": "Restart"
+    },
+    "category": {
+      "application": "App",
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "plugin": "Plugin",
+      "computer-helper": "Computer helper",
+      "session": "Session",
+      "terminal": "Terminal",
+      "service": "Service",
+      "process": "Process"
     }
   }
 }

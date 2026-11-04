@@ -136,6 +136,7 @@ impl Standalone {
             });
         }
         let pid = child.id().unwrap_or_default();
+        crate::resource_monitor::register_spawn(pid, "session", None);
         let mut standalone = Self {
             child,
             stdin,

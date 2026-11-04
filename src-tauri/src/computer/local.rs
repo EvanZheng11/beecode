@@ -1230,6 +1230,7 @@ fn spawn_helper(path: &std::path::Path) -> Result<(HelperChild, Io, PeerFd), Bac
         launch_requirement: requirement.as_deref(),
     })
     .map_err(|e| unavailable("could not start the helper", e))?;
+    crate::resource_monitor::register_spawn(child.pid(), "computer-helper", None);
     drop(theirs);
     drop(err_theirs);
     let peer_fd = ours.as_raw_fd();
@@ -1387,6 +1388,7 @@ async fn ask_for_permission(
         launch_requirement: requirement.as_deref(),
     })
     .map_err(|e| unavailable("could not start the helper to ask", e))?;
+    crate::resource_monitor::register_spawn(child.pid(), "computer-helper", None);
     drop(theirs);
     let read = async {
         ours.set_nonblocking(true)?;
@@ -1440,6 +1442,9 @@ fn spawn_helper(path: &std::path::Path) -> Result<(HelperChild, Io, PeerFd), Bac
         .spawn()
         .map_err(|e| BackendError::Unavailable(format!("could not start the helper: {e}")))?;
     let missing = || BackendError::Unavailable("the helper has no stdio".into());
+    if let Some(pid) = child.id() {
+        crate::resource_monitor::register_spawn(pid, "computer-helper", None);
+    }
     let stdin = child.stdin.take().ok_or_else(missing)?;
     let stdout = child.stdout.take().ok_or_else(missing)?;
     let stderr = child.stderr.take().ok_or_else(missing)?;

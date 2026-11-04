@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react"
 import {
+  Activity,
   Bot,
   BookOpenText,
   Boxes,
@@ -62,6 +63,7 @@ interface SettingsNavItem {
     | "system"
     | "web_service"
     | "logs"
+    | "monitoring"
   icon: ComponentType<{ className?: string }>
 }
 
@@ -140,6 +142,11 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/web-service",
     labelKey: "web_service",
     icon: Globe,
+  },
+  {
+    href: "/settings/monitoring",
+    labelKey: "monitoring",
+    icon: Activity,
   },
   {
     href: "/settings/logs",

@@ -3678,6 +3678,7 @@ export async function openCommitWindow(folderId: number): Promise<void> {
 }
 
 export type SettingsSection =
+  | "monitoring"
   | "general"
   | "appearance"
   | "agents"

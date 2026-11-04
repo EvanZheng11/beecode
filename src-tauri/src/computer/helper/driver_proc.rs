@@ -478,6 +478,7 @@ impl DriverProc {
             launch_requirement: Some(&requirement),
         })
         .map_err(|e| unavailable(format!("could not start the driver: {e}")))?;
+        crate::resource_monitor::register_spawn(child.pid(), "computer-helper", None);
         drop(io_theirs);
         drop(err_theirs);
 
@@ -539,6 +540,9 @@ impl DriverProc {
         let mut child = command
             .spawn()
             .map_err(|e| unavailable(format!("could not start the driver: {e}")))?;
+        if let Some(pid) = child.id() {
+            crate::resource_monitor::register_spawn(pid, "computer-helper", None);
+        }
         let stdin = child.stdin.take().ok_or_else(|| unavailable("no stdin"))?;
         let stdout = child
             .stdout

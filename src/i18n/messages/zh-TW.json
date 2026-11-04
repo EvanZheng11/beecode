@@ -67,7 +67,8 @@
       "browser": "瀏覽器操作",
       "computer_use": "電腦操作",
       "quick_messages": "快捷訊息",
-      "logs": "執行日誌"
+      "logs": "執行日誌",
+      "monitoring": "監控"
     }
   },
   "AppearanceSettings": {
@@ -7785,6 +7786,53 @@
         "bypassed": "這台電腦的瀏覽器引擎會讓部分位址繞過通道，為避免從這台電腦載入，遠端主機的頁面不會開啟。",
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
+    }
+  },
+  "ResourceMonitor": {
+    "title": "資源監控",
+    "confirmTitle": "確認行程操作？",
+    "confirmDescription": "將對 {name}（PID {pid}）執行「{action}」。這可能中斷進行中的工作或服務，未儲存的資料可能遺失。",
+    "cancel": "取消",
+    "confirm": "確認執行",
+    "enableDescription": "即時查看應用程式及其啟動的行程的 CPU、記憶體與行程數。",
+    "overheadNote": "低開銷：僅在本頁開啟且可見時每 2 秒按需取樣；關閉開關不再取樣，頁面隱藏時暫停。",
+    "saving": "儲存中",
+    "retry": "重試",
+    "disabledHint": "監控已關閉，開啟上方開關開始取樣。",
+    "loading": "載入中…",
+    "noData": "暫無資料。",
+    "paused": "頁面已隱藏，取樣已暫停，返回後自動重新整理。",
+    "cpu": "CPU",
+    "memory": "記憶體",
+    "processes": "活躍行程數",
+    "collection": "採集耗時",
+    "cpuNote": "CPU：100% 表示佔滿一個邏輯核，合計可能超過 100%。",
+    "memoryNote": "記憶體為各行程 RSS 總和，可能重複計入共享頁。",
+    "warnings": "警告",
+    "cpuTrend": "CPU 趨勢",
+    "memoryTrend": "記憶體趨勢",
+    "chartEmpty": "正在收集資料…",
+    "chartLabel": "{title}，最近 {count} 個取樣點",
+    "processList": "行程",
+    "empty": "沒有可顯示的行程。",
+    "status": "狀態",
+    "uptime": "運行時長",
+    "actionBusy": "另一個操作正在進行，請稍候。",
+    "action": {
+      "stop": "關閉",
+      "kill": "強制結束",
+      "restart": "重新啟動"
+    },
+    "category": {
+      "application": "應用",
+      "frontend": "前台",
+      "backend": "後端",
+      "plugin": "外掛",
+      "computer-helper": "Computer 助手",
+      "session": "工作階段",
+      "terminal": "終端機",
+      "service": "服務",
+      "process": "行程"
     }
   }
 }
