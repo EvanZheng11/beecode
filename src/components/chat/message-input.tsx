@@ -139,6 +139,11 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
+import { useIsMobile } from "@/hooks/use-mobile"
+import {
+  saveQuickMessagesVisible,
+  useQuickMessagesVisible,
+} from "@/lib/quick-messages-prefs"
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -504,6 +509,17 @@ export function MessageInput({
     onAfterInsert: syncComposerEmpty,
     logLabel: "MessageInput",
   })
+
+  const showQuickMessages = useQuickMessagesVisible()
+  const isMobile = useIsMobile()
+  const { refreshQuickMessages } = menuShortcuts
+  useEffect(() => {
+    if (!showQuickMessages) return
+    refreshQuickMessages()
+    // 从设置页返回时更新列表，保持用户配置的顺序与内容。
+    window.addEventListener("focus", refreshQuickMessages)
+    return () => window.removeEventListener("focus", refreshQuickMessages)
+  }, [showQuickMessages, refreshQuickMessages])
 
   // Whether the async Clipboard read API is usable here. It's absent in
   // non-secure web deployments served over HTTP/LAN (see installClipboardFallback
@@ -1686,6 +1702,21 @@ export function MessageInput({
     resetComposer,
   ])
 
+  const quickMessageSendDisabled =
+    isEditingQueueItem || (isPrompting ? !onEnqueue : disabled)
+
+  const sendQuickMessage = (content: string) => {
+    if (quickMessageSendDisabled || !content.trim()) return
+    const draft: PromptDraft = {
+      blocks: [{ type: "text", text: content }],
+      displayText: content,
+    }
+    const modeId = showModeSelector ? effectiveModeId : null
+    // 快捷消息独立提交，不读取或清空输入框中的草稿和附件。
+    if (isPrompting && onEnqueue) onEnqueue(draft, modeId)
+    else onSend(draft, modeId)
+  }
+
   // Mid-turn send over the session's live-feedback channel: a native push
   // inserts into the running turn; a pull-tool session records a waiting note
   // the agent reads on its next check (the copy is keyed on `steerChannel` so
@@ -2077,6 +2108,28 @@ export function MessageInput({
           </div>
         </div>
       )}
+      {showQuickMessages && menuShortcuts.quickMessages.length > 0 && (
+        <div
+          role="group"
+          aria-label={t("quickMessages")}
+          className="mb-2 flex min-w-0 flex-wrap gap-1.5"
+        >
+          {menuShortcuts.quickMessages
+            .slice(0, isMobile ? 4 : 8)
+            .map((message) => (
+              <button
+                key={message.id}
+                type="button"
+                disabled={quickMessageSendDisabled || !message.content.trim()}
+                title={message.content}
+                onClick={() => sendQuickMessage(message.content)}
+                className="max-w-full truncate rounded-full border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 md:max-w-60 md:py-1"
+              >
+                {message.title || t("quickMessageUntitled")}
+              </button>
+            ))}
+        </div>
+      )}
       {/* Attached, this group clips the composer and the folder/branch row
           below it into one rounded box (`overflow-hidden rounded-xl`); the
           drag-active ring rides the wrapper so it isn't clipped. Standalone it
@@ -2301,33 +2354,41 @@ export function MessageInput({
             </ContextMenuSub>
           </ContextMenuContent>
         </ContextMenu>
-        {hasFolderBranchPicker && (
-          // `px-2` mirrors the action bar so this row lines up with the composer
-          // above; the folder icon then aligns with the centered "+" icon (both
-          // add the same 1px transparent border, paired with the picker buttons'
-          // `px-1.5`). The row only renders while attached below the composer, so
-          // it always takes the rounded-bottom box treatment. Pickers sit at the
-          // left edge; the context-usage circle + agent connection status
-          // right-align at the trailing edge.
-          <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
-            <div className="flex min-w-0 items-center gap-1">
+        {/* 底栏与输入框操作栏对齐；窄屏空间不足时自动换行。 */}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            {hasFolderBranchPicker && (
               <ConversationFolderBranchPicker
                 tabId={attachmentTabId}
                 override={folderPickerOverride}
               />
-            </div>
-            {/* `pr-px` offsets the composer chrome's 1px border: the send button
+            )}
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 py-1 hover:text-foreground">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={showQuickMessages}
+                onChange={(event) =>
+                  saveQuickMessagesVisible(event.target.checked)
+                }
+                className="size-3.5 cursor-pointer accent-primary"
+              />
+              {t("showQuickMessages")}
+            </label>
+          </div>
+          {/* `pr-px` offsets the composer chrome's 1px border: the send button
                 sits INSIDE that border while this status row sits outside it, so
                 without the 1px nudge the trailing icon hangs 1px past the button.
                 With it, the connection icon's RIGHT edge is flush (0px) with the
                 send button's right edge in the action bar above — no centring
                 slot, which would inset the narrow icon and break the alignment. */}
+          {hasFolderBranchPicker && (
             <div className="flex shrink-0 items-center gap-3 pr-px">
               <ComposerContextUsage tabId={attachmentTabId ?? null} />
               <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {!attach.showNativePaperclip && (
         <ServerFileBrowserDialog

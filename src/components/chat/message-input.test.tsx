@@ -219,6 +219,8 @@ import type {
 } from "@/lib/types"
 
 import { MessageInput } from "./message-input"
+import { quickMessagesList } from "@/lib/api"
+import { saveQuickMessagesVisible } from "@/lib/quick-messages-prefs"
 import {
   composerBoxMinHeight,
   composerEditableMinHeight,
@@ -263,6 +265,155 @@ const nextFrame = () =>
   act(async () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
   })
+
+describe("快捷消息标签", () => {
+  const messages = Array.from({ length: 10 }, (_, index) => ({
+    id: index + 1,
+    title: `快捷 ${index + 1}`,
+    content: `消息正文 ${index + 1}`,
+    sort_order: index,
+    created_at: "2026-11-04T00:00:00Z",
+    updated_at: "2026-11-04T00:00:00Z",
+  }))
+  const toggle = () =>
+    screen.getByRole("switch", { name: "Show quick messages" })
+  const group = () => screen.getByRole("group", { name: "Quick messages" })
+
+  beforeEach(() => {
+    saveQuickMessagesVisible(false)
+    vi.mocked(quickMessagesList).mockResolvedValue(messages)
+  })
+  afterEach(() => {
+    cleanup()
+    saveQuickMessagesVisible(false)
+    vi.mocked(quickMessagesList).mockResolvedValue([])
+  })
+
+  it("默认关闭，开启后仅显示前八条，关闭后隐藏并记住偏好", async () => {
+    renderInput({})
+    expect(toggle()).not.toBeChecked()
+    expect(screen.queryByRole("group", { name: "Quick messages" })).toBeNull()
+    fireEvent.click(toggle())
+    await waitFor(() =>
+      expect(within(group()).getAllByRole("button")).toHaveLength(8)
+    )
+    expect(within(group()).queryByText("快捷 9")).toBeNull()
+    expect(window.localStorage.getItem("workspace:show-quick-messages")).toBe(
+      "true"
+    )
+    fireEvent.click(toggle())
+    expect(screen.queryByRole("group", { name: "Quick messages" })).toBeNull()
+    expect(window.localStorage.getItem("workspace:show-quick-messages")).toBe(
+      "false"
+    )
+  })
+
+  it("移动端至多四条，视口变化后恢复桌面数量", async () => {
+    const original = window.matchMedia
+    let mobile = true
+    const listeners = new Set<() => void>()
+    const spy = vi.spyOn(window, "matchMedia").mockImplementation((query) =>
+      query === "(max-width: 767px)"
+        ? ({
+            get matches() {
+              return mobile
+            },
+            addEventListener: (_: string, cb: () => void) => listeners.add(cb),
+            removeEventListener: (_: string, cb: () => void) =>
+              listeners.delete(cb),
+          } as unknown as MediaQueryList)
+        : original(query)
+    )
+    try {
+      renderInput({})
+      fireEvent.click(toggle())
+      await waitFor(() =>
+        expect(within(group()).getAllByRole("button")).toHaveLength(4)
+      )
+      act(() => {
+        mobile = false
+        listeners.forEach((cb) => cb())
+      })
+      expect(within(group()).getAllByRole("button")).toHaveLength(8)
+    } finally {
+      cleanup()
+      spy.mockRestore()
+    }
+  })
+
+  it("点击直接发送正文及选中模式，不合并或清空现有草稿", async () => {
+    const onSend = vi.fn()
+    const { container } = renderInput({
+      onSend,
+      modes: [{ id: "build", name: "Build" }],
+      selectedModeId: "build",
+      onModeChange: vi.fn(),
+    })
+    await waitFor(() => expect(composerHandle.current).not.toBeNull())
+    await nextFrame()
+    act(() => composerHandle.current?.setText("保留的草稿"))
+    fireEvent.click(toggle())
+    fireEvent.click(
+      await within(
+        await screen.findByRole("group", { name: "Quick messages" })
+      ).findByRole("button", { name: "快捷 1" })
+    )
+    expect(onSend).toHaveBeenCalledWith(
+      {
+        blocks: [{ type: "text", text: "消息正文 1" }],
+        displayText: "消息正文 1",
+      },
+      "build"
+    )
+    expect(container.querySelector('[role="textbox"]')).toHaveTextContent(
+      "保留的草稿"
+    )
+  })
+
+  it("响应中直接入队，不覆盖正在编辑的草稿", async () => {
+    const onSend = vi.fn()
+    const onEnqueue = vi.fn()
+    renderInput({ onSend, onEnqueue, isPrompting: true, disabled: true })
+    fireEvent.click(toggle())
+    fireEvent.click(await screen.findByRole("button", { name: "快捷 1" }))
+    expect(onSend).not.toHaveBeenCalled()
+    expect(onEnqueue).toHaveBeenCalledWith(
+      {
+        blocks: [{ type: "text", text: "消息正文 1" }],
+        displayText: "消息正文 1",
+      },
+      null
+    )
+  })
+
+  it.each([
+    { disabled: true },
+    { isPrompting: true },
+    { isEditingQueueItem: true },
+  ])("不可发送时禁用标签：%j", async (props) => {
+    const onSend = vi.fn()
+    renderInput({ onSend, ...props })
+    fireEvent.click(toggle())
+    const tag = await screen.findByRole("button", { name: "快捷 1" })
+    expect(tag).toBeDisabled()
+    fireEvent.click(tag)
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it("空列表不占用标签区域，空白正文不可发送", async () => {
+    vi.mocked(quickMessagesList).mockResolvedValue([
+      { ...messages[0], content: "  " },
+    ])
+    renderInput({})
+    fireEvent.click(toggle())
+    expect(await screen.findByRole("button", { name: "快捷 1" })).toBeDisabled()
+    vi.mocked(quickMessagesList).mockResolvedValue([])
+    act(() => window.dispatchEvent(new Event("focus")))
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Quick messages" })).toBeNull()
+    )
+  })
+})
 
 describe("MessageInput (RichComposer integration)", () => {
   afterEach(() => cleanup())
