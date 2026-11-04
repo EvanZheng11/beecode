@@ -3593,7 +3593,7 @@
           "worktrees": "Open the branch button and pick New worktree so several agents can work the same repo without overwriting each other's files.",
           "importSessions": "Already ran sessions in the terminal? A folder's menu has Import local sessions — bring that history into BeeCode.",
           "subSessions": "When an agent delegates, the sub-session appears nested under it in the sidebar — expand the row to follow what each one did.",
-          "liveFeedback": "Live feedback in the + menu drops a note into the turn the agent is already running, without interrupting it.",
+          "liveFeedback": "Live feedback in the + menu inserts a note into the running turn. If the agent can't take it natively, the turn is stopped and continues with your note in the same session.",
           "skillPacks": "Settings → Skill Packs bundles coding experts, scientific research, and office skills — switch them on per agent.",
           "modelProviders": "Settings → Model Providers takes your own API key or endpoint, and you pick the model right in the composer.",
           "workspaceBackground": "Settings → Appearance sets a workspace background image, panel opacity, and the app's fonts."
@@ -5530,7 +5530,7 @@
     "ariaLabel": "Live feedback note",
     "dialogTitle": "Live feedback",
     "dialogDescription": "Send a note to the agent while it works. It reads your note the next time it checks — without interrupting the current step.",
-    "dialogDescriptionInstant": "Send a note to the agent while it works. It lands in the current turn immediately — the agent sees it right away.",
+    "dialogDescriptionInstant": "Send a note to the agent while it works. With native insertion it lands in the current turn directly; otherwise the current turn is stopped and the agent continues with your note in the same session, which may take a moment.",
     "channelDowngraded": "Instant insert isn't available in this session — your note was saved for the agent to pick up on its next check.",
     "send": "Send",
     "cancel": "Cancel",
@@ -5560,8 +5560,8 @@
     },
     "feedback": {
       "label": "Live Feedback",
-      "short": "Add notes mid-turn without interrupting.",
-      "hint": "Send notes and corrections to an agent while it's working. When the agent supports instant steering, your note is inserted into the running turn immediately; otherwise the agent gets a tool to check for your feedback — those agents typically only check when you mention it in your prompt, for example add \"check my live feedback regularly\" to your message."
+      "short": "Add notes while the agent is working.",
+      "hint": "Send notes and corrections to an agent while it's working. If the agent supports native insertion, your note goes into the running turn directly; otherwise the current turn is stopped and the agent continues with your note in the same session, which may take a moment."
     },
     "ask": {
       "label": "Ask user question",

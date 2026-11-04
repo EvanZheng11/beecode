@@ -3593,7 +3593,7 @@
           "worktrees": "Ouvrez le bouton de branche et choisissez Nouveau worktree pour que plusieurs agents travaillent sur le même dépôt sans écraser les fichiers des autres.",
           "importSessions": "Vous avez déjà lancé des sessions dans le terminal ? Le menu d'un dossier propose Importer les sessions locales pour récupérer cet historique dans BeeCode.",
           "subSessions": "Quand un agent délègue, la sous-session apparaît imbriquée sous lui dans la barre latérale : dépliez la ligne pour suivre ce que chacune a fait.",
-          "liveFeedback": "Retour en direct, dans le menu +, glisse une note dans le tour que l'agent exécute déjà, sans l'interrompre.",
+          "liveFeedback": "Le retour en direct du menu + insère une note dans le tour en cours. Si l'agent ne le gère pas nativement, le tour est arrêté puis repris avec votre note dans la même session.",
           "skillPacks": "Paramètres → Packs de compétences regroupe experts du code, recherche scientifique et bureautique ; activez-les agent par agent.",
           "modelProviders": "Paramètres → Fournisseurs de Modèles accepte votre propre clé d'API ou endpoint, puis vous choisissez le modèle dans la zone de saisie.",
           "workspaceBackground": "Paramètres → Apparence définit une image de fond pour l'espace de travail, l'opacité des panneaux et les polices de l'application."
@@ -5530,7 +5530,7 @@
     "ariaLabel": "Note de retour en direct",
     "dialogTitle": "Retour en direct",
     "dialogDescription": "Envoyez une note à l'agent pendant qu'il travaille. Il la lira lors de sa prochaine vérification, sans interrompre l'étape en cours.",
-    "dialogDescriptionInstant": "Envoyez une note à l'agent pendant qu'il travaille. Elle est insérée immédiatement dans le tour en cours — l'agent la voit aussitôt.",
+    "dialogDescriptionInstant": "Envoyez une note à l'agent pendant qu'il travaille. Avec l'insertion native, elle entre directement dans le tour en cours ; sinon le tour est arrêté et l'agent reprend avec votre note dans la même session, ce qui peut prendre un instant.",
     "channelDowngraded": "L'insertion instantanée n'est pas disponible dans cette session — votre note a été enregistrée et sera récupérée au prochain contrôle de l'agent.",
     "send": "Envoyer",
     "cancel": "Annuler",
@@ -5560,8 +5560,8 @@
     },
     "feedback": {
       "label": "Retour en direct",
-      "short": "Ajoute des notes sans interrompre le tour.",
-      "hint": "Envoyez des notes et corrections à un agent pendant qu'il travaille. Si l'agent prend en charge l'insertion instantanée, votre note est insérée immédiatement dans le tour en cours ; sinon, l'agent reçoit un outil pour consulter vos retours — ces agents ne le consultent généralement que si vous le mentionnez dans votre prompt, par exemple ajoutez « vérifie régulièrement mon feedback en direct » à votre message."
+      "short": "Ajouter des notes pendant que l'agent travaille.",
+      "hint": "Envoyez notes et corrections à un agent pendant qu'il travaille. S'il gère l'insertion native, la note entre directement dans le tour en cours ; sinon le tour est arrêté et l'agent reprend avec votre note dans la même session, ce qui peut prendre un instant."
     },
     "ask": {
       "label": "Poser une question à l'utilisateur",

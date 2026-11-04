@@ -3593,7 +3593,7 @@
           "worktrees": "Abra o botão de branch e escolha Novo worktree para vários agentes trabalharem no mesmo repositório sem sobrescrever os arquivos uns dos outros.",
           "importSessions": "Já rodou sessões no terminal? O menu de uma pasta tem Importar sessões locais para trazer esse histórico para o BeeCode.",
           "subSessions": "Quando um agente delega, a subsessão aparece aninhada abaixo dele na barra lateral — expanda a linha para acompanhar o que cada uma fez.",
-          "liveFeedback": "Feedback ao vivo, no menu +, insere uma nota no turno que o agente já está executando, sem interrompê-lo.",
+          "liveFeedback": "O feedback em tempo real do menu + insere uma nota no turno em andamento. Se o agente não suportar isso nativamente, o turno é interrompido e continua com sua nota na mesma sessão.",
           "skillPacks": "Configurações → Pacotes de habilidades reúne especialistas de código, pesquisa científica e escritório; ative por agente.",
           "modelProviders": "Configurações → Provedores de Modelos aceita sua própria chave de API ou endpoint, e o modelo você escolhe no campo de entrada.",
           "workspaceBackground": "Configurações → Aparência define uma imagem de fundo do espaço de trabalho, a opacidade dos painéis e as fontes do app."
@@ -5530,7 +5530,7 @@
     "ariaLabel": "Nota de feedback ao vivo",
     "dialogTitle": "Feedback ao vivo",
     "dialogDescription": "Envie uma nota ao agente enquanto ele trabalha. Ele a lerá na próxima verificação, sem interromper a etapa atual.",
-    "dialogDescriptionInstant": "Envie uma nota ao agente enquanto ele trabalha. Ela é inserida imediatamente no turno atual — o agente a vê na hora.",
+    "dialogDescriptionInstant": "Envie uma nota ao agente enquanto ele trabalha. Com inserção nativa, ela entra direto no turno atual; caso contrário, o turno é interrompido e o agente continua com sua nota na mesma sessão, o que pode levar um instante.",
     "channelDowngraded": "A inserção instantânea não está disponível nesta sessão — sua nota foi salva para o agente ler na próxima verificação.",
     "send": "Enviar",
     "cancel": "Cancelar",
@@ -5560,8 +5560,8 @@
     },
     "feedback": {
       "label": "Feedback ao vivo",
-      "short": "Acrescenta notas sem interromper o turno.",
-      "hint": "Envie notas e correções a um agente enquanto ele trabalha. Se o agente oferecer inserção instantânea, sua nota entra imediatamente no turno em andamento; caso contrário, o agente recebe uma ferramenta para verificar seu feedback — esses agentes normalmente só verificam quando você menciona isso no prompt, por exemplo, adicione \"verifique meu feedback ao vivo regularmente\" à sua mensagem."
+      "short": "Adicione notas enquanto o agente trabalha.",
+      "hint": "Envie notas e correções a um agente enquanto ele trabalha. Se houver inserção nativa, a nota entra direto no turno em andamento; caso contrário, o turno atual é interrompido e o agente continua com sua nota na mesma sessão, o que pode levar um instante."
     },
     "ask": {
       "label": "Perguntar ao usuário",

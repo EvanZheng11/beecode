@@ -3593,7 +3593,7 @@
           "worktrees": "Öffne die Branch-Schaltfläche und wähle Neuer Worktree, damit mehrere Agenten dasselbe Repository bearbeiten, ohne sich gegenseitig die Dateien zu überschreiben.",
           "importSessions": "Schon Sitzungen im Terminal gelaufen? Im Menü eines Ordners holt Lokale Sitzungen importieren diesen Verlauf nach BeeCode.",
           "subSessions": "Delegiert ein Agent, erscheint die Untersitzung in der Seitenleiste verschachtelt darunter – klapp die Zeile auf, um jeder einzeln zu folgen.",
-          "liveFeedback": "Live-Feedback im +-Menü schiebt eine Notiz in den Zug, den der Agent gerade ausführt – ohne ihn zu unterbrechen.",
+          "liveFeedback": "Live-Feedback im +-Menü fügt eine Notiz in den laufenden Turn ein. Kann der Agent das nicht nativ, wird der Turn gestoppt und in derselben Sitzung mit deiner Notiz fortgesetzt.",
           "skillPacks": "Einstellungen → Skill-Pakete bündelt Coding-Experten, wissenschaftliche Recherche und Office-Skills – pro Agent aktivierbar.",
           "modelProviders": "Einstellungen → Modellanbieter nimmt deinen eigenen API-Key oder Endpunkt entgegen; das Modell wählst du danach direkt im Eingabefeld.",
           "workspaceBackground": "Einstellungen → Darstellung setzt ein Hintergrundbild für den Arbeitsbereich, die Panel-Deckkraft und die Schriftarten der App."
@@ -5530,7 +5530,7 @@
     "ariaLabel": "Live-Feedback-Notiz",
     "dialogTitle": "Live-Feedback",
     "dialogDescription": "Sende dem Agenten eine Notiz, während er arbeitet. Er liest sie bei der nächsten Prüfung – ohne den aktuellen Schritt zu unterbrechen.",
-    "dialogDescriptionInstant": "Sende dem Agenten eine Notiz, während er arbeitet. Sie wird sofort in den laufenden Turn eingefügt – der Agent sieht sie umgehend.",
+    "dialogDescriptionInstant": "Sende dem Agenten eine Notiz, während er arbeitet. Bei nativer Einfügung landet sie direkt im laufenden Turn; sonst wird der aktuelle Turn gestoppt und der Agent macht in derselben Sitzung mit deiner Notiz weiter, was kurz dauern kann.",
     "channelDowngraded": "Sofortiges Einfügen ist in dieser Sitzung nicht verfügbar – deine Notiz wurde gespeichert; der Agent holt sie bei seinem nächsten Check ab.",
     "send": "Senden",
     "cancel": "Abbrechen",
@@ -5560,8 +5560,8 @@
     },
     "feedback": {
       "label": "Live-Feedback",
-      "short": "Ergänzt Hinweise, ohne den Zug zu unterbrechen.",
-      "hint": "Sende einem Agenten Notizen und Korrekturen, während er arbeitet. Unterstützt der Agent sofortiges Einfügen, landet deine Notiz umgehend im laufenden Turn; andernfalls erhält der Agent ein Tool zum Abrufen deines Feedbacks – solche Agenten prüfen es meist nur, wenn du es im Prompt erwähnst, z. B. mit \"prüfe regelmäßig mein Live-Feedback\"."
+      "short": "Notizen hinzufügen, während der Agent arbeitet.",
+      "hint": "Sende einem Agenten Notizen und Korrekturen, während er arbeitet. Unterstützt er native Einfügung, geht die Notiz direkt in den laufenden Turn; sonst wird der aktuelle Turn gestoppt und der Agent macht in derselben Sitzung mit deiner Notiz weiter, was kurz dauern kann."
     },
     "ask": {
       "label": "Benutzer fragen",

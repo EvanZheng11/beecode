@@ -315,6 +315,53 @@ describe("useSessionFeedback", () => {
     expect(toast.info).not.toHaveBeenCalled()
   })
 
+  it("没有原生注入和反馈工具时，仍可通过取消后插入发送完整草稿", async () => {
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: false,
+        native_steering_available: false,
+        steer_replaces_turn: true,
+      })
+    )
+    const { result } = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() => expect(result.current.canSubmit).toBe(true))
+    expect(result.current.channel).toBe("native")
+    const blocks = [
+      { type: "text" as const, text: "按新说明继续" },
+      { type: "image" as const, data: "QUJD", mime_type: "image/png" },
+    ]
+    mockSubmit.mockResolvedValueOnce(note("r2", "按新说明继续", "delivered"))
+    await act(async () => {
+      await result.current.steer("按新说明继续", blocks)
+    })
+    expect(mockSubmit).toHaveBeenCalledWith("c1", "按新说明继续", blocks)
+    expect(result.current.channel).toBe("native")
+    expect(result.current.notes[0].status).toBe("delivered")
+  })
+
+  it("原生注入降级后采用取消后插入，不退回等待反馈通道", async () => {
+    mockSnapshot.mockResolvedValue(
+      snapshot({ native_steering_available: true })
+    )
+    const { result } = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() => expect(result.current.channel).toBe("native"))
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: false,
+        native_steering_available: false,
+        steer_replaces_turn: true,
+      })
+    )
+    mockSubmit.mockResolvedValueOnce(note("r3", "新指令", "delivered"))
+    await act(async () => {
+      await result.current.steer("新指令")
+    })
+    await waitFor(() => expect(mockSnapshot).toHaveBeenCalledTimes(3))
+    expect(result.current.channel).toBe("native")
+    expect(result.current.canSubmit).toBe(true)
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
   it("stays on the pull channel when only the tool is available", async () => {
     mockSnapshot.mockResolvedValue(
       snapshot({

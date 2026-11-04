@@ -154,8 +154,8 @@ export function useSessionFeedback({
   // leaving this true would keep offering "insert into current turn" while
   // notes actually land on the pull path.
   const [nativeSteering, setNativeSteering] = useState(false)
-  // OpenCode: same insert copy and submit entry as native steering. The
-  // backend does not set `native_steering_available` (no `_session/steering`).
+  // 后端提供的取消后插入能力与原生注入共用入口，不依赖 MCP 反馈工具。
+  // 原生注入不可用或运行中降级时，也能继续在同一会话插入消息。
   const [replaceSteer, setReplaceSteer] = useState(false)
   // Latch for that downgrade: once set, a stale pre-downgrade snapshot that
   // resolves late can never flip the channel back to native. Reset with the
@@ -383,6 +383,8 @@ export function useSessionFeedback({
           ) {
             steeringDowngradedRef.current = true
             setNativeSteering(false)
+            // 原生能力降级不等于只能排队：采用后端确认的取消后插入能力。
+            if (snap.steer_replaces_turn) setReplaceSteer(true)
           }
         })
         .catch(() => {})

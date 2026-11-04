@@ -3593,7 +3593,7 @@
           "worktrees": "Abre el botón de rama y elige Nuevo worktree para que varios agentes trabajen en el mismo repositorio sin pisarse los archivos.",
           "importSessions": "¿Ya ejecutaste sesiones en la terminal? El menú de una carpeta tiene Importar sesiones locales para traer ese historial a BeeCode.",
           "subSessions": "Cuando un agente delega, la subsesión aparece anidada bajo él en la barra lateral: despliega la fila para seguir lo que hizo cada una.",
-          "liveFeedback": "Comentarios en vivo, en el menú +, inserta una nota en el turno que el agente ya está ejecutando, sin interrumpirlo.",
+          "liveFeedback": "Los comentarios en vivo del menú + insertan una nota en el turno en curso. Si el agente no lo admite de forma nativa, se detiene el turno y continúa con tu nota en la misma sesión.",
           "skillPacks": "Configuración → Paquetes de habilidades reúne expertos de programación, investigación científica y ofimática; actívalos por agente.",
           "modelProviders": "Configuración → Proveedores de Modelos acepta tu propia clave de API o endpoint, y el modelo lo eliges desde el cuadro de entrada.",
           "workspaceBackground": "Configuración → Apariencia define una imagen de fondo del espacio de trabajo, la opacidad de los paneles y las fuentes de la app."
@@ -5530,7 +5530,7 @@
     "ariaLabel": "Nota de comentarios en vivo",
     "dialogTitle": "Comentarios en vivo",
     "dialogDescription": "Envía una nota al agente mientras trabaja. La leerá en su próxima comprobación, sin interrumpir el paso actual.",
-    "dialogDescriptionInstant": "Envía una nota al agente mientras trabaja. Se inserta de inmediato en el turno actual: el agente la ve al instante.",
+    "dialogDescriptionInstant": "Envía una nota al agente mientras trabaja. Con inserción nativa entra directamente en el turno actual; si no, se detiene el turno y el agente continúa con tu nota en la misma sesión, lo que puede tardar un momento.",
     "channelDowngraded": "La inserción instantánea no está disponible en esta sesión: tu nota quedó guardada para que el agente la recoja en su próxima consulta.",
     "send": "Enviar",
     "cancel": "Cancelar",
@@ -5560,8 +5560,8 @@
     },
     "feedback": {
       "label": "Comentarios en vivo",
-      "short": "Añade notas sin interrumpir el turno.",
-      "hint": "Envía notas y correcciones a un agente mientras trabaja. Si el agente admite la inserción instantánea, tu nota se inserta de inmediato en el turno en curso; de lo contrario, el agente recibe una herramienta para consultar tus comentarios — esos agentes suelen consultarla solo si lo mencionas en tu prompt, por ejemplo añade \"revisa mi feedback en vivo con regularidad\" a tu mensaje."
+      "short": "Añade notas mientras el agente trabaja.",
+      "hint": "Envía notas y correcciones a un agente mientras trabaja. Si admite inserción nativa, la nota entra directamente en el turno en curso; si no, se detiene el turno actual y el agente continúa con tu nota en la misma sesión, lo que puede tardar un momento."
     },
     "ask": {
       "label": "Preguntar al usuario",
