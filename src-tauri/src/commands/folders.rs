@@ -328,6 +328,80 @@ pub struct GitLogEntry {
     pub message: String,
     pub files: Vec<GitLogFileChange>,
     pub pushed: Option<bool>,
+    /// Full parent hashes, first parent first — drives the commit graph.
+    pub parents: Vec<String>,
+    /// Refs decorating this commit (branches, remote branches, tags, HEAD).
+    pub refs: Vec<GitLogRef>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitLogRefKind {
+    /// A detached HEAD; an attached one marks its branch `is_head` instead.
+    Head,
+    Local,
+    Remote,
+    Tag,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct GitLogRef {
+    pub name: String,
+    pub kind: GitLogRefKind,
+    /// The local branch HEAD is attached to.
+    pub is_head: bool,
+}
+
+/// Parse `%D` produced with `--decorate=full`, e.g.
+/// `HEAD -> refs/heads/main, tag: refs/tags/v1, refs/remotes/origin/main`.
+/// Full ref names keep `origin/x` apart from a local branch named `origin/x`;
+/// symbolic remote HEADs (`origin/HEAD`) are dropped as noise.
+fn parse_git_log_refs(decoration: &str) -> Vec<GitLogRef> {
+    let mut refs = Vec::new();
+    for raw in decoration.split(", ") {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let (raw, is_head) = match raw.strip_prefix("HEAD -> ") {
+            Some(target) => (target, true),
+            None => (raw, false),
+        };
+        let raw = raw.strip_prefix("tag: ").unwrap_or(raw);
+        let (name, kind) = if raw == "HEAD" {
+            ("HEAD", GitLogRefKind::Head)
+        } else if let Some(name) = raw.strip_prefix("refs/heads/") {
+            (name, GitLogRefKind::Local)
+        } else if let Some(name) = raw.strip_prefix("refs/remotes/") {
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            (name, GitLogRefKind::Remote)
+        } else if let Some(name) = raw.strip_prefix("refs/tags/") {
+            (name, GitLogRefKind::Tag)
+        } else {
+            // refs/stash and other namespaces are not graph labels.
+            continue;
+        };
+        refs.push(GitLogRef {
+            name: name.to_string(),
+            kind,
+            is_head,
+        });
+    }
+    // HEAD's own branch leads, then local, remote, tags — SourceTree order.
+    refs.sort_by_key(|r| {
+        (
+            !r.is_head,
+            match r.kind {
+                GitLogRefKind::Head => 0,
+                GitLogRefKind::Local => 1,
+                GitLogRefKind::Remote => 2,
+                GitLogRefKind::Tag => 3,
+            },
+        )
+    });
+    refs
 }
 
 #[derive(Debug, Serialize)]
@@ -6034,7 +6108,13 @@ pub async fn git_log(
     let mut args = vec![
         "log".to_string(),
         limit_str,
-        format!("--format=__COMMIT__%x00%h%x00%H%x00%an%x00%aI%n%B%n{MESSAGE_END_MARKER}"),
+        // Date order keeps every child above its parents (the graph needs it)
+        // while staying close to the default chronological listing.
+        "--date-order".to_string(),
+        "--decorate=full".to_string(),
+        format!(
+            "--format=__COMMIT__%x00%h%x00%H%x00%an%x00%aI%x00%P%x00%D%n%B%n{MESSAGE_END_MARKER}"
+        ),
     ];
     if with_files {
         args.push("--raw".to_string());
@@ -6095,8 +6175,8 @@ pub async fn git_log(
                 entries.push(entry.finish());
             }
 
-            let parts: Vec<&str> = meta.splitn(4, '\0').collect();
-            if parts.len() == 4 {
+            let parts: Vec<&str> = meta.splitn(6, '\0').collect();
+            if parts.len() == 6 {
                 current = Some(GitLogEntryBuilder::new(parts));
                 reading_message = true;
             } else {
@@ -6430,6 +6510,8 @@ struct GitLogEntryBuilder {
     date: String,
     message: String,
     files: GitLogFilesBuilder,
+    parents: Vec<String>,
+    refs: Vec<GitLogRef>,
 }
 
 impl GitLogEntryBuilder {
@@ -6441,6 +6523,8 @@ impl GitLogEntryBuilder {
             date: parts[3].to_string(),
             message: String::new(),
             files: GitLogFilesBuilder::default(),
+            parents: parts[4].split_whitespace().map(str::to_string).collect(),
+            refs: parse_git_log_refs(parts[5]),
         }
     }
 
@@ -6468,6 +6552,8 @@ impl GitLogEntryBuilder {
             message: self.message,
             files: self.files.files,
             pushed: None,
+            parents: self.parents,
+            refs: self.refs,
         }
     }
 }
@@ -7244,6 +7330,61 @@ mod tests {
             );
         }
         assert!(!result.has_upstream, "no remotes → has_upstream=false");
+    }
+
+    #[test]
+    fn parse_git_log_refs_classifies_and_orders_decorations() {
+        let refs = parse_git_log_refs(
+            "tag: refs/tags/v1, refs/remotes/origin/main, refs/remotes/origin/HEAD, \
+             refs/heads/origin/x, HEAD -> refs/heads/main, refs/stash",
+        );
+        let got: Vec<(&str, &GitLogRefKind, bool)> = refs
+            .iter()
+            .map(|r| (r.name.as_str(), &r.kind, r.is_head))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("main", &GitLogRefKind::Local, true),
+                ("origin/x", &GitLogRefKind::Local, false),
+                ("origin/main", &GitLogRefKind::Remote, false),
+                ("v1", &GitLogRefKind::Tag, false),
+            ]
+        );
+        assert_eq!(parse_git_log_refs("HEAD")[0].kind, GitLogRefKind::Head);
+        assert!(parse_git_log_refs("").is_empty());
+    }
+
+    #[tokio::test]
+    async fn git_log_reports_parents_and_refs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        let c1 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        git_run(p, &["tag", "v2"]);
+
+        let result = git_log(
+            p.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            Some(false),
+        )
+        .await
+        .expect("git_log");
+
+        let head = &result.entries[0];
+        assert_eq!(head.parents, vec![c1.clone()]);
+        assert_eq!(head.refs.len(), 2);
+        assert!(head.refs[0].is_head && head.refs[0].name == "main");
+        assert_eq!(head.refs[1].kind, GitLogRefKind::Tag);
+        assert!(result.entries[1].parents.is_empty());
+        assert!(result.entries[1].refs.is_empty());
     }
 
     // A commit reachable from a remote-tracking ref reads "pushed"; commits ahead
