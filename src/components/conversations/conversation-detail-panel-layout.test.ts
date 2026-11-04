@@ -221,8 +221,10 @@ describe("ConversationDetailPanel new conversation layout", () => {
     )
     expect(messageInputSource).not.toContain("rounded-b-none")
 
+    // 锚点取底栏容器本身（其 class 在 hasFolderBranchPicker 条件之前），
+    // 否则切片会漏掉容器的 padding/圆角 class。
     const pickerStart = messageInputSource.indexOf(
-      "{hasFolderBranchPicker && ("
+      "justify-between gap-x-2 gap-y-1 rounded-b-xl px-2 pt-1"
     )
     // The picker row is the last thing inside the composer wrapper; the
     // server-file dialog that follows it sits outside, so it anchors the slice.
@@ -254,7 +256,8 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(pickerWrapper).not.toContain("border-t border-input")
     expect(pickerWrapper).not.toContain("bg-muted/30")
     expect(pickerWrapper).toContain("pt-1")
-    expect(pickerWrapper).not.toContain("py-1")
+    // 容器本身不能用 py-1；快捷消息开关 label 的 py-1 是点击热区，属有意保留。
+    expect(pickerWrapper).not.toContain("px-2 py-1")
     expect(pickerWrapper).toContain("rounded-b-xl")
     // The row only renders while attached below the composer, so the detached
     // `mt-1.5` else-branch is gone; it always takes the rounded-bottom box.
