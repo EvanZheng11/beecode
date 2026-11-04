@@ -6230,6 +6230,51 @@ pub async fn git_log(
         entries.push(entry.finish());
     }
 
+    // Decorations obey Git-version-dependent filtering rules (in particular,
+    // Git 2.34 can omit HEAD when --decorate-refs is used). Resolve HEAD with
+    // plumbing instead of inferring attached/detached state from `%D`.
+    let head = crate::process::tokio_command("git")
+        .args(["rev-parse", "HEAD", "--symbolic-full-name", "HEAD"])
+        .current_dir(&path)
+        .output()
+        .await;
+    if let Ok(head) = head {
+        if head.status.success() {
+            let text = String::from_utf8_lossy(&head.stdout);
+            let mut lines = text.lines();
+            if let (Some(hash), Some(symbolic)) = (lines.next(), lines.next()) {
+                for entry in &mut entries {
+                    entry.refs.retain(|r| r.kind != GitLogRefKind::Head);
+                    for r in &mut entry.refs {
+                        r.is_head = false;
+                    }
+                    if entry.full_hash != hash {
+                        continue;
+                    }
+                    let current = if let Some(branch) = symbolic.strip_prefix("refs/heads/") {
+                        // Replace the ordinary branch decoration with the
+                        // authoritative current one, first in the badge list.
+                        entry
+                            .refs
+                            .retain(|r| r.kind != GitLogRefKind::Local || r.name != branch);
+                        GitLogRef {
+                            name: branch.to_string(),
+                            kind: GitLogRefKind::Local,
+                            is_head: true,
+                        }
+                    } else {
+                        GitLogRef {
+                            name: "HEAD".to_string(),
+                            kind: GitLogRefKind::Head,
+                            is_head: false,
+                        }
+                    };
+                    entry.refs.insert(0, current);
+                }
+            }
+        }
+    }
+
     // Cover the full fetched range (skip + limit) so pushed status stays correct
     // on deeper pages — get_unpushed_hashes caps its rev-list to this count. The
     // all-branches path passes `author` through so the same filter narrows that
@@ -7625,6 +7670,11 @@ mod tests {
             !result.entries.is_empty(),
             "a detached HEAD still logs its history"
         );
+        assert_eq!(result.entries[0].refs[0].kind, GitLogRefKind::Head);
+        assert!(!result.entries[0].refs.iter().any(|r| r.is_head));
+        assert!(result.entries[1..]
+            .iter()
+            .all(|e| e.refs.iter().all(|r| r.kind != GitLogRefKind::Head)));
         for e in &result.entries {
             assert_eq!(
                 e.pushed, None,
