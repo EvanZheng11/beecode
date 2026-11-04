@@ -262,7 +262,7 @@ pub(crate) async fn lookup_credential(
         return Ok(None);
     }
     let remote_url = format!("{protocol}://{host}");
-    let account = match find_matching_account(&settings.accounts, &remote_url) {
+    let account = match find_matching_http_account(&settings.accounts, &remote_url) {
         Some(a) => a,
         None => return Ok(None),
     };
@@ -486,6 +486,26 @@ pub fn find_matching_account<'a>(
         .copied()
 }
 
+/// 凭据仅在账号与请求的 HTTP(S) 协议、host 和端口均匹配时提供。
+fn find_matching_http_account<'a>(
+    accounts: &'a [GitHubAccount],
+    remote_url: &str,
+) -> Option<&'a GitHubAccount> {
+    let remote = url::Url::parse(remote_url).ok()?;
+    if !matches!(remote.scheme(), "http" | "https") || !remote_url.contains("://") {
+        return None;
+    }
+    let host = extract_host(remote_url)?;
+    let mut matching = accounts.iter().filter(|account| {
+        url::Url::parse(&account.server_url).is_ok_and(|url| url.scheme() == remote.scheme())
+            && extract_host(&account.server_url).as_deref() == Some(host.as_str())
+    });
+    matching
+        .clone()
+        .find(|account| account.is_default)
+        .or_else(|| matching.next())
+}
+
 /// Load GitHub accounts from the database.
 pub async fn load_github_accounts(conn: &DatabaseConnection) -> Option<GitHubAccountsSettings> {
     let raw = app_metadata_service::get_value(conn, GITHUB_ACCOUNTS_KEY)
@@ -531,22 +551,61 @@ pub fn inject_stored_accounts(cmd: &mut tokio::process::Command, app_data_dir: &
     let Some(helper) = env.get("GIT_CONFIG_VALUE_0") else {
         return false;
     };
-    inject_credential_helper(cmd, helper);
-    true
+    inject_credential_helper(cmd, helper)
 }
 
-fn inject_credential_helper(cmd: &mut tokio::process::Command, helper: &str) {
-    // 清空旧 helper，禁止 askpass 回退和 HTTP 重定向，避免跨 host 发送凭据。
-    cmd.env("GIT_CONFIG_COUNT", "3")
+/// 查询配置时沿用待执行命令的目录及环境覆盖，不启动任何远程操作。
+fn git_in_command_context(cmd: &tokio::process::Command) -> std::process::Command {
+    let original = cmd.as_std();
+    let mut git = crate::process::std_command("git");
+    if let Some(cwd) = original.get_current_dir() {
+        git.current_dir(cwd);
+    }
+    for (key, value) in original.get_envs() {
+        if let Some(value) = value {
+            git.env(key, value);
+        } else {
+            git.env_remove(key);
+        }
+    }
+    git
+}
+
+fn inject_credential_helper(cmd: &mut tokio::process::Command, helper: &str) -> bool {
+    // 文件配置先于环境配置。先保存原 helper 链，按最后一次空值 reset 截断，
+    // 再配置 reset → BeeCode → 系统 helper，保证优先级和未命中回退。
+    let Ok(output) = git_in_command_context(cmd)
+        .args(["config", "--null", "--get-all", "credential.helper"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() && output.status.code() != Some(1) {
+        return false;
+    }
+    let Ok(config) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+    let mut helpers = Vec::new();
+    for value in config.split_terminator('\0') {
+        if value.is_empty() {
+            helpers.clear();
+        } else {
+            helpers.push(value);
+        }
+    }
+    cmd.env("GIT_CONFIG_COUNT", (helpers.len() + 2).to_string())
         .env("GIT_CONFIG_KEY_0", "credential.helper")
         .env("GIT_CONFIG_VALUE_0", "")
         .env("GIT_CONFIG_KEY_1", "credential.helper")
         .env("GIT_CONFIG_VALUE_1", helper)
-        .env("GIT_CONFIG_KEY_2", "http.followRedirects")
-        .env("GIT_CONFIG_VALUE_2", "false")
         .env("GIT_ASKPASS", "false")
-        .env("SSH_ASKPASS", "false")
         .env("GIT_TERMINAL_PROMPT", "0");
+    for (index, value) in helpers.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{}", index + 2), "credential.helper")
+            .env(format!("GIT_CONFIG_VALUE_{}", index + 2), value);
+    }
+    true
 }
 
 /// 显式输入的凭据仅响应指定 URL 的协议与 authority，store/erase 不持久化。
@@ -588,7 +647,9 @@ done
 [ "$protocol" = "$CODEG_GIT_PROTOCOL" ] && [ "$host" = "$CODEG_GIT_HOST" ] || exit 0
 printf 'username=%s\npassword=%s\n' "$CODEG_GIT_USERNAME" "$CODEG_GIT_PASSWORD"
 }; f"#;
-    inject_credential_helper(cmd, helper);
+    if !inject_credential_helper(cmd, helper) {
+        return;
+    }
     cmd.env("CODEG_GIT_PROTOCOL", url.scheme())
         .env("CODEG_GIT_HOST", authority)
         .env("CODEG_GIT_USERNAME", username)
@@ -606,7 +667,7 @@ pub async fn try_inject_for_repo(
     try_inject_for_repo_remote(cmd, repo_path, None, conn, app_data_dir).await
 }
 
-/// 保留 remote 参数以兼容现有调用；凭据按 Git 实际请求匹配。
+/// 先检查操作涉及的 remote 是否有可用账号；实际凭据仍由 Git 请求 host 决定。
 pub async fn try_inject_for_repo_remote(
     cmd: &mut tokio::process::Command,
     repo_path: &str,
@@ -614,13 +675,44 @@ pub async fn try_inject_for_repo_remote(
     conn: &DatabaseConnection,
     app_data_dir: &Path,
 ) -> bool {
-    let _ = (repo_path, remote_name);
-    match load_github_accounts(conn).await {
-        Some(settings) if !settings.accounts.is_empty() => {
-            inject_stored_accounts(cmd, app_data_dir)
+    let Some(settings) = load_github_accounts(conn).await else {
+        return false;
+    };
+    let mut query = tokio::process::Command::from(git_in_command_context(cmd));
+    query.current_dir(repo_path);
+    let all = cmd.as_std().get_args().any(|arg| arg == "--all");
+    if all {
+        query.args(["remote", "-v"]);
+    } else if cmd.as_std().get_args().any(|arg| arg == "push") {
+        query.args([
+            "remote",
+            "get-url",
+            "--push",
+            "--all",
+            remote_name.unwrap_or("origin"),
+        ]);
+    } else {
+        query.args(["ls-remote", "--get-url"]);
+        if let Some(remote) = remote_name {
+            query.arg(remote);
         }
-        _ => false,
     }
+    let Ok(output) = query.output().await else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let urls = String::from_utf8_lossy(&output.stdout);
+    let matched = urls.lines().any(|line| {
+        let candidate = if all {
+            line.split_whitespace().nth(1).unwrap_or("")
+        } else {
+            line
+        };
+        find_matching_http_account(&settings.accounts, candidate).is_some()
+    });
+    matched && inject_stored_accounts(cmd, app_data_dir)
 }
 
 /// Clone 同样按 Git 实际请求的 host 查询账号。
@@ -630,15 +722,72 @@ pub async fn try_inject_for_url(
     conn: &DatabaseConnection,
     app_data_dir: &Path,
 ) -> bool {
-    if !clone_url.starts_with("https://") && !clone_url.starts_with("http://") {
+    let Some(settings) = load_github_accounts(conn).await else {
         return false;
-    }
-    try_inject_for_repo_remote(cmd, "", None, conn, app_data_dir).await
+    };
+    find_matching_http_account(&settings.accounts, clone_url).is_some()
+        && inject_stored_accounts(cmd, app_data_dir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scoped_credentials_preserve_system_fallback_and_reset_order() {
+        use tokio::io::AsyncWriteExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("gitconfig");
+        std::fs::write(&config, "[credential]\n helper = \"!f() { echo username=discarded; echo password=discarded; }; f\"\n helper =\n helper = \"!f() { echo username=sys-user; echo password=sys-fake; }; f\"\n").unwrap();
+        for (host, expected) in [
+            ("GIT.example:443", "codeg-fake"),
+            ("unknown.example", "sys-fake"),
+        ] {
+            let mut cmd = tokio::process::Command::new("git");
+            cmd.env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .env("HOME", tmp.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", &config)
+                .env("SSH_ASKPASS", "/unchanged-ssh-askpass")
+                .current_dir(tmp.path())
+                .args(["credential", "fill"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            inject_credentials_for_url(
+                &mut cmd,
+                "https://GIT.example:443/repo",
+                "codeg-user",
+                "codeg-fake",
+            );
+            let ssh_askpass_unchanged = cmd.as_std().get_envs().any(|(key, value)| {
+                key == "SSH_ASKPASS"
+                    && value == Some(std::ffi::OsStr::new("/unchanged-ssh-askpass"))
+            });
+            let mut child = cmd.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("protocol=https\nhost={host}\n\n").as_bytes())
+                .await
+                .unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains(&format!("password={expected}"))
+            );
+            if host == "unknown.example" {
+                assert!(ssh_askpass_unchanged);
+            }
+        }
+    }
 
     #[test]
     fn scoped_credentials_reject_noncanonical_url_and_protocol_newlines() {
@@ -670,6 +819,7 @@ mod tests {
             ("https", "other.example:8443", false),
             ("https", "git.example", false),
             ("http", "git.example:8443", false),
+            ("https", "GIT.example:443", false),
         ] {
             let mut cmd = tokio::process::Command::new("git");
             cmd.env_clear()
@@ -1153,6 +1303,14 @@ mod tests {
                     result,
                     Some((username.to_string(), token.to_string())),
                     "lookup_credential should resolve seeded github.com account"
+                );
+
+                assert!(
+                    lookup_credential(&data_dir, "http", "github.com")
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "HTTPS 账号不能响应 HTTP 请求"
                 );
 
                 // Negative case: an unseeded host must return Ok(None), never

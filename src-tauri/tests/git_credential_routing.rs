@@ -52,12 +52,17 @@ impl MockHttp {
                 }
                 let request = String::from_utf8(request).unwrap();
                 let authenticated = request.to_lowercase().contains("authorization: basic ");
+                let renamed = request.starts_with("GET /renamed/info/refs");
                 captured.lock().unwrap().push(request);
                 let response = if !authenticated {
                     "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=mock\r\n"
                         .to_string()
+                } else if renamed {
+                    let body = "001e# service=git-upload-pack\n00000000";
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-advertisement\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    continue;
                 } else if let Some(target) = &redirect {
-                    format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\n")
+                    format!("HTTP/1.1 301 Moved Permanently\r\nLocation: {target}\r\n")
                 } else {
                     "HTTP/1.1 404 Not Found\r\n".to_string()
                 };
@@ -115,6 +120,95 @@ fn isolated_git(repo: &std::path::Path) -> tokio::process::Command {
 }
 
 #[tokio::test]
+async fn unmatched_urls_and_ssh_keep_original_environment_while_fetch_all_can_match() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let data = tmp.path().join("data");
+    std::fs::create_dir(&repo).unwrap();
+    let db = codeg_lib::db::init_database(&data, "test").await.unwrap();
+    let accounts = serde_json::json!({"accounts": [
+        {"id":"a", "server_url":"https://known.example", "username":"alice", "scopes":[], "is_default":true, "created_at":""}
+    ]});
+    app_metadata_service::upsert_value(&db.conn, "github_accounts", &accounts.to_string())
+        .await
+        .unwrap();
+    for url in [
+        "git@known.example:repo",
+        "https://unknown.example/repo",
+        "http://known.example/repo",
+    ] {
+        let mut cmd = isolated_git(&repo);
+        assert!(
+            !codeg_lib::git_credential::try_inject_for_url(&mut cmd, url, &db.conn, &data).await
+        );
+        assert!(!cmd
+            .as_std()
+            .get_envs()
+            .any(|(key, _)| key == "GIT_CONFIG_COUNT"));
+    }
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["remote", "add", "origin", "git@known.example:repo"],
+    ] {
+        assert!(isolated_git(&repo)
+            .args(args)
+            .output()
+            .await
+            .unwrap()
+            .status
+            .success());
+    }
+    let mut cmd = isolated_git(&repo);
+    cmd.args(["fetch", "--all"])
+        .env("SSH_ASKPASS", "/preserved");
+    assert!(
+        !try_inject_for_repo_remote(&mut cmd, repo.to_str().unwrap(), None, &db.conn, &data).await
+    );
+    assert!(cmd
+        .as_std()
+        .get_envs()
+        .any(|(key, value)| key == "SSH_ASKPASS"
+            && value == Some(std::ffi::OsStr::new("/preserved"))));
+    assert!(isolated_git(&repo)
+        .args([
+            "remote",
+            "add",
+            "upstream",
+            "https://KNOWN.example:443/repo"
+        ])
+        .output()
+        .await
+        .unwrap()
+        .status
+        .success());
+    assert!(
+        try_inject_for_repo_remote(&mut cmd, repo.to_str().unwrap(), None, &db.conn, &data).await
+    );
+}
+
+#[tokio::test]
+async fn same_host_rename_redirect_remains_usable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = MockHttp::new(Some("/renamed/info/refs?service=git-upload-pack".into()));
+    let url = format!("http://127.0.0.1:{}/old", server.port);
+    let mut cmd = isolated_git(tmp.path());
+    cmd.args(["ls-remote", &url]);
+    codeg_lib::git_credential::inject_credentials_for_url(&mut cmd, &url, "alice", "fake-a");
+    let output = cmd.output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.starts_with("GET /renamed/info/refs")));
+}
+
+#[tokio::test]
 async fn stored_credentials_follow_upstream_pushurl_and_fetch_all_without_cross_host_leaks() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -126,7 +220,9 @@ async fn stored_credentials_follow_upstream_pushurl_and_fetch_all_without_cross_
     let first_url = format!("http://127.0.0.1:{}/repo", first.port);
     let second_url = format!("http://localhost:{}/repo", second.port);
     let unrelated_url = format!("http://127.0.0.1:{}/repo", unrelated.port);
-    let redirect = MockHttp::new(Some(second_url.clone()));
+    let redirect = MockHttp::new(Some(format!(
+        "{second_url}/info/refs?service=git-upload-pack"
+    )));
     let redirect_url = format!("http://127.0.0.1:{}/repo", redirect.port);
     let db = codeg_lib::db::init_database(&data, "test").await.unwrap();
     let accounts = serde_json::json!({"accounts": [
@@ -208,26 +304,23 @@ async fn stored_credentials_follow_upstream_pushurl_and_fetch_all_without_cross_
         );
         assert!(!second.authenticated_as("alice", "fake-a"));
         assert!(!first.authenticated_as("bob", "fake-b"));
-        assert!(!unrelated
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|r| r.to_lowercase().contains("authorization:")));
+        assert!(!unrelated.authenticated_as("alice", "fake-a"));
+        assert!(!unrelated.authenticated_as("bob", "fake-b"));
+        assert!(args.contains(&"--all") == unrelated.authenticated_as("stale", "stale"));
         if args.contains(&"--all") {
             assert!(first.authenticated_as("alice", "fake-a"));
             assert!(redirect.authenticated_as("carol", "fake-c"));
             assert!(!second.authenticated_as("carol", "fake-c"));
-            assert_eq!(
+            assert!(
                 second
                     .requests
                     .lock()
                     .unwrap()
                     .iter()
                     .filter(|r| r.starts_with("GET /repo/info/refs"))
-                    .count(),
-                2,
-                "重定向不得抵达第二个 host"
+                    .count()
+                    > 2,
+                "重定向应抵达第二个 host，但不得携带源 token"
             );
         } else {
             assert!(
