@@ -142,7 +142,7 @@ impl Collector {
         }
         let started = Instant::now();
         let system = self.system.get_or_insert_with(System::new);
-        // 先读取进程树元信息，再仅对已归属进程采集 CPU/内存；不读取命令行或环境。
+        // 先读取进程树元信息，再仅对已归属进程采集 CPU/内存；不请求或保存参数、环境字段。
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
