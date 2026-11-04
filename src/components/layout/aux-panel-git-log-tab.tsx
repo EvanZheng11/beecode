@@ -2265,6 +2265,7 @@ export function GitLogTab() {
           <ContextMenuTrigger asChild>
             <ScrollArea
               className="min-h-0 flex-1"
+              x="scroll"
               onViewportRef={handleViewportRef}
             >
               {/* Full-bleed, virtualized commit timeline: one continuous rail,
@@ -2318,6 +2319,11 @@ export function GitLogTab() {
                                 "flex",
                                 graphRow ? "ps-1 pe-2" : "px-2"
                               )}
+                              style={
+                                graphRow
+                                  ? { minWidth: graphWidth + 240 }
+                                  : undefined
+                              }
                             >
                               {graphRow ? (
                                 <GitLogGraphCell

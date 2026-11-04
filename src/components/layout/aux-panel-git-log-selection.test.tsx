@@ -10,7 +10,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { useEffect, type ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { GitLogTab } from "./aux-panel-git-log-tab"
+import { GitLogTab, saveSelection } from "./aux-panel-git-log-tab"
 import enMessages from "@/i18n/messages/en.json"
 import type { GitBranchList, GitLogEntry } from "@/lib/types"
 
@@ -193,6 +193,47 @@ describe("Commits tab branch query", () => {
       false,
       false,
     ])
+  })
+
+  it("shows branch tips, tags and the current HEAD alongside the commit graph", async () => {
+    state.gitLog.mockResolvedValue({
+      entries: [
+        {
+          ...COMMIT,
+          parents: [],
+          refs: [
+            { name: "mainA", kind: "local", is_head: true },
+            { name: "origin/mainA", kind: "remote", is_head: false },
+            { name: "v1.0", kind: "tag", is_head: false },
+          ],
+        },
+      ],
+    })
+    const { container } = renderTab()
+    expect(
+      await screen.findByTitle("Current branch (HEAD): mainA")
+    ).toBeVisible()
+    expect(screen.getByTitle("Remote branch: origin/mainA")).toBeVisible()
+    expect(screen.getByTitle("Tag: v1.0")).toBeVisible()
+    const graph = container.querySelector('[data-slot="git-log-graph"]')
+    expect(graph).not.toBeNull()
+    expect(graph?.querySelector('circle[r="4.5"]')).not.toBeNull()
+  })
+
+  it("keeps decorations but hides disconnected graph lanes under an author filter", async () => {
+    saveSelection(state.folder.path, { branch: "HEAD", author: "Alice" })
+    state.gitLog.mockResolvedValue({
+      entries: [
+        {
+          ...COMMIT,
+          parents: ["a-parent-not-in-the-filter"],
+          refs: [{ name: "v1.0", kind: "tag", is_head: false }],
+        },
+      ],
+    })
+    const { container } = renderTab()
+    expect(await screen.findByTitle("Tag: v1.0")).toBeVisible()
+    expect(container.querySelector('[data-slot="git-log-graph"]')).toBeNull()
   })
 
   it("ignores an older branch refresh that omits the saved branch", async () => {

@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils"
 const LANE_WIDTH = 12
 const LANE_PADDING = 7
 const CURVE_HEIGHT = 14
-const MAX_VISIBLE_LANES = 8
 const MAX_VISIBLE_REFS = 3
 
 const LANE_COLORS = [
@@ -28,7 +27,7 @@ const laneColor = (color: number) => LANE_COLORS[color % LANE_COLORS.length]
 const laneX = (lane: number) => LANE_PADDING + lane * LANE_WIDTH
 
 export function graphColumnWidth(laneCount: number): number {
-  const lanes = Math.min(Math.max(laneCount, 1), MAX_VISIBLE_LANES)
+  const lanes = Math.max(laneCount, 1)
   return LANE_PADDING * 2 + (lanes - 1) * LANE_WIDTH
 }
 
@@ -75,6 +74,7 @@ export function GitLogGraphCell({
   const bends = row.outgoing.filter((edge) => edge.to !== edge.from)
   return (
     <div
+      data-slot="git-log-graph"
       className="relative shrink-0 self-stretch overflow-hidden"
       style={{ width }}
       aria-hidden
@@ -158,7 +158,7 @@ export function GitLogRefBadges({ refs }: { refs: readonly GitLogRef[] }) {
     return t("refLocalBranch")
   }
   return (
-    <>
+    <span className="inline-flex min-w-0 max-w-[60%] items-center gap-1">
       {visible.map((ref) => {
         const Icon =
           ref.kind === "tag" ? Tag : ref.kind === "remote" ? Cloud : GitBranch
@@ -168,7 +168,7 @@ export function GitLogRefBadges({ refs }: { refs: readonly GitLogRef[] }) {
             key={`${ref.kind}:${ref.name}`}
             title={`${describe(ref)}: ${ref.name}`}
             className={cn(
-              "inline-flex max-w-32 shrink-0 items-center gap-0.5 rounded border px-1 text-3xs font-medium leading-4",
+              "inline-flex min-w-0 max-w-32 items-center gap-0.5 rounded border px-1 text-3xs font-medium leading-4",
               current
                 ? "border-primary bg-primary text-primary-foreground"
                 : ref.kind === "tag"
@@ -193,6 +193,6 @@ export function GitLogRefBadges({ refs }: { refs: readonly GitLogRef[] }) {
           +{hidden.length}
         </span>
       ) : null}
-    </>
+    </span>
   )
 }
