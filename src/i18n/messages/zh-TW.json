@@ -7725,6 +7725,10 @@
   },
   "ResourceMonitor": {
     "title": "資源監控",
+    "confirmTitle": "確認行程操作？",
+    "confirmDescription": "將對 {name}（PID {pid}）執行「{action}」。這可能中斷進行中的工作或服務，未儲存的資料可能遺失。",
+    "cancel": "取消",
+    "confirm": "確認執行",
     "enableDescription": "即時查看應用程式及其啟動的行程的 CPU、記憶體與行程數。",
     "overheadNote": "低開銷：僅在本頁開啟且可見時每 2 秒按需取樣；關閉開關不再取樣，頁面隱藏時暫停。",
     "saving": "儲存中",

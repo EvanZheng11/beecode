@@ -7725,6 +7725,10 @@
   },
   "ResourceMonitor": {
     "title": "资源监控",
+    "confirmTitle": "确认进程操作？",
+    "confirmDescription": "将对 {name}（PID {pid}）执行“{action}”。这可能中断正在进行的任务或服务，未保存的数据可能丢失。",
+    "cancel": "取消",
+    "confirm": "确认执行",
     "enableDescription": "实时查看应用及其启动的进程的 CPU、内存和进程数。",
     "overheadNote": "低开销：仅在本页打开且可见时每 2 秒按需采样；关闭开关不再采样，页面隐藏时暂停。",
     "saving": "保存中",

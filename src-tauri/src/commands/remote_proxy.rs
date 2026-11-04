@@ -390,20 +390,26 @@ pub async fn remote_http_call(
             AppCommandError::not_found(format!("Remote connection {connection_id} not found"))
         })?;
 
-    let url = format!(
-        "{}/api/{}",
-        conn.base_url.trim_end_matches('/'),
-        command.trim_start_matches('/')
-    );
+    // 监控 REST 路由在远程桌面模式也必须指向远端，而不是本机。
+    let (method, path) = match command.as_str() {
+        "get_resource_monitor_settings" => (reqwest::Method::GET, "resource-monitor/settings"),
+        "set_resource_monitor_enabled" => (reqwest::Method::PUT, "resource-monitor/settings"),
+        "get_resource_monitor_snapshot" => (reqwest::Method::GET, "resource-monitor/snapshot"),
+        "resource_monitor_process_action" => (reqwest::Method::POST, "resource-monitor/action"),
+        _ => (reqwest::Method::POST, command.trim_start_matches('/')),
+    };
+    let url = format!("{}/api/{}", conn.base_url.trim_end_matches('/'), path);
 
     let body = args.unwrap_or(Value::Object(serde_json::Map::new()));
-
+    let has_body = method != reqwest::Method::GET;
     let mut request = proxy
         .http
-        .post(&url)
+        .request(method, &url)
         .bearer_auth(conn.token.trim())
-        .headers(conn.headers.to_header_map())
-        .json(&body);
+        .headers(conn.headers.to_header_map());
+    if has_body {
+        request = request.json(&body);
+    }
     // Per-request override beats the client-wide 30s default. Used by the
     // ACP probe path (`describeAgentOptions`) whose backend deadline is
     // longer than 30s — without this override, reqwest would abort here

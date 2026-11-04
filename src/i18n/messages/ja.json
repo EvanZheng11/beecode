@@ -7724,6 +7724,10 @@
     }
   },
   "ResourceMonitor": {
+    "confirmTitle": "Confirm process action?",
+    "confirmDescription": "Apply {action} to {name} (PID {pid})? This may interrupt a running task or service and lose unsaved data.",
+    "cancel": "Cancel",
+    "confirm": "Confirm action",
     "title": "Resource Monitor",
     "enableDescription": "Show live CPU, memory and process usage for the app and the processes it started.",
     "overheadNote": "Low overhead: samples on demand every 2 seconds only while this page is open and visible. Turning it off stops sampling; hiding the page pauses it.",

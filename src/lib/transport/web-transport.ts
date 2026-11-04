@@ -1,4 +1,5 @@
 import { WS_READY_CHANNEL } from "./constants"
+import { commandRoute } from "./command-route"
 import type { AttachTransportHost } from "./web-event-stream"
 import { WebEventStream } from "./web-event-stream"
 import type {
@@ -179,13 +180,14 @@ export class WebTransport implements Transport {
     )
     let res: Response
     try {
-      res = await fetch(`${this.baseUrl}/api/${command}`, {
-        method: "POST",
+      const route = commandRoute(command)
+      res = await fetch(`${this.baseUrl}/api/${route.path}`, {
+        method: route.method,
         headers: {
           "Content-Type": "application/json",
           ...codegAuthHeaders(token),
         },
-        body: JSON.stringify(args ?? {}),
+        body: route.method === "GET" ? undefined : JSON.stringify(args ?? {}),
         signal: controller.signal,
       })
     } catch (err) {
