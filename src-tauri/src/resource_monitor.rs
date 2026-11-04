@@ -142,12 +142,8 @@ impl Collector {
         }
         let started = Instant::now();
         let system = self.system.get_or_insert_with(System::new);
-        // 先读取进程树元信息，再仅对已归属进程采集 CPU/内存；不读取命令行或环境。
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().without_tasks(),
-        );
+        // 先读取进程树元信息，再仅对已归属进程采集 CPU/内存；不请求或保存参数、环境字段。
+        let tree = process_tree(system);
         let mut owners = registry().lock().unwrap_or_else(|e| e.into_inner());
         owners.retain(|pid, owner| identity(*pid) == Some(owner.start));
         let own_pid = std::process::id();
@@ -168,20 +164,18 @@ impl Collector {
         // ponytail: 首次发现按树深扫描进程表；大规模进程树再改父 PID 索引。
         loop {
             let mut added = Vec::new();
-            for (pid, process) in system.processes() {
-                let pid = pid.as_u32();
+            for (pid, parent_pid, name) in &tree {
+                let pid = *pid;
                 if owners.contains_key(&pid) {
                     continue;
                 }
-                let Some(parent) = process.parent().and_then(|p| owners.get(&p.as_u32())) else {
+                let Some(parent_pid) = parent_pid else {
                     continue;
                 };
-                let parent_pid = match process.parent() {
-                    Some(pid) => pid.as_u32(),
-                    None => continue,
+                let Some(parent) = owners.get(parent_pid) else {
+                    continue;
                 };
-                if let Some(start) = verified_child(pid, parent_pid, parent.start) {
-                    let name = process.name().to_string_lossy();
+                if let Some(start) = verified_child(pid, *parent_pid, parent.start) {
                     let frontend = name.starts_with("WebKit")
                         || name.contains("WebContent")
                         || name.contains("msedgewebview");
@@ -222,6 +216,11 @@ impl Collector {
                 .with_memory(),
         );
         let mut snapshot = Snapshot::empty(true);
+        if tree.is_empty() {
+            snapshot
+                .warnings
+                .push("无法枚举进程树，当前仅展示已登记进程。".into());
+        }
         snapshot.sampled_at = chrono::Utc::now().timestamp_millis().max(0) as u64;
         snapshot.warnings.push("仅包含本运行实例已登记或已观察到的后代；在首次观察前已脱离父进程的服务可能缺失。未记录可信重启配置的进程不可重启。CPU 百分比按单逻辑核心计，首次采样为零。".into());
         #[cfg(not(target_os = "linux"))]
@@ -288,6 +287,88 @@ impl Collector {
         self.cached = Some((Instant::now(), snapshot.clone()));
         snapshot
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_tree(system: &mut System) -> Vec<(u32, Option<u32>, String)> {
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    system
+        .processes()
+        .iter()
+        .map(|(pid, process)| {
+            (
+                pid.as_u32(),
+                process.parent().map(|pid| pid.as_u32()),
+                process.name().to_string_lossy().into_owned(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn process_tree(_: &mut System) -> Vec<(u32, Option<u32>, String)> {
+    // macOS 的 sysinfo 全机刷新会内部读取参数块；仅用 BSD 元信息发现进程树。
+    // 资源刷新仍只对已归属 PID 执行，不保留或返回命令行及环境字段。
+    // ponytail: 已退出 PID 的库内缓存于关闭时清空；长期高频启停再升级为可裁剪采集器。
+    const PROC_ALL_PIDS: u32 = 1;
+    let bytes = unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
+    if bytes <= 0 || bytes > 16 * 1024 * 1024 {
+        return Vec::new();
+    }
+    let mut pids = vec![0 as libc::pid_t; bytes as usize / std::mem::size_of::<libc::pid_t>() + 64];
+    let read = unsafe {
+        libc::proc_listpids(
+            PROC_ALL_PIDS,
+            0,
+            pids.as_mut_ptr().cast(),
+            std::mem::size_of_val(pids.as_slice()) as i32,
+        )
+    };
+    if read <= 0 {
+        return Vec::new();
+    }
+    pids.truncate(read as usize / std::mem::size_of::<libc::pid_t>());
+    pids.into_iter()
+        .filter_map(|pid| {
+            if pid <= 0 {
+                return None;
+            }
+            let info = mac_process_info(pid as u32)?;
+            let name: Vec<u8> = info
+                .pbi_name
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect();
+            Some((
+                pid as u32,
+                Some(info.pbi_ppid),
+                String::from_utf8_lossy(&name).into_owned(),
+            ))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn mac_process_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+    let pid = i32::try_from(pid).ok()?;
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    // 缓冲区大小与 BSD 结构一致，只有完整返回后才使用其中的父 PID 与启动时间。
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    (read == size).then_some(info)
 }
 
 fn collector() -> &'static Mutex<Collector> {
@@ -470,7 +551,20 @@ fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
     (current_parent == parent && identity(parent) == Some(parent_start)).then_some(start)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
+    let info = mac_process_info(pid)?;
+    if info.pbi_ppid != parent || identity(parent) != Some(parent_start) {
+        return None;
+    }
+    Some(
+        info.pbi_start_tvsec
+            .saturating_mul(1_000_000)
+            .saturating_add(info.pbi_start_tvusec),
+    )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
     // 这些平台的后代仅展示，控制只允许已登记并持有原始句柄的终端。
     if identity(parent) != Some(parent_start) {
