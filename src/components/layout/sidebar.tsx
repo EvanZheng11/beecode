@@ -108,6 +108,7 @@ import {
 } from "@/components/conversations/sidebar-tag-filter"
 import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
+import { SessionDirectoryButton } from "./session-directory-dialog"
 import { cn } from "@/lib/utils"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat row.
@@ -475,6 +476,7 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
+          <SessionDirectoryButton />
           {/* Narrow the list to conversations carrying chosen tags. A funnel,
               unlike the view-options eye: this one filters. */}
           <SidebarTagFilterButton

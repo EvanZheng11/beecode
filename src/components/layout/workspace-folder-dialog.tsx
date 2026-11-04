@@ -63,6 +63,7 @@ import { isDesktop, openFileDialog } from "@/lib/platform"
 import { parentFsPath } from "@/lib/path-utils"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toErrorMessage } from "@/lib/app-error"
+import { setFoldersArchived } from "@/lib/folder-archive"
 import {
   basenameOf,
   linkNameKey,
@@ -107,7 +108,7 @@ export function WorkspaceFolderDialog({
   open,
   onOpenChange,
   folder,
-  defaultGroupId = null,
+  defaultGroupId,
   onFolderOpened,
 }: WorkspaceFolderDialogProps) {
   const t = useTranslations("Folder.workspaceDialog")
@@ -124,7 +125,8 @@ export function WorkspaceFolderDialog({
   const [rootPath, setRootPath] = useState("")
   const [browserBusy, setBrowserBusy] = useState(false)
   const [openingRoot, setOpeningRoot] = useState(false)
-  const [groupId, setGroupId] = useState<number | null>(defaultGroupId)
+  const [groupId, setGroupId] = useState<number | null>(defaultGroupId ?? null)
+  const [groupChanged, setGroupChanged] = useState(defaultGroupId !== undefined)
   const openingRootRef = useRef(false)
   const openedRootRef = useRef<{ path: string; detail: FolderDetail } | null>(
     null
@@ -162,7 +164,8 @@ export function WorkspaceFolderDialog({
     setView(folder ? "links" : "pick-root")
     setRootFolder(folder ?? null)
     setRootPath(folder?.path ?? "")
-    setGroupId(defaultGroupId)
+    setGroupId(defaultGroupId ?? null)
+    setGroupChanged(defaultGroupId !== undefined)
     openedRootRef.current = null
     setTargetPath("")
     setPickedTargets([])
@@ -205,10 +208,12 @@ export function WorkspaceFolderDialog({
             ? openedRootRef.current.detail
             : await openFolder(path)
         openedRootRef.current = { path, detail }
-        if (detail.group_id !== groupId) {
-          await setFolderGroup(detail.id, groupId)
+        const targetGroup = groupChanged ? groupId : detail.group_id
+        if (detail.group_id !== targetGroup) {
+          await setFolderGroup(detail.id, targetGroup)
         }
-        const grouped = { ...detail, group_id: groupId }
+        setFoldersArchived([detail.path], false)
+        const grouped = { ...detail, group_id: targetGroup }
         openedRootRef.current = null
         setRootFolder(grouped)
         setView("links")
@@ -220,7 +225,7 @@ export function WorkspaceFolderDialog({
         setOpeningRoot(false)
       }
     },
-    [openFolder, setFolderGroup, groupId, t]
+    [openFolder, setFolderGroup, groupId, groupChanged, t]
   )
 
   const handleConfirmRoot = useCallback(async () => {
@@ -439,9 +444,10 @@ export function WorkspaceFolderDialog({
               </label>
               <Select
                 value={groupId === null ? "none" : String(groupId)}
-                onValueChange={(value) =>
+                onValueChange={(value) => {
                   setGroupId(value === "none" ? null : Number(value))
-                }
+                  setGroupChanged(true)
+                }}
                 disabled={openingRoot}
               >
                 <SelectTrigger id="workspace-folder-group" className="min-w-40">

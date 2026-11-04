@@ -163,7 +163,7 @@ describe("WorkspaceFolderDialog — creation flow", () => {
     expect(onFolderOpened).toHaveBeenCalledWith(folder({ group_id: 42 }))
   })
 
-  it("removes an existing group when no group is selected", async () => {
+  it("preserves an existing group unless the selection was explicit", async () => {
     openFolder.mockResolvedValue(folder({ group_id: 42 }))
     const onFolderOpened = vi.fn()
     render(<Harness onFolderOpened={onFolderOpened} />)
@@ -171,8 +171,8 @@ describe("WorkspaceFolderDialog — creation flow", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
     })
-    expect(setFolderGroup).toHaveBeenCalledWith(7, null)
-    expect(onFolderOpened).toHaveBeenCalledWith(folder())
+    expect(setFolderGroup).not.toHaveBeenCalled()
+    expect(onFolderOpened).toHaveBeenCalledWith(folder({ group_id: 42 }))
   })
 
   it("retries a failed preselected group without opening the folder twice", async () => {
