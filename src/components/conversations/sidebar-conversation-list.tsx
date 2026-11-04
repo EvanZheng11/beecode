@@ -2,6 +2,10 @@
 
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
+  useMergedWorktreePaths,
+  visibleWorktreeFolders,
+} from "./sidebar-merged-worktrees"
+import {
   memo,
   useCallback,
   useEffect,
@@ -992,9 +996,14 @@ export function SidebarConversationList({
   const { zoomLevel } = useZoomLevel()
   const workspaceFolders = useAppWorkspaceStore((s) => s.folders)
   const archivedFolderPaths = useArchivedFolderPaths()
+  const mergedPaths = useMergedWorktreePaths(workspaceFolders)
   const folders = useMemo(
-    () => excludeArchivedFolders(workspaceFolders, archivedFolderPaths),
-    [workspaceFolders, archivedFolderPaths]
+    () =>
+      excludeArchivedFolders(
+        visibleWorktreeFolders(workspaceFolders, mergedPaths),
+        archivedFolderPaths
+      ),
+    [workspaceFolders, mergedPaths, archivedFolderPaths]
   )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)

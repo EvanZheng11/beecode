@@ -589,6 +589,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::git::git_search_authors),
         )
         .route(
+            "/git_list_merged_worktrees",
+            post(handlers::git::git_list_merged_worktrees),
+        )
+        .route(
             "/git_list_all_branches",
             post(handlers::git::git_list_all_branches),
         )

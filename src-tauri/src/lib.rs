@@ -1962,6 +1962,7 @@ mod tauri_app {
                 folders::git_rollback_file,
                 folders::git_add_files,
                 folders::git_list_all_branches,
+                folders::git_list_merged_worktrees,
                 folders::git_list_remotes,
                 folders::git_fetch_remote,
                 folders::git_add_remote,
