@@ -1967,7 +1967,7 @@
     "questionMcpRetryHint": "Combien de fois une question expirée est reposée (0-10). 0 désactive les tentatives.",
     "questionMcpAutoSelect": "Sélectionner la première option après expiration",
     "questionMcpAutoSelectHint": "Une fois l’attente et les tentatives épuisées, la première option est choisie pour que l’agent continue.",
-    "questionMcpInfiniteWait": "Les délais et nouvelles tentatives restent actifs sans sélection automatique. Le dernier formulaire attend votre réponse jusqu’à l’expiration de la requête hôte ou la fermeture de la connexion.",
+    "questionWaitStops": "Sans sélection automatique, l’agent attend votre réponse et repose la question selon le délai configuré. Si toutes les tentatives expirent, cette tâche s’arrête sans choisir de réponse ni poursuivre le travail.",
     "questionMcpSaveFailed": "Échec de l’enregistrement des réglages des questions : {message}",
     "loadFailed": "Échec du chargement : {message}"
   },

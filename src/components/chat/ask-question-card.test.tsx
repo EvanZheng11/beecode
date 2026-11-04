@@ -556,6 +556,18 @@ describe("AskQuestionCard 截止时间", () => {
     base: PendingQuestionState = single
   ): PendingQuestionState => ({ ...base, expires_at: expiresAt })
 
+  it("10 分钟期限的原生提问在 5 分钟后仍显示倒计时并接受回答", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+    const onAnswer = renderCard(withDeadline("2026-01-01T00:10:00.000Z"))
+    expect(screen.getByText("10:00")).toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(300_000))
+    expect(screen.getByText("05:00")).toBeInTheDocument()
+    expect(screen.getByText("Which approach?")).toBeInTheDocument()
+    expect(screen.getByRole("radio", { name: /Rewrite/ })).toBeEnabled()
+    expect(onAnswer).not.toHaveBeenCalled()
+  })
+
   it("按 expires_at 每秒更新，最后一分钟标红，到期后禁止延长", () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))

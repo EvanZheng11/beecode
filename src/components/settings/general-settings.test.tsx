@@ -464,6 +464,11 @@ describe("GeneralSettings", () => {
     renderSettings()
     const timeout = await screen.findByLabelText("Question MCP wait time")
     const retries = screen.getByLabelText("Question MCP retries")
+    expect(
+      screen.getByText(
+        "Auto-select is off: the agent waits for your answer and retries using the configured wait time. If all attempts time out, this task stops without choosing an answer or continuing."
+      )
+    ).toBeInTheDocument()
     expect(timeout).toBeEnabled()
     expect(retries).toBeEnabled()
     fireEvent.change(timeout, { target: { value: "12" } })
@@ -558,7 +563,7 @@ describe("GeneralSettings", () => {
   })
 
   /** 自动选择仅控制最后是否代答，计时和重提始终可配置。 */
-  it("关闭自动选择时仍启用计时和重提，并说明宿主期限", async () => {
+  it("关闭自动选择时仍启用计时和重提，并说明耗尽后停止任务", async () => {
     renderSettings()
 
     const timeout = await screen.findByLabelText("Question MCP wait time")
@@ -570,7 +575,7 @@ describe("GeneralSettings", () => {
     )
 
     expect(
-      await screen.findByText(/timed retries still apply/i)
+      await screen.findByText(/If all attempts time out, this task stops/i)
     ).toBeInTheDocument()
     await waitFor(() => expect(timeout).toBeEnabled())
     expect(retries).toBeEnabled()

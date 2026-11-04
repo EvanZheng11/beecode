@@ -5,7 +5,7 @@ import {
   CheckCheck,
   Cpu,
   FolderCog,
-  Infinity as InfinityIcon,
+  CircleStop,
   Loader2,
   MessageCircleQuestion,
   Palette,
@@ -782,8 +782,8 @@ export function GeneralSettings() {
             </SettingCard>
           ) : null}
           {questionDraft && !questionDraft.auto_select_first_on_timeout ? (
-            <SettingNote icon={InfinityIcon}>
-              {t("questionMcpInfiniteWait")}
+            <SettingNote icon={CircleStop}>
+              {t("questionWaitStops")}
             </SettingNote>
           ) : null}
         </SettingsSection>

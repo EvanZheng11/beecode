@@ -1264,7 +1264,7 @@ impl ConnectionManager {
                 NOTICE_PROMPT_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Err(AcpError::FeedbackDeferred);
             }
-            if s.turn_in_flight {
+            if s.turn_in_flight || s.pending_question.is_some() {
                 // Names the gate, not just the outcome: the linked path checks
                 // the same flag once before its side effects and again here, and
                 // the two lines share a module target with no file/line in the
@@ -1478,7 +1478,10 @@ impl ConnectionManager {
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
             let (already, in_flight) = {
                 let s = conn.state.read().await;
-                (s.conversation_id.is_some(), s.turn_in_flight)
+                (
+                    s.conversation_id.is_some(),
+                    s.turn_in_flight || s.pending_question.is_some(),
+                )
             };
             (
                 conn.state.clone(),
@@ -10820,6 +10823,32 @@ mod tests {
     }
 
     // --- ask_user_question: register / answer / cancel -------------------
+
+    #[tokio::test]
+    async fn pending_mcp_question_blocks_next_prompt_after_foreground_turn_ends() {
+        let mgr = ConnectionManager::new();
+        let mut commands = insert_live_connection(&mgr, "waiting", AgentType::ClaudeCode, None).await;
+        let reg = mgr
+            .register_question_with_timeout("waiting", q_spec(), Some(Duration::from_secs(600)))
+            .await
+            .unwrap();
+        let state = mgr.get_state("waiting").await.unwrap();
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "session".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert!(!state.read().await.turn_in_flight);
+        let prompt = || vec![PromptInputBlock::Text { text: "continue".into() }];
+        assert!(matches!(
+            mgr.send_prompt("waiting", prompt()).await,
+            Err(AcpError::TurnInProgress)
+        ));
+        assert!(commands.try_recv().is_err(), "待答时不能派出后续 prompt");
+        assert!(mgr.cancel_question("waiting", &reg.question_id).await);
+        mgr.send_prompt("waiting", prompt()).await.unwrap();
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
+    }
 
     fn q_spec() -> Vec<QuestionSpec> {
         vec![crate::acp::question::QuestionSpec {

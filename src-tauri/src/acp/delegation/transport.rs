@@ -512,6 +512,7 @@ pub struct BrokerResponse {
 pub enum BrokerAskError {
     Cancelled,
     Unavailable,
+    TimedOut,
 }
 
 /// 保留旧的 answers/declined 字段，仅在异常时附加可选 error。
@@ -1058,7 +1059,11 @@ mod tests {
 
     #[tokio::test]
     async fn ask_error_outcome_round_trips_over_broker_frames() {
-        for error in [BrokerAskError::Cancelled, BrokerAskError::Unavailable] {
+        for error in [
+            BrokerAskError::Cancelled,
+            BrokerAskError::Unavailable,
+            BrokerAskError::TimedOut,
+        ] {
             let outcome = BrokerAskOutcome {
                 answer: QuestionOutcome {
                     answers: vec![],

@@ -2030,9 +2030,16 @@ pub fn render_ask_result(outcome: &Value) -> Value {
 }
 
 fn render_ask_error(error: BrokerAskError) -> Value {
-    let hint = "No user answer was received. Do not infer an answer, choose defaults, \
+    let hint = if error == BrokerAskError::TimedOut {
+        "No user answer was received. Do not infer an answer, choose defaults, \
+         or continue steps that depend on this answer. The configured question \
+         wait and retries are exhausted. This task has been stopped. Do not \
+         retry the question or resume this task until the user sends a new instruction."
+    } else {
+        "No user answer was received. Do not infer an answer, choose defaults, \
                 or continue steps that depend on this answer. Wait for the user or \
-                ask the question again when available.";
+                ask the question again when available."
+    };
     json!({
         "content": [{ "type": "text", "text": hint }],
         "isError": true,
@@ -5519,6 +5526,20 @@ mod tests {
             assert!(!hint.contains("reasonable defaults"));
             assert!(!hint.contains("dismissed"));
         }
+    }
+
+    #[test]
+    fn render_ask_result_timeout_is_terminal_without_permission_to_retry() {
+        let rendered = render_ask_result(&json!({
+            "error": "timed_out", "declined": false, "answers": []
+        }));
+        assert_eq!(rendered["isError"], true);
+        assert_eq!(rendered["structuredContent"]["error"], "timed_out");
+        assert_eq!(rendered["structuredContent"]["answers"], json!([]));
+        let hint = rendered["structuredContent"]["hint"].as_str().unwrap();
+        assert!(hint.contains("This task has been stopped"));
+        assert!(hint.contains("Do not retry the question or resume this task"));
+        assert!(!hint.contains("ask the question again when available"));
     }
 
     #[test]

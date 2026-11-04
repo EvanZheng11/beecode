@@ -888,6 +888,7 @@ const ConversationTabView = memo(function ConversationTabView({
     null
   )
   const appendingQueuedIdRef = useRef<string | null>(null)
+  const waitingForAnswer = conn.pendingAskQuestion !== null
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -911,6 +912,8 @@ const ConversationTabView = memo(function ConversationTabView({
     // switched keeps the OLD agent's connection live at the same cwd until the
     // lifecycle reconnects — which, for a not-installed target, never happens.
     if (!connectionReady) return
+    // MCP 提问可跨越前台回合：connected 不代表已经收到用户答案。
+    if (waitingForAnswer) return
     if (runtimeSyncState === "awaiting_persist") return
     // 追加为实时反馈进行中：暂停自动 flush，等追加结束（成功清理或失败回队
     // 首后状态复位）再重新进入本 effect，恢复正常 FIFO 与 TurnBusyError 回退。
@@ -943,7 +946,13 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => clearTimeout(timer)
     // `connectionReady` subsumes connStatus, the connection's cwd and its agent,
     // so it is the only connection dependency this effect needs.
-  }, [connectionReady, runtimeSyncState, msgQueue.length, appendingQueuedId])
+  }, [
+    connectionReady,
+    waitingForAnswer,
+    runtimeSyncState,
+    msgQueue.length,
+    appendingQueuedId,
+  ])
 
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage

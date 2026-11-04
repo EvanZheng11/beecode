@@ -47,7 +47,7 @@ use crate::acp::delegation::types::{
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{
-    QuestionConfig, QuestionOutcome, QuestionRuntimeConfig, SessionQuestionAccess,
+    QuestionOutcome, QuestionRuntimeConfig, SessionQuestionAccess,
 };
 #[cfg(unix)]
 use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
@@ -564,8 +564,6 @@ impl DelegationListener {
                         &self.questions,
                         &parent_conn_id,
                         reg,
-                        &cfg,
-                        attempt + 1 == attempts,
                     )
                     .await
                     {
@@ -586,7 +584,7 @@ impl DelegationListener {
                                 "提问等待超时，重新注册问题"
                             );
                         }
-                        AskWaitResult::TimedOut => {
+                        AskWaitResult::TimedOut if cfg.auto_select_first_on_timeout => {
                             tracing::info!(
                                 parent_connection_id = %parent_conn_id,
                                 attempt = attempt + 1,
@@ -594,6 +592,12 @@ impl DelegationListener {
                             );
                             let outcome = build_first_option_outcome(&req.questions);
                             write_frame(conn, &ask_response(&outcome)?).await?;
+                            return Ok(());
+                        }
+                        AskWaitResult::TimedOut => {
+                            // 停止真实回合，不把未答当作拒答或授权，也不只依赖模型遵守提示。
+                            self.questions.stop_question_task(&parent_conn_id).await;
+                            write_frame(conn, &ask_error_response(BrokerAskError::TimedOut)?).await?;
                             return Ok(());
                         }
                     }
@@ -1448,8 +1452,6 @@ async fn wait_for_question_answer<C>(
     questions: &Arc<dyn SessionQuestionAccess>,
     parent_connection_id: &str,
     reg: crate::acp::question::RegisteredQuestion,
-    config: &QuestionConfig,
-    last_attempt: bool,
 ) -> AskWaitResult
 where
     C: AsyncReadExt + Unpin,
@@ -1464,9 +1466,7 @@ where
     // 期限变化订阅（延长/清空）。watch 会记住版本，“读取期限”与“开始等待”
     // 之间发生的延长也不会丢。
     let mut deadline_watch = deadline.as_ref().map(|d| d.subscribe());
-    // 没有期限时的兜底时长（理论上只有原生提问，MCP 提问必带期限）。
-    let fallback = std::time::Duration::from_secs(u64::from(config.wait_timeout_minutes) * 60);
-    let sleep = tokio::time::sleep(fallback);
+    let sleep = tokio::time::sleep(std::time::Duration::ZERO);
     tokio::pin!(sleep);
 
     let mut result = loop {
@@ -1498,23 +1498,6 @@ where
             _ = deadline_changed => continue,
         }
     };
-
-    if matches!(result, AskWaitResult::TimedOut)
-        && last_attempt
-        && !config.auto_select_first_on_timeout
-    {
-        // 重提耗尽后保留最后一张有效表单，不取消回答通道，也不替用户选择。
-        tracing::info!(
-            parent_connection_id,
-            question_id,
-            "提问重提已耗尽，保留表单继续等待用户回答"
-        );
-        // 最终无限等待：清空已失效的期限，前端不再显示倒计时。
-        questions
-            .clear_question_deadline(parent_connection_id, &question_id)
-            .await;
-        result = wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed).await;
-    }
 
     if matches!(result, AskWaitResult::TimedOut) {
         // 超时已经就绪时再无阻塞地取一次答案，覆盖 select 与取消之间的最短窗口。
@@ -2038,6 +2021,7 @@ mod tests {
         /// 被清空倒计时（最终转为无限等待）的提问 id。
         cleared: tokio::sync::Mutex<Vec<String>>,
         cancel_gate: tokio::sync::Mutex<Option<Arc<QuestionCancelGate>>>,
+        stopped: tokio::sync::Mutex<Vec<String>>,
     }
     #[async_trait]
     impl SessionQuestionAccess for StubQuestion {
@@ -2104,6 +2088,9 @@ mod tests {
         }
         async fn clear_question_deadline(&self, _parent_connection_id: &str, question_id: &str) {
             self.cleared.lock().await.push(question_id.to_string());
+        }
+        async fn stop_question_task(&self, parent_connection_id: &str) {
+            self.stopped.lock().await.push(parent_connection_id.to_string());
         }
     }
     impl StubQuestion {
@@ -3864,14 +3851,6 @@ mod tests {
             })
             .await;
             wait_for_question_registration(&questions, 1).await;
-            if final_wait {
-                tokio::task::yield_now().await;
-                tokio::time::advance(Duration::from_secs(601)).await;
-                for _ in 0..8 {
-                    tokio::task::yield_now().await;
-                }
-                assert_eq!(questions.cleared.lock().await.as_slice(), &["q-1"]);
-            }
             questions.pending.lock().await.clear();
             let response = read_paused_response(&mut client).await;
             assert_ask_error(&response, "cancelled");
@@ -4164,8 +4143,6 @@ mod tests {
             &questions,
             "parent-conn",
             reg,
-            &default_config(),
-            false,
         )
         .await;
         let elapsed = started.elapsed();
@@ -4183,7 +4160,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_without_auto_select_waits_until_user_answers() {
+    async fn ask_manual_policy_stops_after_configured_retries() {
+        tokio::time::pause();
+        let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
+            retry_count: 1,
+            auto_select_first_on_timeout: false,
+            ..default_config()
+        })
+        .await;
+        wait_for_question_registration(&questions, 1).await;
+        tokio::time::advance(Duration::from_secs(301)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(questions.registered.lock().await.len(), 1);
+        assert!(questions.pending.lock().await.contains_key("q-1"));
+        tokio::time::advance(Duration::from_secs(300)).await;
+        wait_for_question_registration(&questions, 2).await;
+        tokio::time::advance(Duration::from_secs(601)).await;
+        let response = read_paused_response(&mut client).await;
+        assert_ask_error(&response, "timed_out");
+        assert_eq!(questions.registered.lock().await.len(), 2);
+        assert!(questions.pending.lock().await.is_empty());
+        assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
+        assert!(questions.cleared.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ask_without_auto_select_accepts_answer_during_retry() {
         tokio::time::pause();
         let (listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
             retry_count: 1,
@@ -4217,18 +4219,16 @@ mod tests {
         assert!(!questions.pending.lock().await.contains_key("q-1"));
         // 旧 ID 的迟到答案不能覆盖新表单。
         questions.answer("q-1", incremental_outcome()).await;
-        tokio::time::advance(Duration::from_secs(600)).await;
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::time::advance(Duration::from_secs(599)).await;
         tokio::task::yield_now().await;
         assert_eq!(questions.registered.lock().await.len(), 2);
         assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
         assert!(
             questions.pending.lock().await.contains_key("q-2"),
-            "耗尽后必须保留最后的等待者"
+            "本轮期限未到前必须保留等待者"
         );
-        // 最终无限等待时必须清空已失效的倒计时。
-        assert_eq!(questions.cleared.lock().await.as_slice(), &["q-2".to_string()]);
+        assert!(questions.cleared.lock().await.is_empty());
+        assert!(questions.stopped.lock().await.is_empty());
         questions.answer("q-2", user_answer_outcome()).await;
         let response = read_paused_response(&mut client).await;
         drop(listener);
@@ -4236,7 +4236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_manual_policy_retries_three_times_then_keeps_receiver() {
+    async fn ask_manual_policy_retries_three_times_then_stops() {
         tokio::time::pause();
         let (_listener, questions, mut client) = start_ask_round_trip(QuestionConfig {
             auto_select_first_on_timeout: false,
@@ -4251,26 +4251,15 @@ mod tests {
         }
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(601)).await;
-        assert!(
-            tokio::time::timeout(
-                Duration::from_secs(3600),
-                read_frame::<_, BrokerResponse>(&mut client),
-            )
-            .await
-            .is_err(),
-            "最终期限耗尽后仍不能生成响应"
-        );
+        let response = read_paused_response(&mut client).await;
+        assert_ask_error(&response, "timed_out");
         assert_eq!(questions.registered.lock().await.len(), 4);
         assert_eq!(
             questions.canceled.lock().await.as_slice(),
-            &["q-1", "q-2", "q-3"]
+            &["q-1", "q-2", "q-3", "q-4"]
         );
-        assert_eq!(questions.cleared.lock().await.as_slice(), &["q-4"]);
-        assert!(questions.pending.lock().await.contains_key("q-4"));
-        questions.answer("q-4", user_answer_outcome()).await;
-        let response = read_paused_response(&mut client).await;
-        assert_eq!(response.outcome["answers"][0]["selected"][0], "Rewrite");
-        assert!(response.outcome.get("error").is_none());
+        assert!(questions.cleared.lock().await.is_empty());
+        assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
         assert!(questions.pending.lock().await.is_empty());
     }
 
@@ -4298,7 +4287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_final_manual_wait_cleans_up_on_disconnect() {
+    async fn ask_manual_wait_cleans_up_on_disconnect_before_timeout() {
         tokio::time::pause();
         let (_listener, questions, client) = start_ask_round_trip(QuestionConfig {
             retry_count: 0,
@@ -4308,7 +4297,7 @@ mod tests {
         .await;
         wait_for_question_registration(&questions, 1).await;
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(600)).await;
+        tokio::time::advance(Duration::from_secs(300)).await;
         tokio::task::yield_now().await;
         assert!(questions.pending.lock().await.contains_key("q-1"));
         drop(client);
