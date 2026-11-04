@@ -74,3 +74,20 @@ export function excludeArchivedFolders(
     (f) => !ids.has(f.id) && (f.parent_id == null || !ids.has(f.parent_id))
   )
 }
+
+/** 已归档目录及其直接子目录（worktree）的 ID，用于隐藏其会话。 */
+export function archivedFolderIds(
+  folders: readonly FolderDetail[],
+  archivedPaths: readonly string[]
+): Set<number> {
+  if (!archivedPaths.length) return new Set()
+  const paths = new Set(archivedPaths)
+  const own = new Set(folders.filter((f) => paths.has(f.path)).map((f) => f.id))
+  return new Set(
+    folders
+      .filter(
+        (f) => own.has(f.id) || (f.parent_id != null && own.has(f.parent_id))
+      )
+      .map((f) => f.id)
+  )
+}

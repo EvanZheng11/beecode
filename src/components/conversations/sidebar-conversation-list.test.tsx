@@ -24,6 +24,8 @@ import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "./sidebar-conversation-list"
+import { setConversationsArchived } from "@/lib/conversation-archive"
+import { setFoldersArchived } from "@/lib/folder-archive"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 import type { TagFilter } from "@/lib/conversation-tags"
 import {
@@ -509,6 +511,31 @@ describe("SidebarConversationList — 三天自动归档", () => {
     expect(screen.getAllByText("conv-12").length).toBeGreaterThan(0)
     rerender(archiveTree())
     expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+  })
+
+  it("手动恢复覆盖自动归档，手动归档隐藏新会话（本地偏好，不改会话状态）", () => {
+    localStorage.clear()
+    render(archiveTree())
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+    act(() => setConversationsArchived([11], false))
+    expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("conv-15").length).toBeGreaterThan(0)
+    act(() => setConversationsArchived([15], true))
+    expect(screen.queryAllByText("conv-15")).toHaveLength(0)
+    expect(useAppWorkspaceStore.getState().conversations[4].status).toBe(
+      "pending"
+    )
+    localStorage.clear()
+  })
+
+  it("归档目录时其会话也从置顶/最近中隐藏，showArchived 仍可查看", () => {
+    localStorage.clear()
+    render(archiveTree())
+    expect(screen.getAllByText("conv-13").length).toBeGreaterThan(0)
+    act(() => setFoldersArchived(["/p/1"], true))
+    for (const id of [13, 14, 15])
+      expect(screen.queryAllByText(`conv-${id}`)).toHaveLength(0)
+    localStorage.clear()
   })
 
   it("静置越过三天后自动隐藏，无需刷新列表", () => {

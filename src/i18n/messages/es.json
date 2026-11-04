@@ -4473,7 +4473,23 @@
       "restoredToast": "Selected directories restored",
       "sortSaved": "Directory order saved",
       "removeFailed": "Some directories could not be removed: {names}",
-      "removed": "Selected directories removed"
+      "removed": "Selected directories removed",
+      "groupBatch": "Group selected",
+      "group": "Group",
+      "removeRow": "Remove",
+      "showSessions": "Show sessions of {name}",
+      "hideSessions": "Hide sessions of {name}",
+      "untitled": "(Untitled session)",
+      "reasonManual": "Archived manually",
+      "reasonAuto": "Auto-archived (idle over 3 days)",
+      "reasonFolder": "Folder is archived",
+      "worktreeNote": "Worktree subfolders follow their project and cannot be grouped or re-parented on their own.",
+      "groupTitle": "Move to group",
+      "groupDescription": "Move {count} folders to the selected group{skipped, plural, =0 {} other { (# worktree subfolders are skipped)}}. Sessions stay with their folder and are not moved.",
+      "groupTargetLabel": "Target group",
+      "noGroup": "No group (top level)",
+      "confirmGroup": "Move",
+      "groupSaved": "Moved to the selected group"
     }
   },
   "ProjectBoot": {

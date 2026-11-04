@@ -50,6 +50,7 @@ import {
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
+  archivedFolderIds,
   excludeArchivedFolders,
   useArchivedFolderPaths,
 } from "@/lib/folder-archive"
@@ -200,7 +201,10 @@ import {
 import { cn } from "@/lib/utils"
 import { FolderAliasLabel } from "./folder-alias-label"
 import { toErrorMessage } from "@/lib/app-error"
-import { isConversationAutoArchived } from "@/lib/conversation-auto-archive"
+import {
+  conversationArchiveReason,
+  useConversationArchiveState,
+} from "@/lib/conversation-archive"
 
 // Layout effect on the client (so the sticky overlay is positioned before
 // paint) but a no-op-safe passive effect during the static-export prerender.
@@ -1464,12 +1468,20 @@ export function SidebarConversationList({
       ),
     [folders, titleNeedle, titleQueryActive]
   )
+  const conversationArchive = useConversationArchiveState()
+  const hiddenFolderIds = useMemo(
+    () => archivedFolderIds(allFolders, archivedFolderPaths),
+    [allFolders, archivedFolderPaths]
+  )
   const shownConversations = useMemo(() => {
     // 复用相对时间标签的分钟时钟，静置时也会归档；有新更新就自动重新显示。
+    // 手动归档/恢复覆盖自动归档；已归档目录的会话也要从 Recent/Pinned 中隐藏。
     const visible = showArchived
       ? conversations
       : conversations.filter(
-          (c) => !isConversationAutoArchived(c, now, c.status === "in_progress")
+          (c) =>
+            !hiddenFolderIds.has(c.folder_id) &&
+            !conversationArchiveReason(c, now, conversationArchive)
         )
     const tagged = tagFilterActive
       ? visible.filter((c) => matchesTagFilter(c, tagFilter))
@@ -1484,6 +1496,8 @@ export function SidebarConversationList({
     conversations,
     showArchived,
     now,
+    hiddenFolderIds,
+    conversationArchive,
     tagFilter,
     tagFilterActive,
     titleNeedle,
@@ -1631,15 +1645,19 @@ export function SidebarConversationList({
     const ids = new Set<number>()
     if (!showArchived) {
       for (const conv of conversations) {
-        if (
-          isConversationAutoArchived(conv, now, conv.status === "in_progress")
-        ) {
+        if (conversationArchiveReason(conv, now, conversationArchive)) {
           ids.add(displayChildToParent.get(conv.folder_id) ?? conv.folder_id)
         }
       }
     }
     return ids
-  }, [conversations, displayChildToParent, showArchived, now])
+  }, [
+    conversations,
+    displayChildToParent,
+    showArchived,
+    now,
+    conversationArchive,
+  ])
 
   // Running (`in_progress`) sessions per display group — what the folder header
   // badge shows. Counted off the FULL conversation list rather than `byFolder`
