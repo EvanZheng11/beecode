@@ -123,6 +123,8 @@ pub fn register_terminal(pid: u32, label: String, restart: bool, handler: Action
 
 #[derive(Default)]
 struct Collector {
+    // 发现进程不能刷新资源采集器，否则会覆盖 CPU 累计时间的基准。
+    discovery: Option<System>,
     system: Option<System>,
     cached: Option<(Instant, Snapshot)>,
     samples: usize,
@@ -131,6 +133,7 @@ struct Collector {
 impl Collector {
     fn snapshot(&mut self, enabled: bool) -> Snapshot {
         if !enabled {
+            self.discovery = None;
             self.system = None;
             self.cached = None;
             return Snapshot::empty(false);
@@ -143,7 +146,7 @@ impl Collector {
         let started = Instant::now();
         let system = self.system.get_or_insert_with(System::new);
         // 先读取进程树元信息，再仅对已归属进程采集 CPU/内存；不请求或保存参数、环境字段。
-        let tree = process_tree(system);
+        let tree = process_tree(self.discovery.get_or_insert_with(System::new));
         let mut owners = registry().lock().unwrap_or_else(|e| e.into_inner());
         owners.retain(|pid, owner| identity(*pid) == Some(owner.start));
         let own_pid = std::process::id();
@@ -631,6 +634,37 @@ mod tests {
         collector.snapshot(false);
         assert!(collector.cached.is_none());
         assert!(collector.system.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn busy_child_cpu_is_measured_across_the_sampling_interval() {
+        let _guard = test_lock();
+        let child = TestChild(
+            Command::new("/bin/sh")
+                .args(["-c", "while :; do :; done"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
+        register_spawn(pid, "service", Some("CPU 合成测试".into()));
+        let mut collector = Collector::default();
+        // 新启动进程的累计 CPU 时间可能仍为零，先让它建立非零基准。
+        std::thread::sleep(Duration::from_millis(200));
+        collector.snapshot(true);
+        std::thread::sleep(Duration::from_millis(INTERVAL_MS + 100));
+        let sampled = collector.snapshot(true);
+        let process = sampled
+            .processes
+            .iter()
+            .find(|process| process.pid == pid)
+            .unwrap();
+        assert!(
+            process.cpu_percent > 1.0,
+            "忙循环 CPU 应大于 1%，实际 {}",
+            process.cpu_percent
+        );
     }
 
     #[test]
