@@ -40,9 +40,11 @@ vi.mock("@/lib/transport", () => ({
 }))
 
 const openFolder = vi.hoisted(() => vi.fn())
+const setFolderGroup = vi.hoisted(() => vi.fn())
+const folderGroups = vi.hoisted(() => [{ id: 42, name: "项目组" }])
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
-    selector({ openFolder }),
+    selector({ openFolder, setFolderGroup, folderGroups }),
 }))
 
 const toast = vi.hoisted(() => ({
@@ -94,7 +96,15 @@ const plan = (overrides: Partial<FolderLinkPlan> = {}): FolderLinkPlan => ({
   ...overrides,
 })
 
-function Harness({ manage }: { manage?: FolderDetail }) {
+function Harness({
+  manage,
+  defaultGroupId,
+  onFolderOpened,
+}: {
+  manage?: FolderDetail
+  defaultGroupId?: number | null
+  onFolderOpened?: (folder: FolderDetail) => void
+}) {
   const [open, setOpen] = useState(true)
   return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -102,6 +112,8 @@ function Harness({ manage }: { manage?: FolderDetail }) {
         open={open}
         onOpenChange={setOpen}
         folder={manage ?? null}
+        defaultGroupId={defaultGroupId}
+        onFolderOpened={onFolderOpened}
       />
     </NextIntlClientProvider>
   )
@@ -116,9 +128,93 @@ beforeEach(() => {
   api.previewFolderLinks.mockResolvedValue([])
   api.createFolderLinks.mockResolvedValue([])
   openFolder.mockResolvedValue(folder())
+  setFolderGroup.mockReset().mockResolvedValue(undefined)
 })
 
 describe("WorkspaceFolderDialog — creation flow", () => {
+  it("defaults to no group and passes the opened folder to the callback", async () => {
+    const onFolderOpened = vi.fn()
+    render(<Harness onFolderOpened={onFolderOpened} />)
+    await screen.findByDisplayValue("/home/me")
+    expect(
+      screen.getByRole("combobox", { name: "所属分组" })
+    ).toHaveTextContent("不分组")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(setFolderGroup).not.toHaveBeenCalled()
+    expect(onFolderOpened).toHaveBeenCalledOnce()
+    expect(onFolderOpened).toHaveBeenCalledWith(folder())
+  })
+
+  it("applies a selected group before calling back", async () => {
+    const onFolderOpened = vi.fn()
+    render(<Harness onFolderOpened={onFolderOpened} />)
+    await screen.findByDisplayValue("/home/me")
+    fireEvent.click(screen.getByRole("combobox", { name: "所属分组" }))
+    fireEvent.click(await screen.findByRole("option", { name: "项目组" }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(setFolderGroup).toHaveBeenCalledWith(7, 42)
+    expect(setFolderGroup.mock.invocationCallOrder[0]).toBeLessThan(
+      onFolderOpened.mock.invocationCallOrder[0]
+    )
+    expect(onFolderOpened).toHaveBeenCalledWith(folder({ group_id: 42 }))
+  })
+
+  it("removes an existing group when no group is selected", async () => {
+    openFolder.mockResolvedValue(folder({ group_id: 42 }))
+    const onFolderOpened = vi.fn()
+    render(<Harness onFolderOpened={onFolderOpened} />)
+    await screen.findByDisplayValue("/home/me")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(setFolderGroup).toHaveBeenCalledWith(7, null)
+    expect(onFolderOpened).toHaveBeenCalledWith(folder())
+  })
+
+  it("retries a failed preselected group without opening the folder twice", async () => {
+    const onFolderOpened = vi.fn()
+    setFolderGroup.mockRejectedValueOnce(new Error("group failed"))
+    render(<Harness defaultGroupId={42} onFolderOpened={onFolderOpened} />)
+    await screen.findByDisplayValue("/home/me")
+    expect(
+      screen.getByRole("combobox", { name: "所属分组" })
+    ).toHaveTextContent("项目组")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(toast.error).toHaveBeenCalledWith(expect.anything(), {
+      description: "group failed",
+    })
+    expect(onFolderOpened).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(openFolder).toHaveBeenCalledOnce()
+    expect(setFolderGroup).toHaveBeenCalledTimes(2)
+    expect(onFolderOpened).toHaveBeenCalledOnce()
+    expect(onFolderOpened).toHaveBeenCalledWith(folder({ group_id: 42 }))
+  })
+
+  it("ignores repeated quick selections while opening", async () => {
+    api.listDirectoryEntries.mockResolvedValue([dir("root", "/home/me/root")])
+    let finish: (detail: FolderDetail) => void = () => {}
+    openFolder.mockImplementationOnce(
+      () => new Promise<FolderDetail>((resolve) => (finish = resolve))
+    )
+    const onFolderOpened = vi.fn()
+    render(<Harness onFolderOpened={onFolderOpened} />)
+    const root = await screen.findByRole("button", { name: "root" })
+    fireEvent.doubleClick(root)
+    fireEvent.doubleClick(root)
+    expect(openFolder).toHaveBeenCalledOnce()
+    await act(async () => finish(folder()))
+    expect(onFolderOpened).toHaveBeenCalledOnce()
+  })
+
   it("opens the picked folder and advances to the linking step", async () => {
     api.listDirectoryEntries.mockResolvedValue([
       dir("root", "/home/me/root"),
@@ -289,6 +385,8 @@ describe("WorkspaceFolderDialog — manage mode", () => {
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     // The root cannot be re-picked while managing an existing folder.
     expect(screen.queryByRole("button", { name: "Change" })).toBeNull()
+    expect(screen.queryByRole("combobox", { name: "所属分组" })).toBeNull()
+    expect(setFolderGroup).not.toHaveBeenCalled()
   })
 
   it("shows the empty state when nothing is linked", async () => {
