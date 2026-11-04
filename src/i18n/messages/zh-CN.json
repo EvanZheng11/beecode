@@ -67,7 +67,8 @@
       "browser": "浏览器操作",
       "computer_use": "电脑操作",
       "quick_messages": "快捷消息",
-      "logs": "运行日志"
+      "logs": "运行日志",
+      "monitoring": "监控"
     }
   },
   "AppearanceSettings": {
@@ -7720,6 +7721,49 @@
         "bypassed": "这台电脑的浏览器引擎会让部分地址绕过隧道，为避免从这台电脑加载，远端主机的页面不会打开。",
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
+    }
+  },
+  "ResourceMonitor": {
+    "title": "资源监控",
+    "enableDescription": "实时查看应用及其启动的进程的 CPU、内存和进程数。",
+    "overheadNote": "低开销：仅在本页打开且可见时每 2 秒按需采样；关闭开关不再采样，页面隐藏时暂停。",
+    "saving": "保存中",
+    "retry": "重试",
+    "disabledHint": "监控已关闭，打开上方开关开始采样。",
+    "loading": "加载中…",
+    "noData": "暂无数据。",
+    "paused": "页面已隐藏，采样已暂停，返回后自动刷新。",
+    "cpu": "CPU",
+    "memory": "内存",
+    "processes": "活跃进程数",
+    "collection": "采集耗时",
+    "cpuNote": "CPU：100% 表示占满一个逻辑核，合计可能超过 100%。",
+    "memoryNote": "内存为各进程 RSS 之和，可能重复计入共享页。",
+    "warnings": "警告",
+    "cpuTrend": "CPU 趋势",
+    "memoryTrend": "内存趋势",
+    "chartEmpty": "正在收集数据…",
+    "chartLabel": "{title}，最近 {count} 个采样点",
+    "processList": "进程",
+    "empty": "没有可显示的进程。",
+    "status": "状态",
+    "uptime": "运行时长",
+    "actionBusy": "另一个操作正在进行，请稍候。",
+    "action": {
+      "stop": "关闭",
+      "kill": "强制结束",
+      "restart": "重启"
+    },
+    "category": {
+      "application": "应用",
+      "frontend": "前台",
+      "backend": "后端",
+      "plugin": "插件",
+      "computer-helper": "Computer 助手",
+      "session": "会话",
+      "terminal": "终端",
+      "service": "服务",
+      "process": "进程"
     }
   }
 }

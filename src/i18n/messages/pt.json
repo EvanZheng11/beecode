@@ -67,7 +67,8 @@
       "browser": "Uso do navegador",
       "computer_use": "Uso do computador",
       "quick_messages": "Mensagens rápidas",
-      "logs": "Registros de execução"
+      "logs": "Registros de execução",
+      "monitoring": "Monitoring"
     }
   },
   "AppearanceSettings": {
@@ -7720,6 +7721,49 @@
         "bypassed": "O mecanismo do navegador deste computador envia alguns endereços por fora do túnel, então as páginas do host remoto não abrem para não serem carregadas deste computador.",
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
+    }
+  },
+  "ResourceMonitor": {
+    "title": "Resource Monitor",
+    "enableDescription": "Show live CPU, memory and process usage for the app and the processes it started.",
+    "overheadNote": "Low overhead: samples on demand every 2 seconds only while this page is open and visible. Turning it off stops sampling; hiding the page pauses it.",
+    "saving": "Saving",
+    "retry": "Retry",
+    "disabledHint": "Monitoring is off. Turn on the switch above to start sampling.",
+    "loading": "Loading…",
+    "noData": "No data yet.",
+    "paused": "Page hidden — sampling paused. Data refreshes when you return.",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "processes": "Active processes",
+    "collection": "Sampling time",
+    "cpuNote": "CPU: 100% equals one logical core, so totals can exceed 100%.",
+    "memoryNote": "Memory is the sum of RSS and may count shared pages more than once.",
+    "warnings": "Warnings",
+    "cpuTrend": "CPU trend",
+    "memoryTrend": "Memory trend",
+    "chartEmpty": "Collecting data…",
+    "chartLabel": "{title}, last {count} samples",
+    "processList": "Processes",
+    "empty": "No processes to show.",
+    "status": "Status",
+    "uptime": "Uptime",
+    "actionBusy": "Another action is in progress. Please wait.",
+    "action": {
+      "stop": "Stop",
+      "kill": "Force kill",
+      "restart": "Restart"
+    },
+    "category": {
+      "application": "App",
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "plugin": "Plugin",
+      "computer-helper": "Computer helper",
+      "session": "Session",
+      "terminal": "Terminal",
+      "service": "Service",
+      "process": "Process"
     }
   }
 }

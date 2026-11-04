@@ -67,7 +67,8 @@
       "browser": "Utilisation du navigateur",
       "computer_use": "Utilisation de l'ordinateur",
       "quick_messages": "Messages rapides",
-      "logs": "Journaux d'exécution"
+      "logs": "Journaux d'exécution",
+      "monitoring": "Monitoring"
     }
   },
   "AppearanceSettings": {
@@ -7720,6 +7721,49 @@
         "bypassed": "Le moteur du navigateur de cet ordinateur envoie certaines adresses en dehors du tunnel ; les pages de l'hôte distant restent donc fermées plutôt que d'être chargées depuis cet ordinateur.",
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
+    }
+  },
+  "ResourceMonitor": {
+    "title": "Resource Monitor",
+    "enableDescription": "Show live CPU, memory and process usage for the app and the processes it started.",
+    "overheadNote": "Low overhead: samples on demand every 2 seconds only while this page is open and visible. Turning it off stops sampling; hiding the page pauses it.",
+    "saving": "Saving",
+    "retry": "Retry",
+    "disabledHint": "Monitoring is off. Turn on the switch above to start sampling.",
+    "loading": "Loading…",
+    "noData": "No data yet.",
+    "paused": "Page hidden — sampling paused. Data refreshes when you return.",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "processes": "Active processes",
+    "collection": "Sampling time",
+    "cpuNote": "CPU: 100% equals one logical core, so totals can exceed 100%.",
+    "memoryNote": "Memory is the sum of RSS and may count shared pages more than once.",
+    "warnings": "Warnings",
+    "cpuTrend": "CPU trend",
+    "memoryTrend": "Memory trend",
+    "chartEmpty": "Collecting data…",
+    "chartLabel": "{title}, last {count} samples",
+    "processList": "Processes",
+    "empty": "No processes to show.",
+    "status": "Status",
+    "uptime": "Uptime",
+    "actionBusy": "Another action is in progress. Please wait.",
+    "action": {
+      "stop": "Stop",
+      "kill": "Force kill",
+      "restart": "Restart"
+    },
+    "category": {
+      "application": "App",
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "plugin": "Plugin",
+      "computer-helper": "Computer helper",
+      "session": "Session",
+      "terminal": "Terminal",
+      "service": "Service",
+      "process": "Process"
     }
   }
 }
