@@ -41,6 +41,17 @@ describe("监控 Web transport", () => {
     )
   })
 
+  it("成功操作的 JSON null 响应不会被误报失败", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("null", { status: 200 })
+    )
+    const response = await new WebTransport("https://example.test").call(
+      "resource_monitor_process_action",
+      { pid: 12, startTime: 123, action: "stop" }
+    )
+    expect(response).toBeNull()
+  })
+
   it("其他命令仍走既有 POST 协议", async () => {
     await new WebTransport("https://example.test").call("existing_command", {
       id: 5,

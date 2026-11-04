@@ -148,6 +148,41 @@ describe("资源监控按需采样", () => {
     expect(result.current.error).toBeNull()
   })
 
+  it("操作失败不被后续正常采样悄悄清除，也不自动重试动作", async () => {
+    const { result } = renderHook(useResourceMonitor)
+    await settle()
+    await act(async () => result.current.changeEnabled(true))
+    const process = {
+      pid: 13,
+      parentPid: 1,
+      startTime: 123,
+      name: "test",
+      category: "service" as const,
+      ownerLabel: null,
+      cpuPercent: 0,
+      memoryBytes: 0,
+      status: "sleeping",
+      uptimeSeconds: 1,
+      canStop: true,
+      canKill: true,
+      canRestart: false,
+      actionUnavailableReason: null,
+    }
+    call.mockImplementation(async (command: string) => {
+      if (command === "resource_monitor_process_action")
+        throw new Error("操作被拒绝")
+      return sample(Date.now())
+    })
+    await act(async () => result.current.executeAction(process, "stop"))
+    await act(async () => vi.advanceTimersByTimeAsync(6000))
+    expect(result.current.error).toBe("操作被拒绝")
+    expect(
+      call.mock.calls.filter(
+        ([cmd]) => cmd === "resource_monitor_process_action"
+      )
+    ).toHaveLength(1)
+  })
+
   it("进程操作用启动标识提交，拒绝重复和不支持的动作", async () => {
     let finish!: () => void
     const { result } = renderHook(useResourceMonitor)
