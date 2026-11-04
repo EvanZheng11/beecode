@@ -119,15 +119,15 @@ function isGitHubHost(host: string | null): boolean {
   return host === "github.com"
 }
 
-async function resolveRemoteHost(hint: GitRemoteHint): Promise<string | null> {
+async function resolveRemoteUrl(hint: GitRemoteHint): Promise<string | null> {
   if ("remoteUrl" in hint) {
-    return extractHost(hint.remoteUrl)
+    return hint.remoteUrl
   }
   try {
     const remotes = await gitListRemotes(hint.folderPath)
     const origin = remotes.find((r) => r.name === "origin") ?? remotes[0]
     if (!origin) return null
-    return extractHost(origin.url)
+    return origin.url
   } catch {
     return null
   }
@@ -145,14 +145,24 @@ interface PendingRequest {
 
 /** Save generic credentials as a git account for future operations. */
 async function saveGenericAccount(
-  host: string | null,
+  remoteUrl: string | null,
   creds: GitCredentials
 ): Promise<void> {
-  if (!host) throw new Error("无法识别远程服务器，凭据未保存")
+  if (!remoteUrl) throw new Error("无法识别远程服务器，凭据未保存")
+  const remote = new URL(remoteUrl)
+  if (!/^https?:$/.test(remote.protocol)) {
+    throw new Error("仅保存 HTTP(S) 服务器的凭据")
+  }
+  const serverUrl = remote.origin
   const existing = await getGitHubAccounts()
-  const account = existing.accounts.find(
-    (a) => a.username === creds.username && extractHost(a.server_url) === host
-  )
+  const account = existing.accounts.find((a) => {
+    if (a.username !== creds.username) return false
+    try {
+      return new URL(a.server_url).origin === serverUrl
+    } catch {
+      return false
+    }
+  })
   // 已有账号也必须刷新令牌，否则下次操作仍会读到旧凭据。
   const accountId = account?.id ?? randomUUID()
   await saveAccountToken(accountId, creds.password)
@@ -162,7 +172,7 @@ async function saveGenericAccount(
         ...existing.accounts,
         {
           id: accountId,
-          server_url: `https://${host}`,
+          server_url: serverUrl,
           username: creds.username,
           scopes: [],
           avatar_url: null,
@@ -213,15 +223,11 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
 
   const pendingRef = useRef<PendingRequest | null>(null)
   const saveCredentialsRef = useRef(saveCredentials)
-  const remoteHostRef = useRef(remoteHost)
   const modeRef = useRef(mode)
 
   useEffect(() => {
     saveCredentialsRef.current = saveCredentials
   }, [saveCredentials])
-  useEffect(() => {
-    remoteHostRef.current = remoteHost
-  }, [remoteHost])
   useEffect(() => {
     modeRef.current = mode
   }, [mode])
@@ -353,14 +359,15 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
         if (!isAuthError(firstError)) throw firstError
 
         // Detect remote host to decide dialog mode
-        const host = await resolveRemoteHost(hint)
+        const remoteUrl = await resolveRemoteUrl(hint)
+        const host = remoteUrl ? extractHost(remoteUrl) : null
         const dialogMode: DialogMode = isGitHubHost(host) ? "github" : "generic"
 
         // Helper: save credentials after successful operation
         const maybeSave = async (c: GitCredentials) => {
           if (modeRef.current === "generic" && saveCredentialsRef.current) {
             try {
-              await saveGenericAccount(remoteHostRef.current, c)
+              await saveGenericAccount(remoteUrl, c)
             } catch {
               // Git 操作已经成功，保存失败不能触发再次执行。
               toast.warning(t("saveFailed"))

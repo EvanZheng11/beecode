@@ -36,7 +36,7 @@ function Harness({
     <button
       onClick={() =>
         void withCredentialRetry(operation, {
-          remoteUrl: `https://${host}/org/repo.git`,
+          remoteUrl: `${host.startsWith("http") ? host : `https://${host}`}/org/repo.git`,
         }).catch(() => {})
       }
     >
@@ -127,6 +127,21 @@ describe("GitCredentialProvider 凭据持久化", () => {
     )
     expect(accounts).toHaveLength(2)
     expect(accounts[1].server_url).toBe("https://git.example.com:8443")
+    expect(tokens.get("existing")).toBe("expired-token")
+  })
+
+  it("HTTP 凭据保留原协议，不覆盖同域名 HTTPS 账号", async () => {
+    setup(
+      vi.fn().mockRejectedValueOnce(authError).mockResolvedValue("updated"),
+      "http://git.example.com"
+    )
+    fireEvent.click(screen.getByText("更新代码"))
+    await submitGeneric()
+    await waitFor(() =>
+      expect(api.updateGitHubAccounts).toHaveBeenCalledTimes(1)
+    )
+    expect(accounts).toHaveLength(2)
+    expect(accounts[1].server_url).toBe("http://git.example.com")
     expect(tokens.get("existing")).toBe("expired-token")
   })
 
