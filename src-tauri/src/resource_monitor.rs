@@ -123,6 +123,7 @@ pub fn register_terminal(pid: u32, label: String, restart: bool, handler: Action
 
 #[derive(Default)]
 struct Collector {
+    enabled: bool,
     system: Option<System>,
     cached: Option<(Instant, Snapshot)>,
     samples: usize,
@@ -396,6 +397,10 @@ async fn loaded_settings(
             .flatten()
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
+        collector()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enabled = enabled;
         *settings = Some(Settings { enabled });
     }
     settings
@@ -412,22 +417,22 @@ pub async fn set_enabled(
     let mut settings = loaded_settings(conn).await;
     app_metadata_service::upsert_value(conn, SETTINGS_KEY, &enabled.to_string()).await?;
     *settings = Some(Settings { enabled });
+    let mut c = collector().lock().unwrap_or_else(|e| e.into_inner());
     if !enabled {
-        let mut c = collector().lock().unwrap_or_else(|e| e.into_inner());
         *c = Collector::default();
     }
+    c.enabled = enabled;
     Ok(Settings { enabled })
 }
 
 pub async fn get_snapshot(conn: &sea_orm::DatabaseConnection) -> Result<Snapshot, AppCommandError> {
     // 与开关写入串行，关闭返回后不会留下仍在进行的资源采样。
-    let settings = loaded_settings(conn).await;
-    let enabled = settings.as_ref().unwrap().enabled;
+    let _settings = loaded_settings(conn).await;
     tokio::task::spawn_blocking(move || {
-        collector()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .snapshot(enabled)
+        // 请求取消后，阻塞任务仍可能排队；在采集锁内读取当前开关，避免关闭后延迟采样。
+        let mut c = collector().lock().unwrap_or_else(|e| e.into_inner());
+        let enabled = c.enabled;
+        c.snapshot(enabled)
     })
     .await
     .map_err(|_| AppCommandError::task_execution_failed("资源采集任务失败"))
@@ -582,6 +587,54 @@ mod tests {
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn settings_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    #[test]
+    fn cancelled_snapshot_queued_before_disable_does_not_sample_later() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let _guard = settings_test_lock().lock().await;
+                let db = crate::db::test_helpers::fresh_in_memory_db().await;
+                *settings_lock().lock().await = None;
+                set_enabled(&db.conn, true).await.unwrap();
+                let (release, waiting) = std::sync::mpsc::channel();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let occupied = tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    let _ = waiting.recv();
+                });
+                ready.await.unwrap();
+                let conn = db.conn.clone();
+                let request = tokio::spawn(async move { get_snapshot(&conn).await });
+                // 请求已持有设置锁，唯一阻塞线程被占用，采集任务只能排队。
+                while settings_lock().try_lock().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+                request.abort();
+                assert!(request.await.unwrap_err().is_cancelled());
+                set_enabled(&db.conn, false).await.unwrap();
+                release.send(()).unwrap();
+                occupied.await.unwrap();
+                tokio::task::spawn_blocking(|| ()).await.unwrap();
+                let c = collector().lock().unwrap();
+                assert!(!c.enabled);
+                assert_eq!(c.samples, 0);
+                assert!(c.system.is_none());
+                assert!(c.cached.is_none());
+            })
+            .await
+            .expect("取消后的采集队列未按时退出");
+        });
     }
 
     #[test]
@@ -857,6 +910,7 @@ mod tests {
 
     #[tokio::test]
     async fn settings_default_off_persist_and_disable_clears_sampler() {
+        let _guard = settings_test_lock().lock().await;
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         *settings_lock().lock().await = None;
         assert!(!get_settings(&db.conn).await.enabled);
