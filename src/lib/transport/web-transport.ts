@@ -179,13 +179,20 @@ export class WebTransport implements Transport {
     )
     let res: Response
     try {
-      res = await fetch(`${this.baseUrl}/api/${command}`, {
-        method: "POST",
+      const routes: Record<string, { path: string; method: string }> = {
+        get_resource_monitor_settings: { path: "resource-monitor/settings", method: "GET" },
+        set_resource_monitor_enabled: { path: "resource-monitor/settings", method: "PUT" },
+        get_resource_monitor_snapshot: { path: "resource-monitor/snapshot", method: "GET" },
+        resource_monitor_process_action: { path: "resource-monitor/action", method: "POST" },
+      }
+      const route = routes[command]
+      res = await fetch(`${this.baseUrl}/api/${route?.path ?? command}`, {
+        method: route?.method ?? "POST",
         headers: {
           "Content-Type": "application/json",
           ...codegAuthHeaders(token),
         },
-        body: JSON.stringify(args ?? {}),
+        body: route?.method === "GET" ? undefined : JSON.stringify(args ?? {}),
         signal: controller.signal,
       })
     } catch (err) {
