@@ -18,7 +18,7 @@ export type Locations = ReadonlyMap<
 >
 export interface HitRow {
   key: string
-  kind: "folder" | "group" | "conversation"
+  kind: "folder" | "group" | "conversation" | "chat"
   id: number
   /** 只有顶层目录/分组/组成员可作为落点；worktree 子目录和会话不可。 */
   movable: boolean

@@ -2217,6 +2217,7 @@
       "removeRow": "Remove",
       "showSessions": "Show sessions of {name}",
       "hideSessions": "Hide sessions of {name}",
+      "chatSection": "Chat sessions (no folder)",
       "untitled": "(Untitled session)",
       "reasonManual": "Archived manually",
       "reasonAuto": "Auto-archived (idle over 3 days)",

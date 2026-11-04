@@ -229,4 +229,34 @@ describe("会话目录树模型", () => {
     })
     expect(result.map((r) => r.key)).toEqual(["group:10", "folder:1", "conv:9"])
   })
+  it("聊天会话归入虚拟段：默认折叠，归档筛选自动展开，隐藏 chat 目录", () => {
+    const chat = folder(99, { kind: "chat" })
+    const conv = (id: number) =>
+      ({
+        id,
+        folder_id: 99,
+        title: `聊天${id}`,
+        updated_at: "2026-01-01T00:00:00Z",
+        parent_id: null,
+      }) as DbConversationSummary
+    const extra = {
+      folders,
+      conversations: [conv(1), conv(2), { ...conv(3), parent_id: 1 }],
+      chatFolderIds: new Set([99]),
+      conversationReason: (c: DbConversationSummary) =>
+        c.id === 2 ? ("manual" as const) : null,
+    }
+    const all = rows(extra)
+    const section = all.find((r) => r.key === "chat:section")
+    expect(section?.sessionCount).toBe(2)
+    expect(all.some((r) => r.kind === "conversation")).toBe(false)
+    expect(all.some((r) => r.id === chat.id && r.kind === "folder")).toBe(false)
+    const arch = rows({ ...extra, status: "archived" }).filter(
+      (r) => r.kind === "conversation"
+    )
+    expect(arch.map((r) => r.key)).toEqual(["conv:2"])
+    expect(
+      rows({ ...extra, status: "removed" }).some((r) => r.kind === "chat")
+    ).toBe(false)
+  })
 })

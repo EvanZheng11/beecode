@@ -4479,6 +4479,7 @@
       "removeRow": "移出",
       "showSessions": "展開 {name} 的會話",
       "hideSessions": "收起 {name} 的會話",
+      "chatSection": "聊天會話（無資料夾）",
       "untitled": "（未命名會話）",
       "reasonManual": "已手動封存",
       "reasonAuto": "超過 3 天未更新，自動封存",

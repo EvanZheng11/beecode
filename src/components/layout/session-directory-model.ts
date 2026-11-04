@@ -19,7 +19,7 @@ const RANK: Record<DirectoryRank, number> = {
 }
 export interface DirectoryRow {
   key: string
-  kind: "folder" | "group" | "conversation"
+  kind: "folder" | "group" | "conversation" | "chat"
   id: number
   depth: number
   groupId: number | null
@@ -30,7 +30,7 @@ export interface DirectoryRow {
   rank?: DirectoryRank
   /** 会话归档原因；folder 表示随所在目录归档。 */
   reason?: ConversationArchiveReason | "folder"
-  /** 目录行：所属会话数（用于展开按钮）。 */
+  /** 目录行 / 虚拟“聊天会话”段：所属会话数（用于展开按钮）。 */
   sessionCount?: number
   /** 可勾选项：`folder:<id>` / `conv:<id>`。 */
   selectable: string[]
@@ -50,6 +50,7 @@ export function buildDirectoryRows({
   conversationReason = () => null,
   expandedSessions = new Set<string>(),
   rank = false,
+  chatFolderIds = new Set<number>(),
 }: {
   layout: SidebarLayout
   folders: readonly FolderDetail[]
@@ -66,13 +67,20 @@ export function buildDirectoryRows({
   expandedSessions?: ReadonlySet<string>
   /** 普通浏览：同层级按状态 rank 再 sort_order；排序模式保持原顺序。 */
   rank?: boolean
+  /** 无文件夹聊天（kind=chat）的隐藏目录 id：其顶层会话归入虚拟“聊天会话”段。 */
+  chatFolderIds?: ReadonlySet<number>
 }): DirectoryRow[] {
   const folderMap = new Map(folders.map((f) => [f.id, f]))
   const groupMap = new Map(groups.map((g) => [g.id, g]))
   const archived = new Set(archivedPaths)
   const byFolder = new Map<number, DbConversationSummary[]>()
+  const chatConvs: DbConversationSummary[] = []
   for (const c of conversations) {
     if (c.parent_id != null) continue
+    if (chatFolderIds.has(c.folder_id)) {
+      chatConvs.push(c)
+      continue
+    }
     const list = byFolder.get(c.folder_id) ?? []
     list.push(c)
     byFolder.set(c.folder_id, list)
@@ -239,7 +247,60 @@ export function buildDirectoryRows({
     })
     if (!collapsed.has(key) || needle || status !== "all") rows.push(...members)
   }
+  rows.push(...chatSectionRows())
   return rows
+
+  /** 虚拟“聊天会话”段：不可排序/移出/分组；归档筛选自动展开。 */
+  function chatSectionRows(): DirectoryRow[] {
+    if (!chatConvs.length) return []
+    const key = "chat:section"
+    const expanded = expandedSessions.has(key)
+    const list: DirectoryRow[] = []
+    for (const c of chatConvs) {
+      const reason = conversationReason(c)
+      const titleMatch = !!needle && matchesName(c.title ?? "")
+      const statusOk =
+        status === "all" ||
+        (status === "active" && !reason) ||
+        (status === "archived" && !!reason)
+      if (!(expanded || status !== "all" || titleMatch)) continue
+      if (!statusOk || (needle && !titleMatch)) continue
+      list.push({
+        key: `conv:${c.id}`,
+        kind: "conversation",
+        id: c.id,
+        depth: 1,
+        groupId: null,
+        conversation: c,
+        rank: reason ? "archived" : "active",
+        reason,
+        selectable: [`conv:${c.id}`],
+      })
+    }
+    if (rank)
+      list.sort(
+        (a, b) =>
+          RANK[a.rank ?? "active"] - RANK[b.rank ?? "active"] ||
+          Date.parse(b.conversation?.updated_at ?? "") -
+            Date.parse(a.conversation?.updated_at ?? "") ||
+          a.id - b.id
+      )
+    // 已移出状态或无命中时不显示；全部状态且无搜索时保留入口
+    if (status === "removed" || (!list.length && (needle || status !== "all")))
+      return []
+    return [
+      {
+        key,
+        kind: "chat",
+        id: 0,
+        depth: 0,
+        groupId: null,
+        sessionCount: chatConvs.length,
+        selectable: [],
+      },
+      ...list,
+    ]
+  }
 }
 
 export function directoryLayoutEntries(layout: SidebarLayout) {

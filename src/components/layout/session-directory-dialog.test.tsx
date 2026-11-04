@@ -13,10 +13,16 @@ import zhMessages from "@/i18n/messages/zh-CN.json"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 import { SessionDirectoryDialog } from "./session-directory-dialog"
 
-// jsdom 缺少 PointerEvent：用 MouseEvent 兜底，保证 clientX/Y、button 可传入
+// jsdom 缺少 PointerEvent：用 MouseEvent 兜底，保证 clientX/Y、button、pointerId 可传入
 if (!("PointerEvent" in window))
   (window as unknown as { PointerEvent: unknown }).PointerEvent =
-    class extends MouseEvent {}
+    class extends MouseEvent {
+      pointerId: number
+      constructor(type: string, init: MouseEventInit & { pointerId?: number }) {
+        super(type, init)
+        this.pointerId = init?.pointerId ?? 1
+      }
+    }
 
 const state = vi.hoisted(() => ({
   allFolders: [] as FolderDetail[],
@@ -199,7 +205,7 @@ describe("会话目录管理交互", () => {
     document.elementFromPoint = () => target
     fireEvent.pointerMove(window, { clientX: 5, clientY: 4 })
     expect(rowOf("研发组").className).toContain("shadow-")
-    fireEvent.pointerUp(window)
+    fireEvent.pointerUp(window, { clientX: 5, clientY: 4 })
     fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
     await waitFor(() =>
       expect(state.applySidebarLayout).toHaveBeenCalledWith([
@@ -343,6 +349,43 @@ describe("会话目录管理交互", () => {
     expect(within(row).queryByRole("button")).toBeNull()
   })
 
+  it("无文件夹聊天会话显示在虚拟“聊天会话”段，可归档/恢复/批量，不显示 chat 目录", async () => {
+    const chatFolder = { ...folder(99, null), kind: "chat" as const }
+    state.allFolders = [folder(1, 10), chatFolder]
+    state.folders = state.allFolders
+    state.conversations = [
+      {
+        id: 21,
+        folder_id: 99,
+        title: "随手问答",
+        status: "completed",
+        updated_at: new Date().toISOString(),
+        pinned_at: null,
+        parent_id: null,
+      } as DbConversationSummary,
+    ]
+    renderDialog()
+    expect(screen.queryByText("项目99")).not.toBeInTheDocument()
+    expect(screen.getByText("聊天会话（无文件夹）")).toBeInTheDocument()
+    expect(screen.queryByText("随手问答")).not.toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: /展开 聊天会话（无文件夹） 的会话/ })
+    )
+    const row = screen
+      .getByText("随手问答")
+      .closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole("button", { name: "归档" }))
+    expect(convArchive.set).toHaveBeenCalledWith([21], true)
+    fireEvent.click(screen.getByLabelText("选择 随手问答"))
+    fireEvent.click(screen.getByRole("button", { name: "批量归档" }))
+    await waitFor(() =>
+      expect(convArchive.set).toHaveBeenLastCalledWith([21], true)
+    )
+    // 排序模式隐藏该段
+    fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
+    expect(screen.queryByText("聊天会话（无文件夹）")).not.toBeInTheDocument()
+  })
+
   describe("指针拖动（非 HTML5 DnD）", () => {
     const rowOf = (name: string) =>
       screen
@@ -362,7 +405,7 @@ describe("会话目录管理交互", () => {
       underPointer(rowOf("研发组"))
       fireEvent.pointerMove(window, { clientX: 10, clientY: 60 })
       expect(rowOf("研发组").className).toContain("ring-primary")
-      fireEvent.pointerUp(window)
+      fireEvent.pointerUp(window, { clientX: 10, clientY: 60 })
       expect(state.applySidebarLayout).not.toHaveBeenCalled()
       fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
       await waitFor(() =>
@@ -373,6 +416,54 @@ describe("会话目录管理交互", () => {
         { kind: "folder", id: 2, groupId: 10 },
         { kind: "folder", id: 1, groupId: 10 },
       ])
+    })
+    it("pointermove 在 A、pointerup 在 B（含滚动后立即松手）按 B 落点提交", async () => {
+      renderDialog()
+      fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
+      fireEvent.pointerDown(rowOf("项目2"), {
+        button: 0,
+        clientX: 10,
+        clientY: 100,
+      })
+      underPointer(rowOf("研发组"))
+      fireEvent.pointerMove(window, { clientX: 10, clientY: 60 })
+      expect(rowOf("研发组").className).toContain("ring-primary")
+      // 滚动使指针下换成“拖到顶层”区，随即松手，没有新的 pointermove
+      const root = document.querySelector("[data-drop-root]")
+      underPointer(root)
+      fireEvent.pointerUp(window, { clientX: 10, clientY: 140 })
+      fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
+      await waitFor(() =>
+        expect(state.applySidebarLayout).toHaveBeenCalledWith([
+          { kind: "group", id: 10, groupId: null },
+          { kind: "folder", id: 1, groupId: 10 },
+          { kind: "folder", id: 2, groupId: null },
+        ])
+      )
+    })
+    it("非同一 pointer 的松手/移动不结束或影响当前拖动", async () => {
+      renderDialog()
+      fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
+      fireEvent.pointerDown(rowOf("项目2"), {
+        button: 0,
+        clientX: 10,
+        clientY: 100,
+        pointerId: 1,
+      })
+      underPointer(rowOf("研发组"))
+      fireEvent.pointerMove(window, { clientX: 10, clientY: 60, pointerId: 1 })
+      fireEvent.pointerUp(window, { clientX: 0, clientY: 0, pointerId: 2 })
+      expect(rowOf("研发组").className).toContain("ring-primary")
+      fireEvent.pointerUp(window, { clientX: 10, clientY: 60, pointerId: 1 })
+      expect(rowOf("研发组").className).not.toContain("ring-primary")
+      fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
+      await waitFor(() =>
+        expect(state.applySidebarLayout).toHaveBeenCalledWith([
+          { kind: "group", id: 10, groupId: null },
+          { kind: "folder", id: 2, groupId: 10 },
+          { kind: "folder", id: 1, groupId: 10 },
+        ])
+      )
     })
     it("Esc/pointercancel 取消拖动并清理，不改变草稿", async () => {
       renderDialog()

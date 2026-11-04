@@ -149,6 +149,10 @@ export function SessionDirectoryDialog({
     () => allFolders.filter((f) => f.kind !== "chat"),
     [allFolders]
   )
+  const chatFolderIds = useMemo(
+    () => new Set(allFolders.filter((f) => f.kind === "chat").map((f) => f.id)),
+    [allFolders]
+  )
   const folderMap = useMemo(
     () => new Map(folders.map((f) => [f.id, f])),
     [folders]
@@ -205,6 +209,7 @@ export function SessionDirectoryDialog({
           conversationArchiveReason(c, now, convArchive),
         expandedSessions,
         rank: !sorting,
+        chatFolderIds,
       }),
     [
       layout,
@@ -220,6 +225,7 @@ export function SessionDirectoryDialog({
       now,
       convArchive,
       expandedSessions,
+      chatFolderIds,
     ]
   )
   const rowByKey = useMemo(() => new Map(rows.map((r) => [r.key, r])), [rows])
@@ -389,9 +395,10 @@ export function SessionDirectoryDialog({
     entry: SidebarEntry,
     label: string
   ) {
-    if (e.button !== 0 || busy || dragRef.current) return
+    if (e.button !== 0 || busy || dragRef.current || stopDrag.current) return
     if ((e.target as HTMLElement).closest("button,input,[role=checkbox]"))
       return
+    const pointerId = e.pointerId
     const startX = e.clientX
     const startY = e.clientY
     let active = false
@@ -416,6 +423,7 @@ export function SessionDirectoryDialog({
       raf = requestAnimationFrame(tick)
     }
     const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return
       pointer.current = { x: ev.clientX, y: ev.clientY }
       if (!active) {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return
@@ -443,7 +451,13 @@ export function SessionDirectoryDialog({
       if (commit && active && target)
         moveEntry(entry, target.groupId, target.index)
     }
-    const onUp = () => finish(true)
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return
+      // 以最终松手坐标重新命中，避免 move 与 up 之间（含滚动）落点过期
+      pointer.current = { x: ev.clientX, y: ev.clientY }
+      if (active) hitTest()
+      finish(true)
+    }
     const onCancel = () => finish(false)
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return
@@ -691,6 +705,7 @@ export function SessionDirectoryDialog({
                     const conv = row.conversation
                     const name =
                       row.group?.name ??
+                      (row.kind === "chat" ? t("chatSection") : undefined) ??
                       (conv
                         ? conv.title?.trim() || t("untitled")
                         : folder?.alias
@@ -793,7 +808,7 @@ export function SessionDirectoryDialog({
                           )}
                           {row.kind === "group" ? (
                             <Layers className="size-4 shrink-0 text-primary" />
-                          ) : conv ? (
+                          ) : conv || row.kind === "chat" ? (
                             <MessageSquare className="size-3.5 shrink-0" />
                           ) : (
                             <Folder className="size-4 shrink-0 text-muted-foreground" />
@@ -811,29 +826,33 @@ export function SessionDirectoryDialog({
                               {row.selectable.length}
                             </span>
                           )}
-                          {folder && !sorting && !!row.sessionCount && (
-                            <button
-                              type="button"
-                              aria-label={t(
-                                sessionsOpen ? "hideSessions" : "showSessions",
-                                { name: name ?? "" }
-                              )}
-                              aria-pressed={sessionsOpen}
-                              onClick={() =>
-                                toggleIn(setExpandedSessions, row.key)
-                              }
-                              className={cn(
-                                "flex shrink-0 items-center gap-0.5 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted",
-                                sessionsOpen && "bg-muted text-foreground"
-                              )}
-                            >
-                              <MessageSquare className="size-3" />
-                              {row.sessionCount}
-                            </button>
-                          )}
+                          {(folder || row.kind === "chat") &&
+                            !sorting &&
+                            !!row.sessionCount && (
+                              <button
+                                type="button"
+                                aria-label={t(
+                                  sessionsOpen
+                                    ? "hideSessions"
+                                    : "showSessions",
+                                  { name: name ?? "" }
+                                )}
+                                aria-pressed={sessionsOpen}
+                                onClick={() =>
+                                  toggleIn(setExpandedSessions, row.key)
+                                }
+                                className={cn(
+                                  "flex shrink-0 items-center gap-0.5 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted",
+                                  sessionsOpen && "bg-muted text-foreground"
+                                )}
+                              >
+                                <MessageSquare className="size-3" />
+                                {row.sessionCount}
+                              </button>
+                            )}
                         </div>
                         <div role="gridcell" className="hidden md:block">
-                          {folder || conv ? (
+                          {row.kind === "chat" ? null : folder || conv ? (
                             <span
                               className={cn(
                                 "rounded-full px-2 text-xs",
@@ -856,7 +875,9 @@ export function SessionDirectoryDialog({
                           {conv
                             ? (reasonLabel(row.reason) ??
                               conv.updated_at.slice(0, 16).replace("T", " "))
-                            : (folder?.path ?? t("groupPath"))}
+                            : row.kind === "chat"
+                              ? ""
+                              : (folder?.path ?? t("groupPath"))}
                         </div>
                         <div
                           role="gridcell"
