@@ -136,9 +136,9 @@ describe("WorkspaceFolderDialog — creation flow", () => {
     const onFolderOpened = vi.fn()
     render(<Harness onFolderOpened={onFolderOpened} />)
     await screen.findByDisplayValue("/home/me")
-    expect(
-      screen.getByRole("combobox", { name: "所属分组" })
-    ).toHaveTextContent("不分组")
+    expect(screen.getByRole("combobox", { name: "Group" })).toHaveTextContent(
+      "No group"
+    )
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
     })
@@ -151,7 +151,7 @@ describe("WorkspaceFolderDialog — creation flow", () => {
     const onFolderOpened = vi.fn()
     render(<Harness onFolderOpened={onFolderOpened} />)
     await screen.findByDisplayValue("/home/me")
-    fireEvent.click(screen.getByRole("combobox", { name: "所属分组" }))
+    fireEvent.click(screen.getByRole("combobox", { name: "Group" }))
     fireEvent.click(await screen.findByRole("option", { name: "项目组" }))
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
@@ -180,9 +180,9 @@ describe("WorkspaceFolderDialog — creation flow", () => {
     setFolderGroup.mockRejectedValueOnce(new Error("group failed"))
     render(<Harness defaultGroupId={42} onFolderOpened={onFolderOpened} />)
     await screen.findByDisplayValue("/home/me")
-    expect(
-      screen.getByRole("combobox", { name: "所属分组" })
-    ).toHaveTextContent("项目组")
+    expect(screen.getByRole("combobox", { name: "Group" })).toHaveTextContent(
+      "项目组"
+    )
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Next" }))
     })
@@ -385,7 +385,7 @@ describe("WorkspaceFolderDialog — manage mode", () => {
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull()
     // The root cannot be re-picked while managing an existing folder.
     expect(screen.queryByRole("button", { name: "Change" })).toBeNull()
-    expect(screen.queryByRole("combobox", { name: "所属分组" })).toBeNull()
+    expect(screen.queryByRole("combobox", { name: "Group" })).toBeNull()
     expect(setFolderGroup).not.toHaveBeenCalled()
   })
 

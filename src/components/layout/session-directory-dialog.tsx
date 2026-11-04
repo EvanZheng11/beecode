@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState, type CSSProperties } from "react"
+import { useTranslations } from "next-intl"
 import {
   Archive,
   ArchiveRestore,
@@ -59,6 +60,7 @@ const SELECT_CLASS =
   "h-8 rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 
 export function SessionDirectoryButton() {
+  const t = useTranslations("Folder.sessionDirectory")
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -66,8 +68,8 @@ export function SessionDirectoryButton() {
         variant="ghost"
         size="icon"
         className="h-6 w-6 shrink-0 text-muted-foreground"
-        title="会话目录设置"
-        aria-label="会话目录设置"
+        title={t("open")}
+        aria-label={t("open")}
         onClick={() => setOpen(true)}
       >
         <Settings2 className="h-3.5 w-3.5" />
@@ -84,6 +86,7 @@ export function SessionDirectoryDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const t = useTranslations("Folder.sessionDirectory")
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const openFolders = useAppWorkspaceStore((s) => s.folders)
   const groups = useAppWorkspaceStore((s) => s.folderGroups)
@@ -194,7 +197,7 @@ export function SessionDirectoryDialog({
     try {
       await action()
     } catch (err) {
-      toast.error("操作失败", { description: toErrorMessage(err) })
+      toast.error(t("actionFailed"), { description: toErrorMessage(err) })
     } finally {
       setBusy(false)
     }
@@ -206,7 +209,7 @@ export function SessionDirectoryDialog({
         value
       )
       setSelected(new Set())
-      toast.success(value ? "已归档所选目录" : "已恢复所选目录")
+      toast.success(value ? t("archivedToast") : t("restoredToast"))
     })
   }
   function move(entry: SidebarEntry, groupId: number | null, index: number) {
@@ -229,12 +232,7 @@ export function SessionDirectoryDialog({
   }
   const close = (value: boolean) => {
     if (busy) return
-    if (
-      !value &&
-      draft &&
-      !window.confirm("排序尚未保存，确定放弃修改并关闭吗？")
-    )
-      return
+    if (!value && draft && !window.confirm(t("discardConfirm"))) return
     setDraft(null)
     onOpenChange(value)
   }
@@ -246,18 +244,18 @@ export function SessionDirectoryDialog({
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle className="flex items-center gap-2">
               <Settings2 className="size-5 text-primary" />
-              会话目录设置
+              {t("title")}
             </DialogTitle>
             <DialogDescription className="hidden sm:block">
-              集中管理分组和文件夹，整理工作区中的会话目录。
+              {t("description")}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-wrap items-center gap-2 px-6 pt-4 pb-3">
             <div className="relative min-w-48 flex-1">
               <Search className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
               <Input
-                aria-label="过滤目录名称"
-                placeholder="搜索名称或路径…"
+                aria-label={t("searchLabel")}
+                placeholder={t("searchPlaceholder")}
                 className="h-9 pl-9"
                 value={query}
                 disabled={sorting}
@@ -265,16 +263,16 @@ export function SessionDirectoryDialog({
               />
             </div>
             <select
-              aria-label="过滤目录状态"
+              aria-label={t("statusLabel")}
               className={SELECT_CLASS}
               value={status}
               disabled={sorting}
               onChange={(e) => setStatus(e.target.value as DirectoryStatus)}
             >
-              <option value="all">全部状态</option>
-              <option value="active">工作区中</option>
-              <option value="archived">已归档</option>
-              <option value="removed">已移出工作区</option>
+              <option value="all">{t("statusAll")}</option>
+              <option value="active">{t("statusActive")}</option>
+              <option value="archived">{t("statusArchived")}</option>
+              <option value="removed">{t("statusRemoved")}</option>
             </select>
             <Button
               size="sm"
@@ -283,7 +281,7 @@ export function SessionDirectoryDialog({
               onClick={() => setNewGroup(true)}
             >
               <Plus className="size-4" />
-              新建分组
+              {t("newGroup")}
             </Button>
             <Button
               size="sm"
@@ -295,7 +293,7 @@ export function SessionDirectoryDialog({
               }}
             >
               <FolderPlus className="size-4" />
-              添加文件夹
+              {t("addFolder")}
             </Button>
             {!sorting && (
               <Button
@@ -311,23 +309,23 @@ export function SessionDirectoryDialog({
                 }}
               >
                 <GripVertical className="size-4" />
-                排序
+                {t("sort")}
               </Button>
             )}
           </div>
           <div className="flex min-h-10 flex-wrap items-center gap-2 px-6 pb-3 text-xs text-muted-foreground">
             {sorting ? (
               <>
-                <span className="text-primary">
-                  排序模式 · 拖动文件夹调整顺序，拖到分组行即可移入
-                </span>
-                <span className="ml-auto">保存后才会更新左侧目录</span>
+                <span className="text-primary">{t("sortHint")}</span>
+                <span className="ml-auto">{t("sortSaveHint")}</span>
               </>
             ) : (
               <>
-                <span>已选择 {selectedFolders.length} 项</span>
+                <span>
+                  {t("selectedCount", { count: selectedFolders.length })}
+                </span>
                 <span className="text-muted-foreground/80">
-                  归档仅在本设备隐藏，不会删除磁盘文件或会话
+                  {t("archiveNote")}
                 </span>
                 <Button
                   variant="ghost"
@@ -336,7 +334,7 @@ export function SessionDirectoryDialog({
                   onClick={() => archive(true)}
                 >
                   <Archive className="size-3.5" />
-                  批量归档
+                  {t("archiveBatch")}
                 </Button>
                 <Button
                   variant="ghost"
@@ -345,7 +343,7 @@ export function SessionDirectoryDialog({
                   onClick={() => archive(false)}
                 >
                   <ArchiveRestore className="size-3.5" />
-                  恢复
+                  {t("restore")}
                 </Button>
                 <Button
                   variant="ghost"
@@ -357,14 +355,14 @@ export function SessionDirectoryDialog({
                   onClick={() => setConfirmRemove(true)}
                 >
                   <FolderMinus className="size-3.5" />
-                  移出工作区
+                  {t("removeFromWorkspace")}
                 </Button>
               </>
             )}
           </div>
           <div
             role="treegrid"
-            aria-label="会话目录"
+            aria-label={t("gridLabel")}
             aria-rowcount={rows.length + 1}
             aria-colcount={5}
             className="mx-6 flex min-h-0 flex-1 flex-col overflow-x-auto rounded-xl border"
@@ -378,7 +376,7 @@ export function SessionDirectoryDialog({
             >
               <div role="columnheader">
                 <Checkbox
-                  aria-label="选择全部筛选目录"
+                  aria-label={t("selectAll")}
                   disabled={busy || sorting || !visibleIds.length}
                   checked={
                     allChecked ? true : someChecked ? "indeterminate" : false
@@ -388,14 +386,16 @@ export function SessionDirectoryDialog({
                   }
                 />
               </div>
-              <div role="columnheader">名称</div>
+              <div role="columnheader">{t("colName")}</div>
               <div role="columnheader" className="hidden md:block">
-                状态
+                {t("colStatus")}
               </div>
               <div role="columnheader" className="hidden md:block">
-                路径 / 分组
+                {t("colPath")}
               </div>
-              <div role="columnheader">操作</div>
+              <div role="columnheader" className="pl-2.5">
+                {t("colActions")}
+              </div>
             </div>
             <div
               className="min-h-0 md:min-w-[740px] flex-1 overflow-y-auto"
@@ -411,7 +411,7 @@ export function SessionDirectoryDialog({
             >
               {!rows.length ? (
                 <div className="py-16 text-center text-sm text-muted-foreground">
-                  没有匹配的目录
+                  {t("empty")}
                 </div>
               ) : (
                 <Virtualizer>
@@ -484,7 +484,7 @@ export function SessionDirectoryDialog({
                             )
                           ) : (
                             <Checkbox
-                              aria-label={`选择 ${name}`}
+                              aria-label={t("select", { name: name ?? "" })}
                               checked={
                                 checked
                                   ? true
@@ -507,7 +507,12 @@ export function SessionDirectoryDialog({
                           {hasChildren ? (
                             <button
                               type="button"
-                              aria-label={`${collapsed.has(row.key) ? "展开" : "折叠"} ${name}`}
+                              aria-label={t(
+                                collapsed.has(row.key) ? "expand" : "collapse",
+                                {
+                                  name: name ?? "",
+                                }
+                              )}
                               onClick={() => toggleCollapse(row.key)}
                               className="rounded p-0.5 hover:bg-muted"
                             >
@@ -531,7 +536,9 @@ export function SessionDirectoryDialog({
                           </span>
                           {folder && (isArchived || !inWorkspace) && (
                             <span className="shrink-0 rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground md:hidden">
-                              {isArchived ? "已归档" : "已移出"}
+                              {isArchived
+                                ? t("badgeArchived")
+                                : t("badgeRemoved")}
                             </span>
                           )}
                           {row.kind === "group" && (
@@ -553,14 +560,14 @@ export function SessionDirectoryDialog({
                               )}
                             >
                               {isArchived
-                                ? "已归档"
+                                ? t("badgeArchived")
                                 : inWorkspace
-                                  ? "工作区中"
-                                  : "已移出"}
+                                  ? t("statusInWorkspace")
+                                  : t("badgeRemoved")}
                             </span>
                           ) : (
                             <span className="text-xs text-muted-foreground">
-                              分组
+                              {t("groupKind")}
                             </span>
                           )}
                         </div>
@@ -569,7 +576,7 @@ export function SessionDirectoryDialog({
                           className="hidden truncate text-xs text-muted-foreground md:block"
                           title={folder?.path}
                         >
-                          {folder?.path ?? "文件夹分组"}
+                          {folder?.path ?? t("groupPath")}
                         </div>
                         <div
                           role="gridcell"
@@ -581,7 +588,7 @@ export function SessionDirectoryDialog({
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
-                                  aria-label={`上移 ${name}`}
+                                  aria-label={t("moveUp", { name: name ?? "" })}
                                   disabled={
                                     busy || !location || location.index === 0
                                   }
@@ -599,7 +606,9 @@ export function SessionDirectoryDialog({
                                 <Button
                                   variant="ghost"
                                   size="icon-sm"
-                                  aria-label={`下移 ${name}`}
+                                  aria-label={t("moveDown", {
+                                    name: name ?? "",
+                                  })}
                                   disabled={busy || !location}
                                   onClick={() =>
                                     location &&
@@ -625,7 +634,7 @@ export function SessionDirectoryDialog({
                               }}
                             >
                               <Plus className="size-3.5" />
-                              文件夹
+                              {t("addFolderToGroup")}
                             </Button>
                           ) : (
                             <Button
@@ -648,10 +657,10 @@ export function SessionDirectoryDialog({
                               }
                             >
                               {!inWorkspace
-                                ? "重新加入"
+                                ? t("rejoin")
                                 : isArchived
-                                  ? "恢复"
-                                  : "归档"}
+                                  ? t("restore")
+                                  : t("archive")}
                             </Button>
                           )}
                         </div>
@@ -683,14 +692,16 @@ export function SessionDirectoryDialog({
                   setDropKey(null)
                 }}
               >
-                拖到此处移出分组，放在顶层末尾
+                {t("dropRoot")}
               </div>
             )}
           </div>
           <DialogFooter className="flex-row items-center justify-end px-6 py-4">
             <span className="mr-auto hidden text-xs text-muted-foreground sm:inline">
-              {folders.length} 个文件夹 · {groups.length} 个分组 ·
-              无分页虚拟滚动
+              {t("footerSummary", {
+                folders: folders.length,
+                groups: groups.length,
+              })}
             </span>
             {sorting ? (
               <>
@@ -699,7 +710,7 @@ export function SessionDirectoryDialog({
                   disabled={busy}
                   onClick={() => setDraft(null)}
                 >
-                  取消排序
+                  {t("cancelSort")}
                 </Button>
                 <Button
                   disabled={busy}
@@ -707,17 +718,17 @@ export function SessionDirectoryDialog({
                     void run(async () => {
                       await applyLayout(directoryLayoutEntries(layout))
                       setDraft(null)
-                      toast.success("目录排序已保存")
+                      toast.success(t("sortSaved"))
                     })
                   }
                 >
                   <Check className="size-4" />
-                  保存排序
+                  {t("saveSort")}
                 </Button>
               </>
             ) : (
               <Button variant="outline" onClick={() => close(false)}>
-                完成
+                {t("done")}
               </Button>
             )}
           </DialogFooter>
@@ -726,12 +737,12 @@ export function SessionDirectoryDialog({
       <Dialog open={newGroup} onOpenChange={setNewGroup}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建分组</DialogTitle>
-            <DialogDescription>将相关项目放在同一分组中。</DialogDescription>
+            <DialogTitle>{t("newGroupTitle")}</DialogTitle>
+            <DialogDescription>{t("newGroupDescription")}</DialogDescription>
           </DialogHeader>
           <Input
-            aria-label="分组名称"
-            placeholder="输入分组名称"
+            aria-label={t("groupNameLabel")}
+            placeholder={t("groupNamePlaceholder")}
             value={groupName}
             onChange={(e) => setGroupName(e.target.value)}
             maxLength={100}
@@ -742,7 +753,7 @@ export function SessionDirectoryDialog({
               disabled={busy}
               onClick={() => setNewGroup(false)}
             >
-              取消
+              {t("cancel")}
             </Button>
             <Button
               disabled={busy || !groupName.trim()}
@@ -754,7 +765,7 @@ export function SessionDirectoryDialog({
                 })
               }
             >
-              创建分组
+              {t("createGroup")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -762,10 +773,11 @@ export function SessionDirectoryDialog({
       <Dialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>移出所选目录？</DialogTitle>
+            <DialogTitle>{t("removeTitle")}</DialogTitle>
             <DialogDescription>
-              将 {selectedFolders.filter((f) => openIds.has(f.id)).length}{" "}
-              个目录移出工作区。不会删除磁盘文件或会话记录，可在此重新加入。
+              {t("removeDescription", {
+                count: selectedFolders.filter((f) => openIds.has(f.id)).length,
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -774,7 +786,7 @@ export function SessionDirectoryDialog({
               disabled={busy}
               onClick={() => setConfirmRemove(false)}
             >
-              取消
+              {t("cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -794,12 +806,14 @@ export function SessionDirectoryDialog({
                   setSelected(new Set())
                   setConfirmRemove(false)
                   if (failures.length)
-                    toast.error(`部分目录移出失败：${failures.join("、")}`)
-                  else toast.success("已移出所选目录")
+                    toast.error(
+                      t("removeFailed", { names: failures.join(", ") })
+                    )
+                  else toast.success(t("removed"))
                 })
               }
             >
-              确认移出
+              {t("confirmRemove")}
             </Button>
           </DialogFooter>
         </DialogContent>

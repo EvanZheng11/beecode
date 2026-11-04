@@ -1,5 +1,13 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import zhMessages from "@/i18n/messages/zh-CN.json"
 import type { FolderDetail } from "@/lib/types"
 import { SessionDirectoryDialog } from "./session-directory-dialog"
 
@@ -62,7 +70,11 @@ beforeEach(() => {
   archives.paths = []
 })
 function renderDialog() {
-  return render(<SessionDirectoryDialog open onOpenChange={vi.fn()} />)
+  return render(
+    <NextIntlClientProvider locale="zh-CN" messages={zhMessages}>
+      <SessionDirectoryDialog open onOpenChange={vi.fn()} />
+    </NextIntlClientProvider>
+  )
 }
 
 describe("会话目录管理交互", () => {
@@ -122,6 +134,48 @@ describe("会话目录管理交互", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /^恢复$/ })[0])
     await waitFor(() =>
       expect(archives.set).toHaveBeenCalledWith(["/project/1"], false)
+    )
+  })
+  it("已归档并移出的目录重新加入时恢复可见", async () => {
+    archives.paths = ["/project/2"]
+    state.folders = [state.allFolders[0]]
+    state.addFolderToWorkspaceById.mockResolvedValue(undefined)
+    renderDialog()
+    const row = screen.getByLabelText("选择 项目2").closest('[role="row"]')!
+    fireEvent.click(
+      within(row as HTMLElement).getByRole("button", { name: "重新加入" })
+    )
+    await waitFor(() =>
+      expect(state.addFolderToWorkspaceById).toHaveBeenCalledWith(2)
+    )
+    await waitFor(() =>
+      expect(archives.set).toHaveBeenCalledWith(["/project/2"], false)
+    )
+  })
+  it("分组拖到成员行时按所属组的位置落点", async () => {
+    state.folderGroups = [
+      { id: 10, name: "研发组", color: "inherit", sort_order: 1 },
+      { id: 11, name: "运营组", color: "inherit", sort_order: 2 },
+    ]
+    state.allFolders = [folder(1, 10), folder(2, null), folder(4, 11)]
+    state.folders = state.allFolders
+    renderDialog()
+    fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
+    const rowOf = (name: string) =>
+      screen.getByLabelText(`上移 ${name}`).closest('[role="row"]')!
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" }
+    fireEvent.dragStart(rowOf("运营组"), { dataTransfer })
+    fireEvent.dragOver(rowOf("项目1"), { dataTransfer })
+    fireEvent.drop(rowOf("项目1"), { dataTransfer })
+    fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
+    await waitFor(() =>
+      expect(state.applySidebarLayout).toHaveBeenCalledWith([
+        { kind: "group", id: 11, groupId: null },
+        { kind: "folder", id: 4, groupId: 11 },
+        { kind: "group", id: 10, groupId: null },
+        { kind: "folder", id: 1, groupId: 10 },
+        { kind: "folder", id: 2, groupId: null },
+      ])
     )
   })
 })

@@ -440,7 +440,7 @@ export function WorkspaceFolderDialog({
           <>
             <div className="flex items-center gap-3">
               <label htmlFor="workspace-folder-group" className="text-sm">
-                所属分组
+                {t("groupLabel")}
               </label>
               <Select
                 value={groupId === null ? "none" : String(groupId)}
@@ -454,7 +454,7 @@ export function WorkspaceFolderDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">不分组</SelectItem>
+                  <SelectItem value="none">{t("noGroup")}</SelectItem>
                   {folderGroups.map((group) => (
                     <SelectItem key={group.id} value={String(group.id)}>
                       {group.name}

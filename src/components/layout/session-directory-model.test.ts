@@ -124,4 +124,9 @@ describe("会话目录树模型", () => {
     expect(result).toHaveLength(10000)
     expect(new Set(result.map((r) => r.key)).size).toBe(10000)
   })
+  it("祖先仅因状态过滤保留时不可被批量选中", () => {
+    const result = rows({ status: "archived", archivedPaths: ["/project/3"] })
+    expect(result.find((r) => r.key === "folder:1")?.selectableIds).toEqual([])
+    expect(result.find((r) => r.key === "group:10")?.selectableIds).toEqual([3])
+  })
 })

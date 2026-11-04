@@ -79,7 +79,12 @@ export function buildDirectoryRows({
     const key = `folder:${id}`
     return [
       {
-        key, kind: "folder", id, depth, groupId, folder,
+        key,
+        kind: "folder",
+        id,
+        depth,
+        groupId,
+        folder,
         selectableIds: ownMatch ? [id] : [],
       },
       ...(!collapsed.has(key) || needle || status !== "all" ? childRows : []),
