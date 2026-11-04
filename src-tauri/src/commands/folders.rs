@@ -52,14 +52,31 @@ async fn prepare_remote_git_cmd_with_remote(
     cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
 
     if let Some(creds) = credentials {
-        // Explicit credentials provided (e.g. from credential dialog)
-        if let Ok(askpass) = crate::git_credential::ensure_askpass_script(data_dir) {
-            crate::git_credential::inject_credentials(
-                cmd,
-                &creds.username,
-                &creds.password,
-                &askpass,
-            );
+        let is_push = cmd.as_std().get_args().any(|arg| arg == "push");
+        let mut url_cmd = crate::process::tokio_command("git");
+        url_cmd.current_dir(repo_path);
+        if is_push {
+            url_cmd.args([
+                "remote",
+                "get-url",
+                "--push",
+                remote_name.unwrap_or("origin"),
+            ]);
+        } else {
+            url_cmd.args(["ls-remote", "--get-url"]);
+            if let Some(remote) = remote_name {
+                url_cmd.arg(remote);
+            }
+        }
+        if let Ok(output) = url_cmd.output().await {
+            if output.status.success() {
+                crate::git_credential::inject_credentials_for_url(
+                    cmd,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    &creds.username,
+                    &creds.password,
+                );
+            }
         }
     } else {
         // Fall back to stored accounts, matching against the specified remote
@@ -85,14 +102,12 @@ async fn prepare_remote_git_cmd_for_url(
     cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
 
     if let Some(creds) = credentials {
-        if let Ok(askpass) = crate::git_credential::ensure_askpass_script(data_dir) {
-            crate::git_credential::inject_credentials(
-                cmd,
-                &creds.username,
-                &creds.password,
-                &askpass,
-            );
-        }
+        crate::git_credential::inject_credentials_for_url(
+            cmd,
+            clone_url,
+            &creds.username,
+            &creds.password,
+        );
     } else {
         crate::git_credential::try_inject_for_url(cmd, clone_url, &db.conn, data_dir).await;
     }
