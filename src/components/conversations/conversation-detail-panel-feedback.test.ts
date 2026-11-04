@@ -45,11 +45,8 @@ const flushStart = source.indexOf(
   source.indexOf("// Flush queued messages whenever the agent")
 )
 const flushEnd = source.indexOf(
-  "\n\n",
-  source.indexOf(
-    "}, [connectionReady, runtimeSyncState, msgQueue.length, appendingQueuedId])",
-    flushStart
-  )
+  "\n\n  // Mirror the connection's liveMessage",
+  flushStart
 )
 expect(handlerStart).toBeGreaterThan(-1)
 expect(handlerEnd).toBeGreaterThan(handlerStart)
@@ -63,7 +60,7 @@ const usePanelQueueActions = runInNewContext(
     `(function ({ useCallback, useEffect, msgQueue, mqGetItem, mqRemove, mqRequeueFront,
       feedback, feedbackSteer, appendingQueuedIdRef, appendingQueuedId,
       setAppendingQueuedId, notify, toErrorMessage, buildSteerPayload, tabId, tCmp,
-      connectionReady, connectionReadyRef, runtimeSyncState, flushRetryDelayMs,
+      connectionReady, connectionReadyRef, waitingForAnswer, runtimeSyncState, flushRetryDelayMs,
       lastFlushBounceAtRef, autoSendQueueRef, handleSendRef, selectedModeIdRef,
       setTimeout, clearTimeout }) {
       ${source.slice(handlerStart, handlerEnd)}
@@ -104,7 +101,10 @@ function snapshot(native = true): LiveSessionSnapshot {
   } as unknown as LiveSessionSnapshot
 }
 
-function useQueuePanelHarness({ connectionReady = false } = {}) {
+function useQueuePanelHarness({
+  connectionReady = false,
+  waitingForAnswer = false,
+} = {}) {
   const queue = useMessageQueue()
   const feedback = useSessionFeedback({
     connectionId: "c1",
@@ -145,6 +145,7 @@ function useQueuePanelHarness({ connectionReady = false } = {}) {
     tCmp,
     connectionReady,
     connectionReadyRef,
+    waitingForAnswer,
     runtimeSyncState: "idle",
     flushRetryDelayMs,
     lastFlushBounceAtRef,
@@ -166,9 +167,13 @@ function useQueuePanelHarness({ connectionReady = false } = {}) {
   }
 }
 
-async function setup(connectionReady = false) {
+async function setup(connectionReady = false, waitingForAnswer = false) {
+  const initialProps: {
+    connectionReady: boolean
+    waitingForAnswer?: boolean
+  } = { connectionReady, waitingForAnswer }
   const harness = renderHook(useQueuePanelHarness, {
-    initialProps: { connectionReady },
+    initialProps,
   })
   await waitFor(() =>
     expect(harness.result.current.feedback.steerAvailable).toBe(true)
@@ -193,6 +198,23 @@ afterEach(() => {
 })
 
 describe("ConversationDetailPanel 追加队列反馈行为", () => {
+  it("提问跨越前台回合后不自动派出队列，回答后才恢复", async () => {
+    const { result, rerender } = await setup(false, true)
+    vi.useFakeTimers()
+    rerender({ connectionReady: true, waitingForAnswer: true })
+    act(() => vi.advanceTimersByTime(300_000))
+    expect(result.current.flushSend).not.toHaveBeenCalled()
+    expect(result.current.queue.queue).toHaveLength(2)
+    rerender({ connectionReady: true, waitingForAnswer: false })
+    act(() => vi.runOnlyPendingTimers())
+    expect(result.current.flushSend).toHaveBeenCalledTimes(1)
+    expect(result.current.flushSend).toHaveBeenCalledWith(
+      nextDraft,
+      "下一条模式",
+      { fromQueueFlush: true }
+    )
+  })
+
   it.each(["delivered", "pending"] as const)(
     "steer %s 成功保持移除、完整传递文本与 blocks，不再次回队",
     async (status) => {

@@ -1275,6 +1275,12 @@ impl ConnectionManager {
                 );
                 return Err(AcpError::TurnInProgress);
             }
+            if s.question_timed_out
+                && crate::acp::turn_replace::blocks_are_completion_notice(&blocks)
+            {
+                return Err(AcpError::FeedbackDeferred);
+            }
+            s.question_timed_out = false;
             s.turn_in_flight = true;
         }
         permit.send(ConnectionCommand::Prompt {
@@ -3934,9 +3940,6 @@ impl ConnectionManager {
             return None;
         }
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
-        if state.read().await.replacing_turn {
-            return None;
-        }
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let deadline = timeout.map(QuestionDeadline::from_now);
@@ -3951,7 +3954,7 @@ impl ConnectionManager {
             let mut drained = Vec::new();
             if let Some(previous_id) = replacing_question {
                 let previous = reg.get(previous_id)?;
-                if previous.parent_connection_id != conn_id || previous.survives_turn {
+                if previous.parent_connection_id != conn_id || previous.survives_turn != survives_turn {
                     return None;
                 }
                 // 同一临界区替换，Stop/回答先赢锁时不会重新创建提问。
@@ -3976,11 +3979,15 @@ impl ConnectionManager {
             );
             drained
         };
-        self.resolve_drained_questions(conn_id, drained).await;
         // Ungated emit: the agent is blocked in the tool call, so the card must
         // show regardless of any turn-flag timing. 期限在应用事件时从共享句柄
         // 现读，防止「注册广播」与「并发延长」交错时带上旧期限。
-        emit_with_state_built(&state, &emitter, |_| {
+        let published = emit_with_state_built(&state, &emitter, |s| {
+            // 发布检查和状态写入同锁完成，避免提前读状态阻塞孤儿题回收/重注册，
+            // 也避免检查之后发生任务停止或回合替换时仍弹出旧题。
+            if s.replacing_turn || s.question_timed_out {
+                return None;
+            }
             Some(AcpEvent::QuestionRequest {
                 question_id: question_id.clone(),
                 questions: questions.clone(),
@@ -3989,6 +3996,12 @@ impl ConnectionManager {
             })
         })
         .await;
+        // 先发布新题再清旧题，替换期间 pending_question 始终挡住后续 prompt。
+        self.resolve_drained_questions(conn_id, drained).await;
+        if !published {
+            self.cancel_question(conn_id, &question_id).await;
+            return None;
+        }
         // Teardown event-ordering race: `cancel_questions_by_parent` may have
         // drained this entry between the insert above and the emit just now. The
         // QuestionRequest we broadcast would then have no waiter, and the sweep's
@@ -3997,12 +4010,10 @@ impl ConnectionManager {
         // our QuestionRequest) and decline. (The listener's post-register token
         // re-check covers the complementary case: a register that lands entirely
         // after the sweep, which this presence check would not catch.)
-        if self
-            .compensate_if_question_drained(&question_id, &state, &emitter)
-            .await
-        {
-            return None;
-        }
+        self.compensate_if_question_drained(&question_id, &state, &emitter)
+            .await;
+        // 条目消失也可能是用户抢先答复。始终交还本轮 receiver：已缓冲的答案
+        // 必须送达；真正撤回时，等待器会从关闭的 sender 得到取消，而非默认答案。
         Some(RegisteredQuestion {
             question_id,
             answer_rx: rx,
@@ -4068,7 +4079,7 @@ impl ConnectionManager {
     }
 
     /// 把提问倒计时清空、转为无限等待（保留表单与答案通道，只移除倒计时）。
-    /// 最终重提耗尽且未开启自动选择时，由等待循环调用。
+    /// 仅保留为旧调用方的兼容入口；正常超时策略耗尽后停止任务。
     pub async fn clear_question_deadline(
         &self,
         parent_connection_id: &str,
@@ -4886,6 +4897,18 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             .await
     }
 
+    async fn retry_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        self.manager.register_question_inner(
+            parent_connection_id, questions, Some(timeout), true, Some(question_id),
+        ).await
+    }
+
     async fn retry_native_question_with_timeout(
         &self,
         parent_connection_id: &str,
@@ -4917,6 +4940,33 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
                 tracing::debug!(parent_connection_id, "提问耗尽时连接已关闭");
             }
         }
+    }
+
+    async fn stop_timed_out_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
+        let Some((state, emitter)) = self.manager.get_state_and_emitter(parent_connection_id).await else {
+            return false;
+        };
+        let cmd_tx = {
+            let connections = self.manager.connections.lock().await;
+            let Some(conn) = connections.get(parent_connection_id) else { return false; };
+            conn.cmd_tx.clone()
+        };
+        let Ok(permit) = cmd_tx.reserve().await else { return false; };
+        {
+            let mut pending = self.manager.pending_questions.lock().await;
+            if !pending.get(question_id).is_some_and(|q| q.parent_connection_id == parent_connection_id) {
+                return false;
+            }
+            // 此时待答快照仍挡住 prompt admission；先同步排入 Cancel，再移除条目。
+            // 不 await 到广播之后才发送，否则新 prompt 可能先于 Cancel 入队。
+            state.write().await.question_timed_out = true;
+            permit.send(ConnectionCommand::Cancel);
+            pending.remove(question_id);
+        }
+        emit_with_state(&state, &emitter, AcpEvent::QuestionResolved {
+            question_id: question_id.to_owned(),
+        }).await;
+        true
     }
 
     async fn clear_question_deadline(&self, parent_connection_id: &str, question_id: &str) {
@@ -10889,6 +10939,111 @@ mod tests {
     }
 
     // --- ask_user_question: register / answer / cancel -------------------
+
+    #[tokio::test]
+    async fn question_answer_during_retry_publication_reaches_the_new_receiver() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("publish-answer", AgentType::Codex, None, EventEmitter::Noop).await;
+        let old = mgr.register_question_with_timeout("publish-answer", q_spec(), None).await.unwrap();
+        drop(old.answer_rx);
+        let state = mgr.get_state("publish-answer").await.unwrap();
+        let state_guard = state.read().await;
+        let registering = mgr.register_question_with_timeout("publish-answer", q_spec(), None);
+        tokio::pin!(registering);
+        tokio::select! {
+            biased;
+            _ = &mut registering => panic!("新题发布应等待状态锁"),
+            _ = std::future::ready(()) => {}
+        }
+        // 新题发布后，连接锁会阻塞旧题清理，从而给本轮答案一个确定的插入点。
+        let connections_guard = mgr.connections.lock().await;
+        drop(state_guard);
+        tokio::select! {
+            biased;
+            _ = &mut registering => panic!("旧题清理应等待连接锁"),
+            _ = std::future::ready(()) => {}
+        }
+        let current = state.read().await.pending_question.clone().unwrap();
+        assert_ne!(current.question_id, old.question_id);
+        let answering = mgr.answer_question("publish-answer", &current.question_id, QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem {
+                question_id: "qa".into(), labels: vec!["B".into()],
+            }],
+            declined: false,
+        });
+        tokio::pin!(answering);
+        tokio::select! {
+            biased;
+            _ = &mut answering => panic!("答案广播应等待连接锁"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(connections_guard);
+        let (registered, answered) = tokio::join!(registering, answering);
+        answered.unwrap();
+        let registered = registered.expect("不能丢弃已经接受用户答案的新 receiver");
+        let outcome = registered.answer_rx.await.unwrap();
+        assert!(!outcome.declined);
+        assert_eq!(outcome.answers[0].selected, ["B"]);
+        assert!(state.read().await.pending_question.is_none());
+    }
+
+    #[tokio::test]
+    async fn terminal_question_timeout_orders_cancel_and_requires_new_instruction() {
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = insert_live_connection(&manager, "timeout-stop", AgentType::Codex, None).await;
+        let access = ConnectionManagerQuestionLookup { manager: manager.clone() };
+        let reg = access.register_question_with_timeout(
+            "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        let state = manager.get_state("timeout-stop").await.unwrap();
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "session".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
+        });
+        assert!(access.stop_timed_out_question("timeout-stop", &reg.question_id).await);
+        assert!(reg.answer_rx.await.is_err());
+        assert!(state.read().await.question_timed_out);
+        assert!(state.read().await.pending_question.is_none());
+        assert!(access.register_question_with_timeout(
+            "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
+        ).await.is_none(), "旧任务不可通过再次 Ask 重置重试预算");
+        manager.send_prompt("timeout-stop", vec![PromptInputBlock::Text {
+            text: "new user instruction".into(),
+        }]).await.unwrap();
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Cancel)));
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
+        assert!(!state.read().await.question_timed_out);
+        let next = access.register_question_with_timeout(
+            "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
+        ).await.expect("新指令恢复提问");
+        manager.answer_question("timeout-stop", &next.question_id, QuestionAnswer {
+            answers: vec![], declined: true,
+        }).await.unwrap();
+        assert!(!access.stop_timed_out_question("timeout-stop", &next.question_id).await);
+        assert!(commands.try_recv().is_err(), "已回答的问题不能误停新任务");
+        assert!(!state.read().await.question_timed_out);
+    }
+
+    #[tokio::test]
+    async fn mcp_retry_atomically_replaces_only_the_original_pending_question() {
+        let manager = Arc::new(ConnectionManager::new());
+        let _commands = insert_live_connection(&manager, "mcp-retry", AgentType::ClaudeCode, None).await;
+        let access = ConnectionManagerQuestionLookup { manager: manager.clone() };
+        let first = access.register_question_with_timeout(
+            "mcp-retry", q_spec(), Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        let second = access.retry_question_with_timeout(
+            "mcp-retry", &first.question_id, q_spec(), Duration::from_secs(600),
+        ).await.unwrap();
+        assert!(first.answer_rx.await.is_err());
+        let state = manager.get_state("mcp-retry").await.unwrap();
+        let current = state.read().await.pending_question.clone().unwrap();
+        assert_eq!(current.question_id, second.question_id);
+        assert!(current.survives_turn);
+        assert!(access.cancel_question("mcp-retry", &second.question_id).await);
+        assert!(access.retry_question_with_timeout(
+            "mcp-retry", &second.question_id, q_spec(), Duration::from_secs(600),
+        ).await.is_none(), "Stop 先撤回后不能再重提");
+    }
 
     #[tokio::test]
     async fn pending_mcp_question_blocks_next_prompt_after_foreground_turn_ends() {

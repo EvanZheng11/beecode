@@ -52,7 +52,7 @@ pub struct QuestionSettings {
     pub wait_timeout_minutes: u32,
     /// 等待超时后重新询问的次数，0 表示不重提。
     pub retry_count: u32,
-    /// 等待全部用尽后自动选择每个问题的第一个选项，而不是继续等待。
+    /// 等待全部用尽后自动选择每个问题的第一个选项；关闭时停止本任务。
     pub auto_select_first_on_timeout: bool,
 }
 

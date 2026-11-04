@@ -100,11 +100,21 @@ impl NativeQuestion {
                 continue;
             }
             // 和回答/Stop 争夺同一注册表锁：只有我们移除的到期题可以默认。
-            if !self
-                .access
-                .cancel_question(&self.connection_id, &self.registered.question_id)
-                .await
-            {
+            let can_default = self.config.auto_select_first_on_timeout
+                && self
+                    .specs
+                    .iter()
+                    .all(|question| !question.options.is_empty());
+            let removed = if can_default {
+                self.access
+                    .cancel_question(&self.connection_id, &self.registered.question_id)
+                    .await
+            } else {
+                self.access
+                    .stop_timed_out_question(&self.connection_id, &self.registered.question_id)
+                    .await
+            };
+            if !removed {
                 return self.registered.answer_rx.try_recv().ok();
             }
             // cancel_question 的广播可能等待锁；期间到达的撤回仍优先于默认答案。
@@ -113,7 +123,7 @@ impl NativeQuestion {
                 () = &mut cancellation => return None,
                 () = std::future::ready(()) => {}
             }
-            if self.config.auto_select_first_on_timeout {
+            if can_default {
                 let answer = QuestionAnswer {
                     answers: self
                         .specs
@@ -131,7 +141,6 @@ impl NativeQuestion {
                 };
                 return Some(super::question::build_outcome(&self.specs, &answer));
             }
-            self.access.stop_question_task(&self.connection_id).await;
             return None;
         }
         None
@@ -154,7 +163,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionQuestionAccess for Access {
-        async fn register_question(&self, _: &str, _: Vec<QuestionSpec>) -> Option<RegisteredQuestion> {
+        async fn register_question(
+            &self,
+            _: &str,
+            _: Vec<QuestionSpec>,
+        ) -> Option<RegisteredQuestion> {
             panic!("原生桥必须使用带期限入口")
         }
 
@@ -184,7 +197,10 @@ mod tests {
 
         async fn cancel_question(&self, _: &str, id: &str) -> bool {
             let mut pending = self.pending.lock().unwrap();
-            if pending.as_ref().is_some_and(|(current, _, _)| current == id) {
+            if pending
+                .as_ref()
+                .is_some_and(|(current, _, _)| current == id)
+            {
                 pending.take();
                 true
             } else {

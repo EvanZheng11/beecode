@@ -537,19 +537,30 @@ impl DelegationListener {
                 let wait_timeout = std::time::Duration::from_secs(
                     u64::from(cfg.wait_timeout_minutes) * 60,
                 );
+                let Some(mut reg) = self.questions.register_question_with_timeout(
+                    &parent_conn_id, req.questions.clone(), Some(wait_timeout),
+                ).await else {
+                    write_frame(conn, &ask_error_response(BrokerAskError::Unavailable)?).await?;
+                    return Ok(());
+                };
                 for attempt in 0..attempts {
-                    let Some(reg) = self
-                        .questions
-                        .register_question_with_timeout(
-                            &parent_conn_id,
-                            req.questions.clone(),
-                            Some(wait_timeout),
-                        )
-                        .await
-                    else {
-                        write_frame(conn, &ask_error_response(BrokerAskError::Unavailable)?).await?;
-                        return Ok(());
-                    };
+                    if attempt > 0 {
+                        let next = self.questions.retry_question_with_timeout(
+                            &parent_conn_id, &reg.question_id, req.questions.clone(), wait_timeout,
+                        ).await;
+                        match next {
+                            Some(next) => reg = next,
+                            None => {
+                                // 回答或 Stop 赢了原子替换：保留实际答案，否则取消，绝不复活。
+                                let response = match reg.answer_rx.try_recv() {
+                                    Ok(answer) => ask_response(&answer)?,
+                                    Err(_) => ask_error_response(BrokerAskError::Cancelled)?,
+                                };
+                                write_frame(conn, &response).await?;
+                                return Ok(());
+                            }
+                        }
+                    }
                     let question_id = reg.question_id.clone();
                     // 关闭注册与连接拆除之间的竞态，避免留下孤立提问。
                     if self.tokens.lookup(&req.token).await.is_none() {
@@ -563,7 +574,9 @@ impl DelegationListener {
                         conn,
                         &self.questions,
                         &parent_conn_id,
-                        reg,
+                        &mut reg,
+                        attempt + 1 < attempts,
+                        attempt + 1 == attempts && !cfg.auto_select_first_on_timeout,
                     )
                     .await
                     {
@@ -596,7 +609,6 @@ impl DelegationListener {
                         }
                         AskWaitResult::TimedOut => {
                             // 停止真实回合，不把未答当作拒答或授权，也不只依赖模型遵守提示。
-                            self.questions.stop_question_task(&parent_conn_id).await;
                             write_frame(conn, &ask_error_response(BrokerAskError::TimedOut)?).await?;
                             return Ok(());
                         }
@@ -1451,14 +1463,16 @@ async fn wait_for_question_answer<C>(
     conn: &mut C,
     questions: &Arc<dyn SessionQuestionAccess>,
     parent_connection_id: &str,
-    reg: crate::acp::question::RegisteredQuestion,
+    reg: &mut crate::acp::question::RegisteredQuestion,
+    retry_on_timeout: bool,
+    stop_on_timeout: bool,
 ) -> AskWaitResult
 where
     C: AsyncReadExt + Unpin,
 {
-    let question_id = reg.question_id;
-    let mut answer_rx = reg.answer_rx;
-    let deadline = reg.deadline;
+    let question_id = &reg.question_id;
+    let answer_rx = &mut reg.answer_rx;
+    let deadline = reg.deadline.as_ref();
     let mut probe = [0u8; 1];
     let peer_closed = conn.read(&mut probe);
     tokio::pin!(peer_closed);
@@ -1472,7 +1486,7 @@ where
     let mut result = loop {
         let Some(wake_at) = deadline.as_ref().and_then(|d| d.current().map(|p| p.at)) else {
             // 没有期限（或已被清空）：只等答复或对端关闭。
-            break wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed).await;
+            break wait_answer_or_peer_close(answer_rx, &mut peer_closed).await;
         };
         sleep.as_mut().reset(wake_at);
         let deadline_changed = async {
@@ -1485,7 +1499,7 @@ where
         };
         tokio::select! {
             biased;
-            outcome = wait_answer_or_peer_close(&mut answer_rx, &mut peer_closed) => break outcome,
+            outcome = wait_answer_or_peer_close(answer_rx, &mut peer_closed) => break outcome,
             _ = &mut sleep => {
                 // 到点瞬间可能与延长并发：以醒来后读到的最新期限为准。
                 match deadline.as_ref().and_then(|d| d.current().map(|p| p.at)) {
@@ -1510,13 +1524,14 @@ where
         }
     }
 
-    if matches!(
-        result,
-        AskWaitResult::TimedOut | AskWaitResult::PeerClosed | AskWaitResult::Cancelled
-    ) {
-        let removed = questions
-            .cancel_question(parent_connection_id, &question_id)
-            .await;
+    if matches!(result, AskWaitResult::PeerClosed | AskWaitResult::Cancelled)
+        || (matches!(result, AskWaitResult::TimedOut) && !retry_on_timeout)
+    {
+        let removed = if matches!(result, AskWaitResult::TimedOut) && stop_on_timeout {
+            questions.stop_timed_out_question(parent_connection_id, question_id).await
+        } else {
+            questions.cancel_question(parent_connection_id, question_id).await
+        };
         if matches!(result, AskWaitResult::TimedOut) {
             // 回答在同一注册表锁内投递，先取实际答案；只有自己撤回才算正常超时。
             // 外部撤回可能仍在广播并持有 sender，因此 Empty 和 Closed 都是取消。
@@ -4121,7 +4136,7 @@ mod tests {
         let stub = Arc::new(StubQuestion::default());
         let questions: Arc<dyn SessionQuestionAccess> = stub.clone();
         // 初始期限 150ms；80ms 时追加 400ms，新期限约为注册后 550ms。
-        let reg = stub
+        let mut reg = stub
             .register_question_with_timeout(
                 "parent-conn",
                 Vec::new(),
@@ -4142,7 +4157,9 @@ mod tests {
             &mut server,
             &questions,
             "parent-conn",
-            reg,
+            &mut reg,
+            false,
+            false,
         )
         .await;
         let elapsed = started.elapsed();

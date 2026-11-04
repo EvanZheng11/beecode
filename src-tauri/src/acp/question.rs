@@ -326,6 +326,20 @@ pub trait SessionQuestionAccess: Send + Sync {
         self.register_question(parent_connection_id, questions).await
     }
 
+    /// MCP 重提也原子替换：旧题已被回答或 Stop 撤回时，不得再弹出新题。
+    async fn retry_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        if !self.cancel_question(parent_connection_id, question_id).await {
+            return None;
+        }
+        self.register_question_with_timeout(parent_connection_id, questions, Some(timeout)).await
+    }
+
     /// 原生提问带期限注册；生产必须保留 `survives_turn=false`。
     async fn register_native_question_with_timeout(
         &self,
@@ -356,7 +370,17 @@ pub trait SessionQuestionAccess: Send + Sync {
     /// 等待耗尽且禁止自动选择时，停止宿主任务。测试桩默认无操作。
     async fn stop_question_task(&self, _parent_connection_id: &str) {}
 
-    /// 把提问的倒计时清空、转为无限等待（最终保留表单时由等待循环调用）。
+    /// 终次超时必须先把停止命令入队，再清除卡片并开放下一次 prompt。
+    /// 与回答争夺注册表条目；只有真正撤回了本题才停止其所属任务。
+    async fn stop_timed_out_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
+        if !self.cancel_question(parent_connection_id, question_id).await {
+            return false;
+        }
+        self.stop_question_task(parent_connection_id).await;
+        true
+    }
+
+    /// 兼容旧调用方的无期限等待入口；正常超时策略不再转为无限等待。
     /// 默认无操作，测试桩可以忽略。
     async fn clear_question_deadline(&self, _parent_connection_id: &str, _question_id: &str) {}
 
@@ -2144,7 +2168,7 @@ pub struct QuestionConfig {
     pub wait_timeout_minutes: u32,
     /// 等待超时后重新询问的次数，0 表示不重提。
     pub retry_count: u32,
-    /// 等待全部用尽后自动选择每个问题的第一个选项，而不是继续等待。
+    /// 等待全部用尽后自动选择每个问题的第一个选项；关闭时停止本任务。
     pub auto_select_first_on_timeout: bool,
 }
 

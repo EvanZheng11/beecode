@@ -523,7 +523,9 @@ describe("ConversationDetailPanel send-path hardening", () => {
     )
     expect(effectWithDeps).toContain("if (appendingQueuedId !== null) return")
     // 释放追加状态后依赖变化会重新运行 flush。
-    expect(effectWithDeps).toContain("appendingQueuedId])")
+    expect(effectWithDeps).toMatch(/appendingQueuedId,?\s*\]\)/)
+    expect(effectWithDeps).toContain("if (waitingForAnswer) return")
+    expect(effectWithDeps).toMatch(/waitingForAnswer,\s*runtimeSyncState/)
 
     const appendStart = source.indexOf(
       "const handleAppendQueuedAsFeedback = useCallback"

@@ -302,6 +302,8 @@ pub struct SessionState {
     /// At most one is pending at a time (the agent is blocked in the tool call);
     /// the backend's `pending_questions` registry keys the answer one-shot.
     pub pending_question: Option<PendingQuestionState>,
+    /// 提问预算耗尽后的任务终态；只有接受新的用户 prompt 才解除。
+    pub question_timed_out: bool,
 
     /// The agent's in-flight Grok `exit_plan_mode` approval (the plan awaiting the
     /// user's Approve / Request-changes / Abandon decision). Set by
@@ -911,6 +913,7 @@ impl SessionState {
             permission_matched_calls: BTreeSet::new(),
             pending_permission: None,
             pending_question: None,
+            question_timed_out: false,
             pending_plan_approval: None,
             active_delegations: BTreeMap::new(),
             feedback: Vec::new(),
