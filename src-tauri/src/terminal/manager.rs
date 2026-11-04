@@ -404,6 +404,7 @@ fn configure_shell_command(cmd: &mut CommandBuilder, shell: &str, initial_comman
 }
 
 /// Options for spawning a new terminal session.
+#[derive(Clone)]
 pub struct SpawnOptions {
     pub terminal_id: String,
     pub working_dir: String,
@@ -440,6 +441,7 @@ impl TerminalManager {
         opts: SpawnOptions,
         emitter: EventEmitter,
     ) -> Result<String, TerminalError> {
+        let monitor_options = opts.clone();
         // Reserve the ID before any fallible OS work. The guard releases it
         // on every error path, and insertion happens before the guard drops.
         let _reservation = {
@@ -525,6 +527,7 @@ impl TerminalManager {
             .spawn_command(cmd)
             .map_err(|e| TerminalError::SpawnFailed(e.to_string()))?;
 
+        let monitor_pid = child.process_id();
         drop(pair.slave);
 
         let writer = pair
@@ -579,6 +582,34 @@ impl TerminalManager {
             }
             lock_completed(&self.completed).remove(&terminal_id);
             terminals.insert(terminal_id.clone(), instance);
+        }
+
+        if let Some(pid) = monitor_pid {
+            let manager = self.clone_ref();
+            let events = emitter.clone();
+            let restart = monitor_options.temp_files.is_empty();
+            crate::resource_monitor::register_terminal(
+                pid,
+                terminal_id.clone(),
+                restart,
+                Arc::new(move |start, action| {
+                    manager
+                        .end_checked(&monitor_options.terminal_id, true, Some((pid, start)))
+                        .map_err(|e| {
+                            crate::app_error::AppCommandError::task_execution_failed(e.to_string())
+                        })?;
+                    if matches!(action, crate::resource_monitor::Action::Restart) {
+                        manager
+                            .spawn_with_id(monitor_options.clone(), events.clone())
+                            .map_err(|e| {
+                                crate::app_error::AppCommandError::task_execution_failed(
+                                    e.to_string(),
+                                )
+                            })?;
+                    }
+                    Ok(())
+                }),
+            );
         }
 
         // Named writer thread
@@ -731,7 +762,29 @@ impl TerminalManager {
     }
 
     fn end(&self, terminal_id: &str, keep_record: bool) -> Result<(), TerminalError> {
+        self.end_checked(terminal_id, keep_record, None)
+    }
+
+    fn end_checked(
+        &self,
+        terminal_id: &str,
+        keep_record: bool,
+        expected: Option<(u32, u64)>,
+    ) -> Result<(), TerminalError> {
         let mut terminals = lock_terminals(&self.terminals);
+        // 在同一把管理器锁内核对原进程并取走句柄，防止同名终端重启后误操作新实例。
+        if let Some((pid, start)) = expected {
+            let matches = terminals.get_mut(terminal_id).is_some_and(|instance| {
+                instance._child.process_id() == Some(pid)
+                    && crate::resource_monitor::identity_matches(pid, start)
+                    && matches!(instance._child.try_wait(), Ok(None))
+            });
+            if !matches {
+                return Err(TerminalError::SpawnFailed(
+                    "终端已退出或进程标识已变化".into(),
+                ));
+            }
+        }
         if let Some(mut instance) = terminals.remove(terminal_id) {
             if keep_record {
                 // Recorded before the table lock is released, so no snapshot

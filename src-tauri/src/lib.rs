@@ -60,6 +60,7 @@ pub mod pets;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
+pub mod resource_monitor;
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod relaunch;
 pub mod runtime_lock;
@@ -1806,6 +1807,10 @@ mod tauri_app {
                 }
             })
             .invoke_handler(tauri::generate_handler![
+                crate::resource_monitor::get_resource_monitor_settings,
+                crate::resource_monitor::set_resource_monitor_enabled,
+                crate::resource_monitor::get_resource_monitor_snapshot,
+                crate::resource_monitor::resource_monitor_process_action,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
