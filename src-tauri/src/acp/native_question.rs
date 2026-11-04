@@ -1,0 +1,304 @@
+//! 原生 ACP 提问的等待策略；权限审批不经过这里。
+
+use super::question::{
+    QuestionAnswer, QuestionAnswerItem, QuestionConfig, QuestionDeadline, QuestionOutcome,
+    QuestionSpec, RegisteredQuestion, SessionQuestionAccess,
+};
+use std::{future::Future, sync::Arc, time::Duration};
+
+pub(super) struct NativeQuestion {
+    access: Arc<dyn SessionQuestionAccess>,
+    connection_id: String,
+    specs: Vec<QuestionSpec>,
+    config: QuestionConfig,
+    registered: RegisteredQuestion,
+}
+
+impl NativeQuestion {
+    pub(super) async fn register(
+        access: Arc<dyn SessionQuestionAccess>,
+        connection_id: &str,
+        specs: Vec<QuestionSpec>,
+        config: QuestionConfig,
+    ) -> Option<Self> {
+        let registered = access
+            .register_native_question_with_timeout(
+                connection_id,
+                specs.clone(),
+                Duration::from_secs(u64::from(config.wait_timeout_minutes) * 60),
+            )
+            .await?;
+        Some(Self {
+            access,
+            connection_id: connection_id.to_owned(),
+            specs,
+            config,
+            registered,
+        })
+    }
+
+    pub(super) async fn wait(
+        mut self,
+        cancellation: impl Future<Output = ()>,
+    ) -> Option<QuestionOutcome> {
+        tokio::pin!(cancellation);
+        for round in 0..=self.config.retry_count {
+            // 测试桩可不提供期限，生产注册入口始终提供共享句柄。
+            let deadline = self.registered.deadline.clone().unwrap_or_else(|| {
+                QuestionDeadline::from_now(Duration::from_secs(
+                    u64::from(self.config.wait_timeout_minutes) * 60,
+                ))
+            });
+            let mut changes = deadline.subscribe();
+            loop {
+                let at = deadline.current().map(|point| point.at);
+                tokio::select! {
+                    biased;
+                    () = &mut cancellation => {
+                        tracing::debug!(connection_id = %self.connection_id, question_id = %self.registered.question_id, "原生提问被对端或权限队列撤回");
+                        self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        return None;
+                    }
+                    answer = &mut self.registered.answer_rx => {
+                        if answer.is_err() {
+                            tracing::debug!(connection_id = %self.connection_id, question_id = %self.registered.question_id, "原生提问注册表已取消（Stop/回合结束/断连）");
+                        }
+                        return answer.ok();
+                    }
+                    _ = changes.changed() => continue,
+                    () = async {
+                        match at {
+                            Some(at) => tokio::time::sleep_until(at).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if deadline.is_expired() { break; }
+                    }
+                }
+            }
+            tracing::info!(
+                connection_id = %self.connection_id,
+                question_id = %self.registered.question_id,
+                round,
+                retry_count = self.config.retry_count,
+                "原生提问已到配置期限"
+            );
+            if round < self.config.retry_count {
+                let next = self
+                    .access
+                    .retry_native_question_with_timeout(
+                        &self.connection_id,
+                        &self.registered.question_id,
+                        self.specs.clone(),
+                        Duration::from_secs(u64::from(self.config.wait_timeout_minutes) * 60),
+                    )
+                    .await;
+                match next {
+                    Some(next) => self.registered = next,
+                    None => return self.registered.answer_rx.try_recv().ok(),
+                }
+                continue;
+            }
+            // 和回答/Stop 争夺同一注册表锁：只有我们移除的到期题可以默认。
+            if !self
+                .access
+                .cancel_question(&self.connection_id, &self.registered.question_id)
+                .await
+            {
+                return self.registered.answer_rx.try_recv().ok();
+            }
+            // cancel_question 的广播可能等待锁；期间到达的撤回仍优先于默认答案。
+            tokio::select! {
+                biased;
+                () = &mut cancellation => return None,
+                () = std::future::ready(()) => {}
+            }
+            if self.config.auto_select_first_on_timeout {
+                let answer = QuestionAnswer {
+                    answers: self
+                        .specs
+                        .iter()
+                        .map(|q| QuestionAnswerItem {
+                            question_id: q.id.clone(),
+                            labels: q
+                                .options
+                                .first()
+                                .map(|o| vec![o.label.clone()])
+                                .unwrap_or_default(),
+                        })
+                        .collect(),
+                    declined: false,
+                };
+                return Some(super::question::build_outcome(&self.specs, &answer));
+            }
+            self.access.stop_question_task(&self.connection_id).await;
+            return None;
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::question::{parse_questions, QuestionDeadline, QuestionOutcome};
+    use std::sync::Mutex;
+    use tokio::sync::oneshot;
+
+    #[derive(Default)]
+    struct Access {
+        pending: Mutex<Option<(String, oneshot::Sender<QuestionOutcome>, QuestionDeadline)>>,
+        rounds: Mutex<u32>,
+        stops: Mutex<u32>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionQuestionAccess for Access {
+        async fn register_question(&self, _: &str, _: Vec<QuestionSpec>) -> Option<RegisteredQuestion> {
+            panic!("原生桥必须使用带期限入口")
+        }
+
+        async fn register_native_question_with_timeout(
+            &self,
+            _: &str,
+            _: Vec<QuestionSpec>,
+            timeout: std::time::Duration,
+        ) -> Option<RegisteredQuestion> {
+            let mut rounds = self.rounds.lock().unwrap();
+            *rounds += 1;
+            let id = rounds.to_string();
+            let deadline = QuestionDeadline::from_now(timeout);
+            let (tx, rx) = oneshot::channel();
+            assert!(self
+                .pending
+                .lock()
+                .unwrap()
+                .replace((id.clone(), tx, deadline.clone()))
+                .is_none());
+            Some(RegisteredQuestion {
+                question_id: id,
+                answer_rx: rx,
+                deadline: Some(deadline),
+            })
+        }
+
+        async fn cancel_question(&self, _: &str, id: &str) -> bool {
+            let mut pending = self.pending.lock().unwrap();
+            if pending.as_ref().is_some_and(|(current, _, _)| current == id) {
+                pending.take();
+                true
+            } else {
+                false
+            }
+        }
+
+        async fn cancel_questions_by_parent(&self, _: &str) {
+            self.pending.lock().unwrap().take();
+        }
+
+        async fn stop_question_task(&self, _: &str) {
+            *self.stops.lock().unwrap() += 1;
+        }
+    }
+
+    async fn question(access: &Arc<Access>, auto: bool) -> NativeQuestion {
+        let specs = parse_questions(&serde_json::json!({"questions": [{
+            "question": "选哪个？", "header": "选择", "options": [{"label": "甲"}, {"label": "乙"}]
+        }]}))
+        .unwrap();
+        NativeQuestion::register(
+            access.clone(),
+            "parent",
+            specs,
+            QuestionConfig {
+                enabled: true,
+                wait_timeout_minutes: 10,
+                retry_count: 2,
+                auto_select_first_on_timeout: auto,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_full_rounds_then_selects_or_stops() {
+        for auto in [true, false] {
+            let access = Arc::new(Access::default());
+            let ask = question(&access, auto).await;
+            let start = tokio::time::Instant::now();
+            let outcome = ask.wait(std::future::pending()).await;
+            assert_eq!(start.elapsed(), std::time::Duration::from_secs(1800));
+            assert_eq!(*access.rounds.lock().unwrap(), 3);
+            assert_eq!(*access.stops.lock().unwrap(), u32::from(!auto));
+            assert!(access.pending.lock().unwrap().is_none());
+            if auto {
+                let outcome = outcome.unwrap();
+                assert!(!outcome.declined);
+                assert_eq!(outcome.answers[0].selected, ["甲"]);
+            } else {
+                assert!(outcome.is_none());
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn zero_retries_stops_after_one_configured_wait() {
+        let access = Arc::new(Access::default());
+        let mut ask = question(&access, false).await;
+        ask.config.retry_count = 0;
+        let start = tokio::time::Instant::now();
+        assert!(ask.wait(std::future::pending()).await.is_none());
+        assert_eq!(start.elapsed(), Duration::from_secs(600));
+        assert_eq!(*access.rounds.lock().unwrap(), 1);
+        assert_eq!(*access.stops.lock().unwrap(), 1);
+        assert!(access.pending.lock().unwrap().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn withdrawal_and_stop_never_default_or_retry() {
+        for peer_withdrawal in [true, false] {
+            let access = Arc::new(Access::default());
+            let ask = question(&access, true).await;
+            let (tx, rx) = oneshot::channel();
+            if peer_withdrawal {
+                tx.send(()).unwrap();
+            } else {
+                access.cancel_questions_by_parent("parent").await;
+            }
+            assert!(ask
+                .wait(async {
+                    let _ = rx.await;
+                })
+                .await
+                .is_none());
+            assert_eq!(*access.rounds.lock().unwrap(), 1);
+            assert_eq!(*access.stops.lock().unwrap(), 0);
+            assert!(access.pending.lock().unwrap().is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn extension_moves_the_actual_wait_and_answer_unblocks() {
+        let access = Arc::new(Access::default());
+        let ask = question(&access, true).await;
+        let waiting = tokio::spawn(ask.wait(std::future::pending()));
+        tokio::task::yield_now().await;
+        let deadline = access.pending.lock().unwrap().as_ref().unwrap().2.clone();
+        deadline
+            .try_extend(std::time::Duration::from_secs(600))
+            .unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(601)).await;
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        assert_eq!(*access.rounds.lock().unwrap(), 1);
+        let (_, tx, _) = access.pending.lock().unwrap().take().unwrap();
+        tx.send(QuestionOutcome {
+            answers: vec![],
+            declined: true,
+        })
+        .unwrap();
+        assert!(waiting.await.unwrap().unwrap().declined);
+        assert_eq!(*access.stops.lock().unwrap(), 0);
+    }
+}

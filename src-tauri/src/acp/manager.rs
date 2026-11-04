@@ -3890,9 +3890,8 @@ impl ConnectionManager {
         conn_id: &str,
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion> {
-        // 原生 agent 提问（grok / pi / elicitation）没有确定性的等待时长，
-        // 因此不带倒计时；只有 MCP `ask_user_question` 走下面带期限的入口。
-        self.register_question_inner(conn_id, questions, None, false)
+        // 保留无期限底层入口；实时原生桥走 register_native_question_with_timeout。
+        self.register_question_inner(conn_id, questions, None, false, None)
             .await
     }
 
@@ -3906,7 +3905,17 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: Option<std::time::Duration>,
     ) -> Option<RegisteredQuestion> {
-        self.register_question_inner(conn_id, questions, timeout, true)
+        self.register_question_inner(conn_id, questions, timeout, true, None)
+            .await
+    }
+
+    pub async fn register_native_question_with_timeout(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        self.register_question_inner(conn_id, questions, Some(timeout), false, None)
             .await
     }
 
@@ -3916,6 +3925,7 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: Option<std::time::Duration>,
         survives_turn: bool,
+        replacing_question: Option<&str>,
     ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
@@ -3938,7 +3948,19 @@ impl ConnectionManager {
             if !Arc::ptr_eq(&conn.state, &state) {
                 return None;
             }
-            let drained = Self::drain_parent_questions(&mut reg, conn_id, |e| e.sender.is_closed());
+            let mut drained = Vec::new();
+            if let Some(previous_id) = replacing_question {
+                let previous = reg.get(previous_id)?;
+                if previous.parent_connection_id != conn_id || previous.survives_turn {
+                    return None;
+                }
+                // 同一临界区替换，Stop/回答先赢锁时不会重新创建提问。
+                reg.remove(previous_id);
+                drained.push(previous_id.to_string());
+            }
+            drained.extend(Self::drain_parent_questions(&mut reg, conn_id, |e| {
+                e.sender.is_closed()
+            }));
             if reg.values().any(|e| e.parent_connection_id == conn_id) {
                 return None;
             }
@@ -3992,7 +4014,7 @@ impl ConnectionManager {
     /// 新的 RFC3339 UTC 期限。
     ///
     /// 拒绝三种情况：提问已结束（已回答 / 已取消 / 已被清理，注册表里没有）、
-    /// 从来没有期限（原生 agent 提问），以及期限已经过去。到期检查与递增
+    /// 从来没有期限（兼容底层无期限入口），以及期限已经过去。到期检查与递增
     /// 由 [`QuestionDeadline::try_extend`] 在同一个 `watch` 写锁临界区内完成，
     /// 这里不再单独预检，避免“检查后线程被抢占、随后又从 now 复活”的窗口。
     ///
@@ -4851,6 +4873,50 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         self.manager
             .register_question_with_timeout(parent_connection_id, questions, timeout)
             .await
+    }
+
+    async fn register_native_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        self.manager
+            .register_native_question_with_timeout(parent_connection_id, questions, timeout)
+            .await
+    }
+
+    async fn retry_native_question_with_timeout(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+        questions: Vec<QuestionSpec>,
+        timeout: std::time::Duration,
+    ) -> Option<RegisteredQuestion> {
+        self.manager
+            .register_question_inner(
+                parent_connection_id,
+                questions,
+                Some(timeout),
+                false,
+                Some(question_id),
+            )
+            .await
+    }
+
+    async fn stop_question_task(&self, parent_connection_id: &str) {
+        let cmd_tx = self
+            .manager
+            .connections
+            .lock()
+            .await
+            .get(parent_connection_id)
+            .map(|conn| conn.cmd_tx.clone());
+        if let Some(cmd_tx) = cmd_tx {
+            if cmd_tx.send(ConnectionCommand::Cancel).await.is_err() {
+                tracing::debug!(parent_connection_id, "提问耗尽时连接已关闭");
+            }
+        }
     }
 
     async fn clear_question_deadline(&self, parent_connection_id: &str, question_id: &str) {
@@ -11349,6 +11415,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_timed_retry_keeps_turn_scope_and_cannot_revive_withdrawn_question() {
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands =
+            insert_live_connection(&manager, "native-timed", AgentType::Codex, None).await;
+        let access = ConnectionManagerQuestionLookup {
+            manager: manager.clone(),
+        };
+        let first = access
+            .register_native_question_with_timeout(
+                "native-timed",
+                q_spec(),
+                Duration::from_secs(600),
+            )
+            .await
+            .unwrap();
+        let first_expiry = pending_expires_at(&manager, "native-timed").await.unwrap();
+        assert!(first.deadline.is_some());
+        let second = access
+            .retry_native_question_with_timeout(
+                "native-timed",
+                &first.question_id,
+                q_spec(),
+                Duration::from_secs(1200),
+            )
+            .await
+            .unwrap();
+        assert_ne!(first.question_id, second.question_id);
+        assert!(first.answer_rx.await.is_err());
+        assert!(pending_expires_at(&manager, "native-timed").await.unwrap() > first_expiry);
+        let state = manager.get_state("native-timed").await.unwrap();
+        assert!(
+            !state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .unwrap()
+                .survives_turn
+        );
+        manager.cancel_turn_questions_by_parent("native-timed").await;
+        assert!(second.answer_rx.await.is_err());
+        assert!(access
+            .retry_native_question_with_timeout(
+                "native-timed",
+                &second.question_id,
+                q_spec(),
+                Duration::from_secs(600),
+            )
+            .await
+            .is_none());
+        assert!(state.read().await.pending_question.is_none());
+        assert!(manager.pending_questions.lock().await.is_empty());
+        access.stop_question_task("native-timed").await;
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Cancel)));
+    }
+
+    #[tokio::test]
     async fn mcp_question_publishes_deadline_to_snapshot_and_native_does_not() {
         let mgr = ConnectionManager::new();
         mgr.insert_test_connection("cd", AgentType::ClaudeCode, None, EventEmitter::Noop)
@@ -11364,7 +11487,7 @@ mod tests {
         assert!(published > chrono::Utc::now(), "期限应在未来");
         assert!(timed.deadline.is_some());
 
-        // 原生提问（grok / pi / elicitation）没有确定时长，不能带倒计时。
+        // 无期限底层入口仍保持兼容；实时原生桥改走带期限入口。
         let native = mgr
             .register_question("cn", q_spec())
             .await
