@@ -5178,6 +5178,19 @@ export interface GitLogEntry {
   message: string
   files: GitLogFileChange[]
   pushed: boolean | null
+  /** Full parent hashes, first parent first. Absent from older servers. */
+  parents?: string[]
+  /** Branch / tag decorations. Absent from older servers. */
+  refs?: GitLogRef[]
+}
+
+export type GitLogRefKind = "head" | "local" | "remote" | "tag"
+
+export interface GitLogRef {
+  name: string
+  kind: GitLogRefKind
+  /** The local branch HEAD is attached to. */
+  is_head: boolean
 }
 
 export interface GitLogFileChange {

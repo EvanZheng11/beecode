@@ -52,6 +52,13 @@ import {
 } from "@/components/ai-elements/commit"
 import { cn } from "@/lib/utils"
 import { parseDate } from "@/components/layout/git-log-timeline"
+import { buildCommitGraph } from "@/components/layout/git-log-graph"
+import {
+  GitLogGraphCell,
+  GitLogRefBadges,
+  graphColumnWidth,
+  isHeadCommit,
+} from "@/components/layout/git-log-graph-cell"
 import {
   FileTree,
   FileTreeFile,
@@ -1466,6 +1473,16 @@ export function GitLogTab() {
     }),
     [t]
   )
+  // An author filter leaves gaps between commits and their parents, so the
+  // graph would only show dangling lanes; older servers send no parents.
+  const graph = useMemo(
+    () =>
+      selectedAuthor === null && entries.some((e) => e.parents !== undefined)
+        ? buildCommitGraph(entries)
+        : null,
+    [entries, selectedAuthor]
+  )
+  const graphWidth = graph ? graphColumnWidth(graph.laneCount) : 0
   const folderName = useMemo(() => {
     const path = folder?.path ?? ""
     const parts = path.split(/[\\/]/).filter(Boolean)
@@ -2248,6 +2265,7 @@ export function GitLogTab() {
           <ContextMenuTrigger asChild>
             <ScrollArea
               className="min-h-0 flex-1"
+              x="scroll"
               onViewportRef={handleViewportRef}
             >
               {/* Full-bleed, virtualized commit timeline: one continuous rail,
@@ -2280,6 +2298,9 @@ export function GitLogTab() {
                     const isFilesLoading = !!filesLoading[commitKey]
                     const filesLoadError = filesError[commitKey]
                     const isOpen = !!openByCommit[commitKey]
+                    const refs = entry.refs ?? []
+                    const isHead = isHeadCommit(refs)
+                    const graphRow = graph?.rows[index]
 
                     return (
                       <div key={entry.full_hash}>
@@ -2290,19 +2311,37 @@ export function GitLogTab() {
                                 8px side gaps. The whole commit is one card (push
                                 glyph lives inside the header), so right-clicking
                                 anywhere on the row — padding included — opens its
-                                menu. */}
+                                menu. The graph column sits outside the vertical
+                                padding so lanes run unbroken between rows; its
+                                node lines up with the subject line. */}
                             <div
                               className={cn(
-                                "px-2 py-0.5",
-                                index === 0 && "pt-2"
+                                "flex",
+                                graphRow ? "ps-1 pe-2" : "px-2"
                               )}
+                              style={
+                                graphRow
+                                  ? { minWidth: graphWidth + 240 }
+                                  : undefined
+                              }
                             >
+                              {graphRow ? (
+                                <GitLogGraphCell
+                                  row={graphRow}
+                                  width={graphWidth}
+                                  nodeY={index === 0 ? 26 : 20}
+                                  isHead={isHead}
+                                />
+                              ) : null}
                               <Commit
                                 className={cn(
-                                  "rounded-lg border transition-colors",
+                                  "my-0.5 min-w-0 flex-1 rounded-lg border transition-colors",
+                                  index === 0 && "mt-2",
                                   isOpen
                                     ? "border-border/60 bg-muted/20"
-                                    : "border-transparent bg-transparent"
+                                    : isHead
+                                      ? "border-primary/25 bg-primary/5"
+                                      : "border-transparent bg-transparent"
                                 )}
                                 onOpenChange={(open) => {
                                   setOpenByCommit((prev) => ({
@@ -2345,9 +2384,18 @@ export function GitLogTab() {
                                         (group = CommitHeader) instead of a hover
                                         background — widens the readable area.
                                         Single line: the subject. */}
-                                    <p className="truncate text-[0.8125rem] font-medium leading-snug text-foreground/70 transition-colors group-hover:text-foreground group-data-[state=open]:text-foreground">
-                                      {entry.message}
-                                    </p>
+                                    <div className="flex min-w-0 items-center gap-1">
+                                      <GitLogRefBadges refs={refs} />
+                                      <p
+                                        className={cn(
+                                          "min-w-0 flex-1 truncate text-[0.8125rem] font-medium leading-snug text-foreground/70 transition-colors group-hover:text-foreground group-data-[state=open]:text-foreground",
+                                          isHead &&
+                                            "font-semibold text-foreground"
+                                        )}
+                                      >
+                                        {entry.message}
+                                      </p>
+                                    </div>
                                     <div className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
                                       <span className="min-w-0 truncate">
                                         {entry.author}
