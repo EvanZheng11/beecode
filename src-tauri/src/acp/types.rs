@@ -882,6 +882,8 @@ pub enum AcpEvent {
     /// (the tool call was aborted / the connection drained). Carries only the
     /// `question_id`; clients clear the matching card. Idempotent on apply.
     QuestionResolved { question_id: String },
+    /// 提问耗尽暂停自动任务；只有显式用户新指令可以解除。
+    QuestionTaskStopped { stopped: bool },
     /// 某个待回答提问的等待截止时间被更新：用户每次延长 10 分钟，或最终
     /// 转为无限等待（`expires_at: None`）。连接号沿用事件 envelope，多窗口 /
     /// 重连时据此同步同一张提问卡片的倒计时。

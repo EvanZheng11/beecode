@@ -1206,6 +1206,7 @@ impl ConnectionManager {
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
         internal_suffix: Vec<PromptInputBlock>,
+        explicit_user_resume: bool,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1223,12 +1224,12 @@ impl ConnectionManager {
                 "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
             );
         }
-        let (cmd_tx, state_arc) = {
+        let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            (conn.cmd_tx.clone(), conn.state.clone())
+            (conn.cmd_tx.clone(), conn.state.clone(), conn.emitter.clone())
         };
         // Concurrency gate: reject a second prompt while a turn is already in
         // flight on this connection. Reserve channel capacity FIRST — that
@@ -1248,47 +1249,52 @@ impl ConnectionManager {
             .reserve()
             .await
             .map_err(|_| AcpError::ProcessExited)?;
-        {
-            let mut s = state_arc.write().await;
-            // Same lock as the gate. A notice that read hold=0 / idle before
-            // an insert landed must not take the slot the user's prompt is
-            // about to use, and must not start a second session/prompt while
-            // a timed-out replace is still on the wire.
+        let mut result = Ok(());
+        emit_with_state_built(&state_arc, &emitter, |s| {
             if s.prompt_barrier {
-                return Err(AcpError::TurnInProgress);
+                result = Err(AcpError::TurnInProgress);
+                return None;
             }
             if s.notice_hold > 0
                 && crate::acp::turn_replace::blocks_are_completion_notice(&blocks)
             {
                 #[cfg(test)]
                 NOTICE_PROMPT_REFUSALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Err(AcpError::FeedbackDeferred);
+                result = Err(AcpError::FeedbackDeferred);
+                return None;
             }
             if s.turn_in_flight || s.pending_question.is_some() {
-                // Names the gate, not just the outcome: the linked path checks
-                // the same flag once before its side effects and again here, and
-                // the two lines share a module target with no file/line in the
-                // default format — identical text would be unattributable.
                 tracing::debug!(
                     connection_id = %conn_id,
                     "[ACP] prompt rejected at the send gate: a turn is already in flight"
                 );
-                return Err(AcpError::TurnInProgress);
+                result = Err(AcpError::TurnInProgress);
+                return None;
             }
-            if s.question_timed_out
-                && crate::acp::turn_replace::blocks_are_completion_notice(&blocks)
-            {
-                return Err(AcpError::FeedbackDeferred);
+            if s.question_timed_out {
+                if crate::acp::turn_replace::blocks_are_completion_notice(&blocks) {
+                    result = Err(AcpError::FeedbackDeferred);
+                    return None;
+                }
+                // 旧调用方、队列及自动通知缺省都不能解除耗尽终态。
+                if !explicit_user_resume {
+                    result = Err(AcpError::TurnInProgress);
+                    return None;
+                }
             }
+            let resuming = s.question_timed_out;
             s.question_timed_out = false;
             s.turn_in_flight = true;
-        }
-        permit.send(ConnectionCommand::Prompt {
-            blocks,
-            user_message,
-            internal_suffix,
-        });
-        Ok(())
+            // 入队与恢复事件共用状态锁，取消调用方也不会漏发终态变化。
+            permit.send(ConnectionCommand::Prompt {
+                blocks,
+                user_message,
+                internal_suffix,
+            });
+            resuming.then_some(AcpEvent::QuestionTaskStopped { stopped: false })
+        })
+        .await;
+        result
     }
 
     /// Clone the connection's `prompt_lock` under a short connections-map lock.
@@ -1310,10 +1316,25 @@ impl ConnectionManager {
         conn_id: &str,
         blocks: Vec<PromptInputBlock>,
     ) -> Result<(), AcpError> {
+        self.send_prompt_with_resume(conn_id, blocks, false).await
+    }
+
+    pub(crate) async fn send_prompt_with_resume(
+        &self,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        explicit_user_resume: bool,
+    ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
-            .await
+        self.send_prompt_inner(
+            conn_id,
+            blocks,
+            None,
+            Vec::new(),
+            explicit_user_resume,
+        )
+        .await
     }
 
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
@@ -1383,6 +1404,33 @@ impl ConnectionManager {
             delegation,
             client_message_id,
             Vec::new(),
+            false,
+        )
+        .await
+    }
+
+    /// 显式用户新输入可恢复提问耗尽后的任务；旧入口保持安全缺省。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_with_resume(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        explicit_user_resume: bool,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            Vec::new(),
+            explicit_user_resume,
         )
         .await
     }
@@ -1412,6 +1460,7 @@ impl ConnectionManager {
             delegation,
             None,
             internal_suffix,
+            false,
         )
         .await
     }
@@ -1427,6 +1476,7 @@ impl ConnectionManager {
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
         internal_suffix: Vec<PromptInputBlock>,
+        explicit_user_resume: bool,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1486,7 +1536,11 @@ impl ConnectionManager {
                 let s = conn.state.read().await;
                 (
                     s.conversation_id.is_some(),
-                    s.turn_in_flight || s.pending_question.is_some(),
+                    s.turn_in_flight
+                        || s.pending_question.is_some()
+                        || (s.question_timed_out
+                            && (!explicit_user_resume
+                                || crate::acp::turn_replace::blocks_are_completion_notice(&blocks))),
                 )
             };
             (
@@ -1877,7 +1931,13 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
+            .send_prompt_inner(
+                conn_id,
+                blocks,
+                user_message,
+                internal_suffix,
+                explicit_user_resume,
+            )
             .await
         {
             Ok(()) => {
@@ -3470,6 +3530,13 @@ impl ConnectionManager {
         // 每次读取当前能力；原生失信后用户消息转入替换，完成通知仍保持非打断。
         let (native, tool_available, replaces, notice_hold, prompt_barrier) = {
             let s = state.read().await;
+            if s.question_timed_out {
+                return Err(if crate::acp::turn_replace::is_completion_notice(&text) {
+                    AcpError::FeedbackDeferred
+                } else {
+                    AcpError::NoActiveTurn
+                });
+            }
             (
                 s.native_steering_available,
                 s.feedback_tool_available,
@@ -3839,6 +3906,19 @@ impl ConnectionManager {
             )
             .await;
         }
+    }
+
+    /// 仅按父连接阻止新工作，不影响同目录其他连接或已运行子任务。
+    pub(crate) async fn question_blocks_task_start(&self, conn_id: &str) -> bool {
+        let pending = self.pending_questions.lock().await;
+        if pending.values().any(|entry| entry.parent_connection_id == conn_id) {
+            return true;
+        }
+        let Some((state, _)) = self.get_state_and_emitter(conn_id).await else {
+            return true;
+        };
+        let state = state.read().await;
+        state.pending_question.is_some() || state.question_timed_out
     }
 
     /// Register a blocking `ask_user_question` on a connection: park a one-shot
@@ -4518,6 +4598,10 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, crate::acp::delegation::spawner::SpawnerError> {
         use crate::acp::delegation::spawner::SpawnerError;
+        // 在实际新建子连接前再次按父连接验门禁，不取消已运行子任务。
+        if self.manager.question_blocks_task_start(parent_connection_id).await {
+            return Err(SpawnerError::Spawn("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response".into()));
+        }
         // Resolve the parent connection so we can inherit its emitter and
         // owner_window. Falling back is not safe: a child whose emitter is
         // wired to a different broadcaster would emit events the frontend
@@ -4648,6 +4732,9 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
     ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
     {
         use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        if self.manager.question_blocks_task_start(parent_connection_id).await {
+            return Err(SpawnerError::Spawn("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response".into()));
+        }
         // Same parent inheritance as `spawn` — a resumed child whose emitter is
         // wired to a different broadcaster would stream to nobody.
         let (emitter, owner_window, parent_working_dir) = {
@@ -4894,6 +4981,10 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             .await
     }
 
+    async fn task_start_blocked(&self, parent_connection_id: &str) -> bool {
+        self.manager.question_blocks_task_start(parent_connection_id).await
+    }
+
     async fn stop_question_task(&self, parent_connection_id: &str) {
         let cmd_tx = self
             .manager
@@ -4926,8 +5017,11 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             }
             // 此时待答快照仍挡住 prompt admission；先同步排入 Cancel，再移除条目。
             // 不 await 到广播之后才发送，否则新 prompt 可能先于 Cancel 入队。
-            state.write().await.question_timed_out = true;
-            permit.send(ConnectionCommand::Cancel);
+            emit_with_state_built(&state, &emitter, |_| {
+                permit.send(ConnectionCommand::Cancel);
+                Some(AcpEvent::QuestionTaskStopped { stopped: true })
+            })
+            .await;
             pending.remove(question_id);
         }
         emit_with_state(&state, &emitter, AcpEvent::QuestionResolved {
@@ -7453,6 +7547,7 @@ mod tests {
             }],
             None,
             Vec::new(),
+            false,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -11030,6 +11125,7 @@ mod tests {
         let reg = access.register_question_with_timeout(
             "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
         ).await.unwrap();
+        assert!(manager.question_blocks_task_start("timeout-stop").await);
         let state = manager.get_state("timeout-stop").await.unwrap();
         state.write().await.apply_event(&AcpEvent::TurnComplete {
             session_id: "session".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
@@ -11037,25 +11133,88 @@ mod tests {
         assert!(access.stop_timed_out_question("timeout-stop", &reg.question_id).await);
         assert!(reg.answer_rx.await.is_err());
         assert!(state.read().await.question_timed_out);
+        assert!(manager.question_blocks_task_start("timeout-stop").await);
+        let wire = serde_json::to_value(state.read().await.to_snapshot()).unwrap();
+        assert_eq!(wire["question_timed_out"], true);
         assert!(state.read().await.pending_question.is_none());
         assert!(access.register_question_with_timeout(
             "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
         ).await.is_none(), "旧任务不可通过再次 Ask 重置重试预算");
-        manager.send_prompt("timeout-stop", vec![PromptInputBlock::Text {
+        manager.send_prompt_with_resume("timeout-stop", vec![PromptInputBlock::Text {
             text: "new user instruction".into(),
-        }]).await.unwrap();
+        }], true).await.unwrap();
         assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Cancel)));
         assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
         assert!(!state.read().await.question_timed_out);
+        assert!(!manager.question_blocks_task_start("timeout-stop").await);
         let next = access.register_question_with_timeout(
             "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
         ).await.expect("新指令恢复提问");
+        assert!(!access.stop_timed_out_question("timeout-stop", &reg.question_id).await);
+        assert!(commands.try_recv().is_err(), "旧题撤回不得停止新 generation");
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, next.question_id);
         manager.answer_question("timeout-stop", &next.question_id, QuestionAnswer {
             answers: vec![], declined: true,
         }).await.unwrap();
         assert!(!access.stop_timed_out_question("timeout-stop", &next.question_id).await);
         assert!(commands.try_recv().is_err(), "已回答的问题不能误停新任务");
         assert!(!state.read().await.question_timed_out);
+    }
+
+    #[tokio::test]
+    async fn question_timeout_must_not_admit_preexisting_queued_work() {
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = insert_live_connection(&manager, "queued-timeout", AgentType::Codex, None).await;
+        let access = ConnectionManagerQuestionLookup { manager: manager.clone() };
+        let question = access.register_question_with_timeout(
+            "queued-timeout", q_spec(), Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        assert!(access.stop_timed_out_question("queued-timeout", &question.question_id).await);
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Cancel)));
+        let result = manager.send_prompt("queued-timeout", vec![PromptInputBlock::Text {
+            text: "continue the previously queued work".into(),
+        }]).await;
+        assert!(result.is_err(), "提问耗尽后旧队列被当作新指令接受：{result:?}");
+        assert!(commands.try_recv().is_err(), "不得启动下一项工作");
+        let state = manager.get_state("queued-timeout").await.unwrap();
+        let mut wire = serde_json::to_value(state.read().await.to_snapshot()).unwrap();
+        let restored: crate::acp::session_state::LiveSessionSnapshot = serde_json::from_value(wire.clone()).unwrap();
+        assert!(restored.question_timed_out, "快照必须保留耗尽终态");
+        wire.as_object_mut().unwrap().remove("question_timed_out");
+        let legacy: crate::acp::session_state::LiveSessionSnapshot = serde_json::from_value(wire).unwrap();
+        assert!(!legacy.question_timed_out, "旧快照字段缺省兼容");
+        let notice = format!("{}finished", crate::acp::turn_replace::COMPLETION_NOTICE_PREFIX);
+        assert!(matches!(manager.send_prompt_with_resume("queued-timeout", vec![PromptInputBlock::Text {
+            text: notice.clone(),
+        }], true).await, Err(AcpError::FeedbackDeferred)), "自动通知即便带恢复标志也不能重启");
+        assert!(matches!(manager.submit_feedback("queued-timeout", notice, None).await,
+            Err(AcpError::FeedbackDeferred)));
+        assert!(state.read().await.question_timed_out);
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn question_timeout_linked_send_requires_explicit_resume_before_side_effects() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/question-resume").await;
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = insert_live_connection(&manager, "linked-timeout", AgentType::Codex, None).await;
+        let state = manager.get_state("linked-timeout").await.unwrap();
+        state.write().await.question_timed_out = true;
+        let blocks = vec![PromptInputBlock::Text { text: "new instruction".into() }];
+        let refused = manager.send_prompt_linked_with_message_id(
+            &db, "linked-timeout", blocks.clone(), Some(folder_id), None, None, None,
+        ).await;
+        assert!(matches!(refused, Err(AcpError::TurnInProgress)));
+        assert!(state.read().await.conversation_id.is_none(), "拒绝旧队列前不得创建会话");
+        assert!(commands.try_recv().is_err());
+        manager.send_prompt_linked_with_resume(
+            &db, "linked-timeout", blocks, Some(folder_id), None, None, true,
+        ).await.unwrap();
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
+        assert!(!state.read().await.question_timed_out);
+        assert!(state.read().await.conversation_id.is_some());
     }
 
     #[tokio::test]

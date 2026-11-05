@@ -1249,7 +1249,16 @@ impl CliRunService {
             return Ok((0, requested, None));
         };
         let tag = match self.manager.get_state(caller).await {
-            Some(state) => state.read().await.cli_run.clone(),
+            Some(state) => {
+                // CLI 继承的调用方连接同样受待答题门禁约束，不扩大到整个工作目录。
+                if self.manager.question_blocks_task_start(caller).await {
+                    return Err(CliError::execution(
+                        "question_pending",
+                        "caller has an unanswered or stopped question; wait for an explicit user response",
+                    ));
+                }
+                state.read().await.cli_run.clone()
+            }
             // Gone, or a connection of another codeg: an ordinary depth 1.
             None => None,
         };
@@ -2725,6 +2734,17 @@ impl CliRunService {
         &self,
         req: &wire::AutomationRunRequest,
     ) -> Result<wire::AutomationRunState, CliError> {
+        if let Some(caller) = req.caller.as_deref().filter(|caller| !caller.is_empty()) {
+            // 与 start 一致：仅约束本实例仍存活的显式调用方，不按目录推断。
+            if self.manager.get_state(caller).await.is_some()
+                && self.manager.question_blocks_task_start(caller).await
+            {
+                return Err(CliError::execution(
+                    "question_pending",
+                    "caller has an unanswered or stopped question; do not start remaining work until an explicit user response",
+                ));
+            }
+        }
         super::automations::run(&self.db, req.automation_id).await
     }
 
@@ -4590,6 +4610,116 @@ mod tests {
         let result = result_of(&h.drain(&run_id).await);
         assert!(result.launch.unconfirmed.effort);
         assert_eq!(result.launch.requested.effort.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn a_question_blocks_nested_cli_start_before_spawn() {
+        for stopped in [false, true] {
+            let h = Harness::new().await;
+            h.manager.insert_test_connection("caller", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            let pending = if stopped {
+                h.state("caller").await.write().await.question_timed_out = true;
+                None
+            } else {
+                let specs = crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+                    "question": "继续？", "header": "确认", "options": [{"label": "甲"}, {"label": "乙"}]
+                }]})).unwrap();
+                h.manager.register_question("caller", specs).await
+            };
+            let run_id = h.svc.reserve().unwrap().run_id;
+            let mut req = h.request(&run_id, PermissionPolicy::Deny);
+            req.caller = Some("caller".into());
+            let result = h.svc.start(req).await;
+            assert!(result.is_err(), "有未答或耗尽提问时不能启动 CLI 工作");
+            assert_eq!(result.unwrap_err().body.error.code, "question_pending");
+            assert!(h.launcher.spawned.lock().unwrap().is_empty());
+            drop(pending);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_question_blocks_cli_automation_run_until_explicit_resume() {
+        for stopped in [false, true] {
+            let h = Harness::new().await;
+            let mut commands = h
+                .manager
+                .insert_test_connection_live(
+                    "caller",
+                    AgentType::ClaudeCode,
+                    None,
+                    EventEmitter::Noop,
+                )
+                .await;
+            let pending = if stopped {
+                h.state("caller").await.write().await.question_timed_out = true;
+                None
+            } else {
+                let specs = crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+                    "question": "继续？", "header": "确认", "options": [{"label": "甲"}, {"label": "乙"}]
+                }]})).unwrap();
+                h.manager.register_question("caller", specs).await
+            };
+            let req = wire::AutomationRunRequest {
+                automation_id: -1,
+                caller: Some("caller".into()),
+            };
+            let err = h.svc.automation_run(&req).await.unwrap_err();
+            assert_eq!(err.body.error.code, "question_pending");
+            // 查询没有启动副作用，不受父提问门禁影响。
+            assert!(h.svc.automations().await.is_ok());
+            if let Some(reg) = &pending {
+                h.manager
+                    .answer_question(
+                        "caller",
+                        &reg.question_id,
+                        crate::acp::question::QuestionAnswer {
+                            answers: vec![],
+                            declined: false,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            h.manager
+                .send_prompt_with_resume(
+                    "caller",
+                    vec![PromptInputBlock::Text {
+                        text: "继续执行新任务".into(),
+                    }],
+                    true,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                commands.try_recv(),
+                Ok(crate::acp::connection::ConnectionCommand::Prompt { .. })
+            ));
+            assert_eq!(
+                h.svc
+                    .automation_run(&req)
+                    .await
+                    .unwrap_err()
+                    .body
+                    .error
+                    .code,
+                "unknown_automation"
+            );
+            // 无 caller 的旧客户端保持兼容；不推断工作目录归属。
+            let legacy: wire::AutomationRunRequest =
+                serde_json::from_value(serde_json::json!({"automationId": -1})).unwrap();
+            assert!(legacy.caller.is_none());
+            assert_eq!(
+                h.svc
+                    .automation_run(&legacy)
+                    .await
+                    .unwrap_err()
+                    .body
+                    .error
+                    .code,
+                "unknown_automation"
+            );
+            drop(pending);
+        }
     }
 
     #[tokio::test]

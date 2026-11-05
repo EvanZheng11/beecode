@@ -348,6 +348,9 @@ pub struct AutomationEntry {
 #[serde(rename_all = "camelCase")]
 pub struct AutomationRunRequest {
     pub automation_id: i32,
+    /// 继承 CLI 的调用方连接；旧客户端可省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
 }
 
 /// `POST /api/cli_automation_run_get` — an automation run, waited for up to

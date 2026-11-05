@@ -95,6 +95,7 @@ export interface UseConnectionReturn {
   steeredMessageIds: string[]
   pendingQuestion: PendingQuestion | null
   pendingAskQuestion: PendingQuestionState | null
+  questionTimedOut: boolean
   pendingPlanApproval: PendingPlanApprovalState | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (active + resolved; see
@@ -148,6 +149,7 @@ export interface UseConnectionReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      explicitUserResume?: boolean
     }
   ) => Promise<void>
   setMode: (modeId: string) => Promise<void>
@@ -300,6 +302,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     connection?.steeredMessageIds ?? EMPTY_STEERED_MESSAGE_IDS
   const pendingQuestion = connection?.pendingQuestion ?? null
   const pendingAskQuestion = connection?.pendingAskQuestion ?? null
+  const questionTimedOut = connection?.questionTimedOut ?? false
   const pendingPlanApproval = connection?.pendingPlanApproval ?? null
   const claudeApiRetry = connection?.claudeApiRetry ?? null
   const sessionFailures = connection?.sessionFailures ?? EMPTY_SESSION_FAILURES
@@ -345,6 +348,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        explicitUserResume?: boolean
       }
     ) => actions.sendPrompt(contextKey, blocks, opts),
     [actions, contextKey]
@@ -390,6 +394,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
 
   return useMemo(
     () => ({
+      questionTimedOut,
       connectionId,
       agentType,
       isViewer,
@@ -436,6 +441,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       answerQuestion,
     }),
     [
+      questionTimedOut,
       connectionId,
       agentType,
       isViewer,

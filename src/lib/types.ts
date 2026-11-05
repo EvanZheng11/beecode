@@ -3440,6 +3440,11 @@ export type AcpEvent =
       /** 后端等待截止时间（RFC3339 UTC）。没有期限的原生提问省略此字段。 */
       expires_at?: string | null
     }
+  /** 提问耗尽或上游撤回后停止任务，等待用户显式新输入。 */
+  | {
+      type: "question_task_stopped"
+      stopped: boolean
+    }
   /**
    * A pending question was answered (from any client) or canceled (tool call
    * aborted / connection drained). Clients clear the matching card.
@@ -3853,6 +3858,8 @@ export interface LiveSessionSnapshot {
   /** Awaiting-answer `ask_user_question`, recoverable on mid-turn attach.
    *  Absent (omitted) when no question is pending. */
   pending_question?: PendingQuestionState | null
+  /** 提问耗尽后暂停自动发送，直到用户显式新指令恢复。 */
+  question_timed_out?: boolean
   /** Awaiting-decision Grok `exit_plan_mode` approval, recoverable on mid-turn
    *  attach. Absent (omitted) when no approval is pending. */
   pending_plan_approval?: PendingPlanApprovalState | null

@@ -645,6 +645,7 @@ export function CanvasConversationSurface({
         return lifecycleSend(draft, selectedModeIdArg, {
           folderId: boundFolderId ?? undefined,
           conversationId: persistedId,
+          explicitUserResume: true,
           clientMessageId: optimisticTurn.id,
           onTurnInProgress,
           onSendFailed,
@@ -693,6 +694,7 @@ export function CanvasConversationSurface({
           return await lifecycleSend(draft, selectedModeIdArg, {
             folderId: sendFolderId,
             conversationId: newId,
+            explicitUserResume: true,
             clientMessageId: optimisticTurn.id,
             onTurnInProgress,
             onSendFailed,

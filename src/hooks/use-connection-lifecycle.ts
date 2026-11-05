@@ -66,6 +66,7 @@ export interface UseConnectionLifecycleReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      explicitUserResume?: boolean
       /**
        * Called when the backend rejected the send because a turn was already
        * in flight (a second, concurrent prompt). The caller re-queues the
@@ -480,6 +481,7 @@ export function useConnectionLifecycle({
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        explicitUserResume?: boolean
         onTurnInProgress?: () => void
         onSendFailed?: (error: unknown) => void
       }

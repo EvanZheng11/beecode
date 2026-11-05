@@ -889,6 +889,9 @@ const ConversationTabView = memo(function ConversationTabView({
   )
   const appendingQueuedIdRef = useRef<string | null>(null)
   const waitingForAnswer = conn.pendingAskQuestion !== null
+  const questionTimedOut = conn.questionTimedOut
+  const queueBlockedRef = useRef(false)
+  queueBlockedRef.current = waitingForAnswer || questionTimedOut
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -913,7 +916,7 @@ const ConversationTabView = memo(function ConversationTabView({
     // lifecycle reconnects — which, for a not-installed target, never happens.
     if (!connectionReady) return
     // MCP 提问可跨越前台回合：connected 不代表已经收到用户答案。
-    if (waitingForAnswer) return
+    if (waitingForAnswer || questionTimedOut) return
     if (runtimeSyncState === "awaiting_persist") return
     // 追加为实时反馈进行中：暂停自动 flush，等追加结束（成功清理或失败回队
     // 首后状态复位）再重新进入本 effect，恢复正常 FIFO 与 TurnBusyError 回退。
@@ -924,7 +927,7 @@ const ConversationTabView = memo(function ConversationTabView({
     // a just-bounced retry waits out the backoff window before re-sending.
     const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
     const timer = setTimeout(() => {
-      if (!connectionReadyRef.current) return
+      if (!connectionReadyRef.current || queueBlockedRef.current) return
       if (appendingQueuedIdRef.current !== null) return
       const next = autoSendQueueRef.current()
       if (next) {
@@ -949,6 +952,7 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [
     connectionReady,
     waitingForAnswer,
+    questionTimedOut,
     runtimeSyncState,
     msgQueue.length,
     appendingQueuedId,
@@ -1139,7 +1143,13 @@ const ConversationTabView = memo(function ConversationTabView({
       // Preserve FIFO: a direct send issued while the queue is non-empty joins
       // the tail rather than racing ahead of the queued items. Read the
       // queue length synchronously (it reflects a same-tick bounce requeue).
-      if (shouldQueueDirectSend(fromQueueFlush, mqGetQueueLength())) {
+      if (
+        shouldQueueDirectSend(
+          fromQueueFlush,
+          mqGetQueueLength(),
+          questionTimedOut
+        )
+      ) {
         mqEnqueue(draft, selectedModeIdArg ?? null)
         return
       }
@@ -1220,6 +1230,7 @@ const ConversationTabView = memo(function ConversationTabView({
           // so viewers' synthesized user turn dedups against our own optimistic
           // turn by exact id (and never suppresses a different sender's prompt).
           clientMessageId: optimisticTurn.id,
+          explicitUserResume: !fromQueueFlush,
           onTurnInProgress,
           onSendFailed,
         })
@@ -1321,6 +1332,7 @@ const ConversationTabView = memo(function ConversationTabView({
             folderId: sendFolderId,
             conversationId: newConversationId,
             clientMessageId: optimisticTurn.id,
+            explicitUserResume: !fromQueueFlush,
             onTurnInProgress,
             onSendFailed,
           })
@@ -1359,6 +1371,7 @@ const ConversationTabView = memo(function ConversationTabView({
       mqEnqueue,
       mqRequeueFront,
       mqGetQueueLength,
+      questionTimedOut,
       bindConversationTab,
       canAutoConnect,
       connectionReady,

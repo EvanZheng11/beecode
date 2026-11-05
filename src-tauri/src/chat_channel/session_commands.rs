@@ -1556,11 +1556,12 @@ async fn send_chat_prompt(
     text: &str,
 ) -> Result<(), crate::acp::error::AcpError> {
     conn_mgr
-        .send_prompt(
+        .send_prompt_with_resume(
             connection_id,
             vec![PromptInputBlock::Text {
                 text: text.to_string(),
             }],
+            true,
         )
         .await
 }
@@ -1574,7 +1575,7 @@ async fn send_chat_prompt_linked(
     text: &str,
 ) -> Result<(), crate::acp::error::AcpError> {
     conn_mgr
-        .send_prompt_linked(
+        .send_prompt_linked_with_resume(
             &AppDatabase { conn: db.clone() },
             connection_id,
             vec![PromptInputBlock::Text {
@@ -1583,6 +1584,7 @@ async fn send_chat_prompt_linked(
             Some(folder_id),
             Some(conversation_id),
             None,
+            true,
         )
         .await
         .map(|_| ())
@@ -2045,6 +2047,8 @@ mod tests {
             )
             .await;
 
+        let (state, _) = conn_mgr.get_state_and_emitter("conn-linked").await.unwrap();
+        state.write().await.question_timed_out = true;
         send_chat_prompt_linked(
             &db.conn,
             &conn_mgr,
@@ -2113,6 +2117,8 @@ mod tests {
             },
         );
 
+        let (state, _) = conn_mgr.get_state_and_emitter("conn-followup").await.unwrap();
+        state.write().await.question_timed_out = true;
         let message = handle_followup(FollowupRequest {
             db: &db.conn,
             text: "continue task",

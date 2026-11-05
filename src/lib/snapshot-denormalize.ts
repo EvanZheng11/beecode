@@ -66,6 +66,7 @@ export interface SnapshotPatch {
    *  no question is pending. (Distinct from the frontend-only free-text
    *  `pendingQuestion`, which is NOT in the snapshot.) */
   pendingAskQuestion: PendingQuestionState | null
+  questionTimedOut: boolean
   /** Awaiting-decision Grok `exit_plan_mode` approval carried by the snapshot,
    *  so a client attaching mid-turn re-renders the plan-approval card. `null`
    *  when no approval is pending. */
@@ -165,6 +166,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
       : null,
     // The snapshot shape already matches PendingQuestionState; pass through.
     pendingAskQuestion: wire.pending_question ?? null,
+    questionTimedOut: wire.question_timed_out ?? false,
     // The snapshot shape already matches PendingPlanApprovalState; pass through.
     pendingPlanApproval: wire.pending_plan_approval ?? null,
     pendingUserMessage: wire.pending_user_message

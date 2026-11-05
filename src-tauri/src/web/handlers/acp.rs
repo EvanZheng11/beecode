@@ -158,6 +158,8 @@ pub struct AcpPromptParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    #[serde(default)]
+    pub explicit_user_resume: bool,
 }
 
 pub async fn acp_prompt(
@@ -166,14 +168,14 @@ pub async fn acp_prompt(
 ) -> Result<Json<()>, AppCommandError> {
     state
         .connection_manager
-        .send_prompt_linked_with_message_id(
+        .send_prompt_linked_with_resume(
             &state.db,
             &params.connection_id,
             params.blocks,
             params.folder_id,
             params.conversation_id,
-            None,
             params.client_message_id,
+            params.explicit_user_resume,
         )
         .await
         .map_err(|e| {

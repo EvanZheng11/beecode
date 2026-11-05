@@ -854,6 +854,9 @@ impl DelegationListener {
         let Some(entry) = self.tokens.lookup(&req.token).await else {
             return unknown_report(&req.task_id);
         };
+        if self.questions.task_start_blocked(&entry.parent_connection_id).await {
+            return cancel("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
+        }
         // Same call-time identity restoration as `process_status` /
         // `process_cancel_task`: like cancel, the resume result is free-form
         // report text with no stable prefix for the completion-time sniff, so
@@ -1243,18 +1246,18 @@ impl DelegationListener {
             .await
     }
 
-    /// Resolve the caller's [`AuthoringContext`] from its per-launch token: the
-    /// conversation it is currently in (for defaulting the target project) plus
-    /// the working directory recorded at injection. `None` when the token is
-    /// invalid — the caller gets a soft refusal, not a leak of whether the token
-    /// merely expired.
-    async fn authoring_context(&self, token: &str) -> Option<AuthoringContext> {
-        let entry = self.tokens.lookup(token).await?;
+    /// 从 token 解析调用方会话与工作目录；身份无效或父连接有未答/已停止提问时拒绝，
+    /// 防止创建可被自动启动的新工作。
+    async fn authoring_context(&self, token: &str) -> Result<AuthoringContext, &'static str> {
+        let entry = self.tokens.lookup(token).await.ok_or("invalid token")?;
+        if self.questions.task_start_blocked(&entry.parent_connection_id).await {
+            return Err("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
+        }
         let conversation_id = self
             .parent_lookup
             .current_conversation_id(&entry.parent_connection_id)
             .await;
-        Some(AuthoringContext {
+        Ok(AuthoringContext {
             conversation_id,
             working_dir: entry.working_dir,
         })
@@ -1266,16 +1269,18 @@ impl DelegationListener {
         &self,
         req: BrokerCreateAutomationRequest,
     ) -> AuthoringOutcome {
-        let Some(ctx) = self.authoring_context(&req.token).await else {
-            return AuthoringOutcome::rejected("automation", "invalid token");
+        let ctx = match self.authoring_context(&req.token).await {
+            Ok(ctx) => ctx,
+            Err(reason) => return AuthoringOutcome::rejected("automation", reason),
         };
         self.authoring.create_automation(ctx, req.spec).await
     }
 
     /// Validate the token and hand the task spec to the authoring impl.
     async fn process_create_work_task(&self, req: BrokerCreateWorkTaskRequest) -> AuthoringOutcome {
-        let Some(ctx) = self.authoring_context(&req.token).await else {
-            return AuthoringOutcome::rejected("work_task", "invalid token");
+        let ctx = match self.authoring_context(&req.token).await {
+            Ok(ctx) => ctx,
+            Err(reason) => return AuthoringOutcome::rejected("work_task", reason),
         };
         self.authoring.create_work_task(ctx, req.spec).await
     }
@@ -1300,6 +1305,10 @@ impl DelegationListener {
         };
         if entry.parent_connection_id != req.parent_connection_id {
             return cancel("token does not match parent connection");
+        }
+
+        if self.questions.task_start_blocked(&entry.parent_connection_id).await {
+            return cancel("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
         }
 
         // 2. Resolve the parent's current conversation. Without one the
@@ -1470,6 +1479,7 @@ async fn wait_for_question_answer<C>(
 where
     C: AsyncReadExt + Unpin,
 {
+    let started = tokio::time::Instant::now();
     let question_id = &reg.question_id;
     let answer_rx = &mut reg.answer_rx;
     let deadline = reg.deadline.as_ref();
@@ -1527,11 +1537,25 @@ where
     if matches!(result, AskWaitResult::PeerClosed | AskWaitResult::Cancelled)
         || (matches!(result, AskWaitResult::TimedOut) && !retry_on_timeout)
     {
-        let removed = if matches!(result, AskWaitResult::TimedOut) && stop_on_timeout {
+        let removed = if matches!(result, AskWaitResult::PeerClosed)
+            || (matches!(result, AskWaitResult::TimedOut) && stop_on_timeout)
+        {
+            // 对端已不接收答案，不能保留孤儿卡，也不能让宿主跳过未答题。
             questions.stop_timed_out_question(parent_connection_id, question_id).await
         } else {
             questions.cancel_question(parent_connection_id, question_id).await
         };
+        if matches!(result, AskWaitResult::PeerClosed) {
+            tracing::warn!(
+                agent = "codeg-mcp",
+                parent_connection_id,
+                question_id,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                configured_deadline = ?deadline.and_then(|d| d.expires_at()),
+                stopped = removed,
+                "MCP 提问对端提前关闭，配置轮次被中断；未收到用户答案"
+            );
+        }
         if matches!(result, AskWaitResult::TimedOut) {
             // 回答在同一注册表锁内投递，先取实际答案；只有自己撤回才算正常超时。
             // 外部撤回可能仍在广播并持有 sender，因此 Empty 和 Closed 都是取消。
@@ -2104,6 +2128,10 @@ mod tests {
         async fn clear_question_deadline(&self, _parent_connection_id: &str, question_id: &str) {
             self.cleared.lock().await.push(question_id.to_string());
         }
+        async fn task_start_blocked(&self, parent_connection_id: &str) -> bool {
+            self.pending.lock().await.values().any(|(parent, _)| parent == parent_connection_id)
+                || self.stopped.lock().await.iter().any(|parent| parent == parent_connection_id)
+        }
         async fn stop_question_task(&self, parent_connection_id: &str) {
             self.stopped.lock().await.push(parent_connection_id.to_string());
         }
@@ -2560,6 +2588,33 @@ mod tests {
             .await;
         assert_eq!(report.status, TaskStatus::Canceled);
         assert!(report.message.unwrap().contains("no active conversation"));
+    }
+
+    #[tokio::test]
+    async fn pending_question_blocks_new_delegate_and_resume_for_its_parent() {
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens.register("tok".into(), TokenEntry {
+            parent_connection_id: "parent-conn".into(),
+            working_dir: PathBuf::from("/tmp"),
+        }).await;
+        let listener = make_listener(
+            make_broker(Arc::new(MockSpawner::new())).await, tokens, Some(1),
+        );
+        let specs = crate::acp::question::parse_questions(&json!({"questions": [{
+            "question": "继续？", "header": "确认", "options": [{"label": "甲"}, {"label": "乙"}]
+        }]})).unwrap();
+        let _pending = listener.questions.register_question("parent-conn", specs.clone()).await.unwrap();
+        let report = listener.process(make_request(json!({"agent_type": "codex", "task": "x"})).await).await;
+        assert!(report.message.unwrap().contains("question"));
+        let report = listener.process_resume_task(BrokerResumeTaskRequest {
+            token: "tok".into(), task_id: "not-started".into(), reason: None, external_handle: None,
+        }).await;
+        assert!(report.message.unwrap().contains("question"));
+        listener.questions.cancel_questions_by_parent("parent-conn").await;
+        let _other = listener.questions.register_question("unrelated", specs).await.unwrap();
+        // 同文件夹其他连接的待答题不拦截本连接；参数校验可继续。
+        let report = listener.process(make_request(json!({"agent_type": "garbage", "task": "x"})).await).await;
+        assert_eq!(report.error_code.as_deref(), Some("invalid_agent_type"));
     }
 
     #[tokio::test]
@@ -3437,9 +3492,32 @@ mod tests {
         assert!(session_info.calls.lock().await.is_empty());
     }
 
-    /// A valid token resolves the caller's conversation + working dir and hands
-    /// both down as the [`AuthoringContext`], so the impl can default the target
-    /// project to the project this chat is in.
+    /// 待答时不能创建自动处理器可接走的工作，底层创建入口不得被调用。
+    #[tokio::test]
+    async fn pending_question_blocks_authoring_new_work() {
+        let authoring = Arc::new(StubAuthoring::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens.register("tok".into(), TokenEntry {
+            parent_connection_id: "parent-conn".into(), working_dir: PathBuf::from("/tmp"),
+        }).await;
+        let listener = make_authoring_listener(tokens, authoring.clone(), Some(42));
+        let BrokerMessage::Ask(request) = ask_msg("tok") else { unreachable!() };
+        let _pending = listener.questions.register_question("parent-conn", request.questions).await.unwrap();
+        let task = listener.process_create_work_task(BrokerCreateWorkTaskRequest {
+            token: "tok".into(),
+            spec: NewWorkTaskSpec { title: "任务".into(), prompt: "尚未启动".into(), agent_type: None, folder_path: None },
+        }).await;
+        assert!(!task.created, "待答时不能创建自动处理器可接走的新任务");
+        let automation = listener.process_create_automation(BrokerCreateAutomationRequest {
+            token: "tok".into(),
+            spec: NewAutomationSpec { name: "任务".into(), prompt: "尚未启动".into(), cron: None, timezone: None, action: Default::default(), agent_type: None, folder_path: None, enabled: true },
+        }).await;
+        assert!(!automation.created);
+        assert!(authoring.work_tasks.lock().await.is_empty());
+        assert!(authoring.automations.lock().await.is_empty());
+    }
+
+    /// token 对应的会话与工作目录应透传给创建入口。
     #[tokio::test]
     async fn create_automation_resolves_caller_context() {
         let authoring = Arc::new(StubAuthoring::default());
@@ -3819,6 +3897,7 @@ mod tests {
             .expect("serve_one must return after peer close");
         result.unwrap().unwrap();
         assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1".to_string()]);
+        assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
     }
 
     /// 无效 token 没有用户答案，不能冒充用户拒答。
@@ -4281,6 +4360,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ask_late_peer_close_after_stop_must_not_stop_new_generation() {
+        let questions = Arc::new(StubQuestion::default());
+        let access: Arc<dyn SessionQuestionAccess> = questions.clone();
+        let BrokerMessage::Ask(request) = ask_msg("tok") else { unreachable!() };
+        let mut old = access.register_question("parent-conn", request.questions.clone()).await.unwrap();
+        access.cancel_questions_by_parent("parent-conn").await;
+        let next = access.register_question("parent-conn", request.questions).await.unwrap();
+        let (client, mut server) = duplex(32);
+        drop(client);
+        let result = wait_for_question_answer(&mut server, &access, "parent-conn", &mut old, false, true).await;
+        assert!(matches!(result, AskWaitResult::Cancelled));
+        assert!(questions.stopped.lock().await.is_empty());
+        assert!(questions.pending.lock().await.contains_key(&next.question_id));
+    }
+
+    #[tokio::test]
     async fn ask_peer_close_at_timeout_does_not_retry_or_auto_answer() {
         tokio::time::pause();
         for auto_select in [false, true] {
@@ -4299,6 +4394,7 @@ mod tests {
             }
             assert_eq!(questions.registered.lock().await.len(), 1);
             assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
+            assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
             assert!(questions.pending.lock().await.is_empty());
         }
     }

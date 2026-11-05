@@ -367,10 +367,13 @@ pub trait SessionQuestionAccess: Send + Sync {
             .await
     }
 
+    /// MCP 新委派/恢复工作前，按 token 对应父连接检查待答及停止状态。
+    async fn task_start_blocked(&self, _parent_connection_id: &str) -> bool { false }
+
     /// 等待耗尽且禁止自动选择时，停止宿主任务。测试桩默认无操作。
     async fn stop_question_task(&self, _parent_connection_id: &str) {}
 
-    /// 终次超时必须先把停止命令入队，再清除卡片并开放下一次 prompt。
+    /// 终次超时或上游撤回时，先把停止命令入队，再清除卡片。
     /// 与回答争夺注册表条目；只有真正撤回了本题才停止其所属任务。
     async fn stop_timed_out_question(&self, parent_connection_id: &str, question_id: &str) -> bool {
         if !self.cancel_question(parent_connection_id, question_id).await {

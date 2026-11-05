@@ -43,9 +43,10 @@ export function flushRetryDelayMs(
  */
 export function shouldQueueDirectSend(
   fromQueueFlush: boolean,
-  queueLength: number
+  queueLength: number,
+  questionTimedOut = false
 ): boolean {
-  return !fromQueueFlush && queueLength > 0
+  return !fromQueueFlush && !questionTimedOut && queueLength > 0
 }
 
 /**
