@@ -60,7 +60,7 @@ const usePanelQueueActions = runInNewContext(
     `(function ({ useCallback, useEffect, msgQueue, mqGetItem, mqRemove, mqRequeueFront,
       feedback, feedbackSteer, appendingQueuedIdRef, appendingQueuedId,
       setAppendingQueuedId, notify, toErrorMessage, buildSteerPayload, tabId, tCmp,
-      connectionReady, connectionReadyRef, waitingForAnswer, runtimeSyncState, flushRetryDelayMs,
+      connectionReady, connectionReadyRef, waitingForAnswer, questionTimedOut, queueBlockedRef, runtimeSyncState, flushRetryDelayMs,
       lastFlushBounceAtRef, autoSendQueueRef, handleSendRef, selectedModeIdRef,
       setTimeout, clearTimeout }) {
       ${source.slice(handlerStart, handlerEnd)}
@@ -104,6 +104,7 @@ function snapshot(native = true): LiveSessionSnapshot {
 function useQueuePanelHarness({
   connectionReady = false,
   waitingForAnswer = false,
+  questionTimedOut = false,
 } = {}) {
   const queue = useMessageQueue()
   const feedback = useSessionFeedback({
@@ -122,6 +123,8 @@ function useQueuePanelHarness({
   const appendingQueuedIdRef = useRef<string | null>(null)
   const connectionReadyRef = useRef(connectionReady)
   connectionReadyRef.current = connectionReady
+  const queueBlockedRef = useRef(waitingForAnswer || questionTimedOut)
+  queueBlockedRef.current = waitingForAnswer || questionTimedOut
   const lastFlushBounceAtRef = useRef(0)
   const autoSendQueueRef = useRef(queue.dequeue)
   const handleSendRef = useRef(vi.fn())
@@ -146,6 +149,8 @@ function useQueuePanelHarness({
     connectionReady,
     connectionReadyRef,
     waitingForAnswer,
+    questionTimedOut,
+    queueBlockedRef,
     runtimeSyncState: "idle",
     flushRetryDelayMs,
     lastFlushBounceAtRef,
@@ -171,6 +176,7 @@ async function setup(connectionReady = false, waitingForAnswer = false) {
   const initialProps: {
     connectionReady: boolean
     waitingForAnswer?: boolean
+    questionTimedOut?: boolean
   } = { connectionReady, waitingForAnswer }
   const harness = renderHook(useQueuePanelHarness, {
     initialProps,
@@ -198,6 +204,15 @@ afterEach(() => {
 })
 
 describe("ConversationDetailPanel 追加队列反馈行为", () => {
+  it("耗尽撤卡后不自动发送且保留旧队列", async () => {
+    const { result, rerender } = await setup(false, true)
+    vi.useFakeTimers()
+    rerender({ connectionReady: true, questionTimedOut: true })
+    act(() => vi.advanceTimersByTime(600_000))
+    expect(result.current.flushSend).not.toHaveBeenCalled()
+    expect(result.current.queue.queue).toHaveLength(2)
+  })
+
   it("提问跨越前台回合后不自动派出队列，回答后才恢复", async () => {
     const { result, rerender } = await setup(false, true)
     vi.useFakeTimers()

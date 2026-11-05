@@ -3445,6 +3445,10 @@ export type AcpEvent =
    * aborted / connection drained). Clients clear the matching card.
    */
   | {
+      type: "question_task_stopped"
+      stopped: boolean
+    }
+  | {
       type: "question_resolved"
       question_id: string
     }
@@ -3853,6 +3857,8 @@ export interface LiveSessionSnapshot {
   /** Awaiting-answer `ask_user_question`, recoverable on mid-turn attach.
    *  Absent (omitted) when no question is pending. */
   pending_question?: PendingQuestionState | null
+  /** 提问耗尽后暂停自动发送，直到用户显式新指令恢复。 */
+  question_timed_out?: boolean
   /** Awaiting-decision Grok `exit_plan_mode` approval, recoverable on mid-turn
    *  attach. Absent (omitted) when no approval is pending. */
   pending_plan_approval?: PendingPlanApprovalState | null

@@ -24,6 +24,7 @@ import {
   IDLE_SWEEP_INTERVAL_MS,
 } from "@/lib/constants"
 import { DelegationProvider } from "@/contexts/delegation-context"
+import { acpPrompt } from "@/lib/api"
 import { parsePermissionToolCall } from "@/lib/permission-request"
 import { subscribe } from "@/lib/platform"
 import { saveConfigPreference } from "@/lib/selector-prefs-storage"
@@ -9268,6 +9269,64 @@ describe("AcpConnectionsProvider 提问期限", () => {
     })
     return latestAttachHandlers()
   }
+
+  it("耗尽状态随事件和快照同步，只有显式输入传递恢复标志", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_task_stopped",
+      stopped: true,
+    })
+    expect(h.store!.getConnection(TAB)?.questionTimedOut).toBe(true)
+    h.denormalizeSnapshot.mockReturnValue({
+      ...snapshotBase(),
+      questionTimedOut: true,
+      eventSeq: 2,
+    })
+    hydrateSnapshot(handlers, { event_seq: 2 } as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)?.questionTimedOut).toBe(true)
+    await act(async () => {
+      await h.actions!.sendPrompt(TAB, [{ type: "text", text: "旧队列" }])
+    })
+    expect(acpPrompt).toHaveBeenLastCalledWith(
+      "spawned-conn",
+      [{ type: "text", text: "旧队列" }],
+      null,
+      null,
+      null,
+      false
+    )
+    await act(async () => {
+      await h.actions!.sendPrompt(TAB, [{ type: "text", text: "新指令" }], {
+        explicitUserResume: true,
+      })
+    })
+    expect(acpPrompt).toHaveBeenLastCalledWith(
+      "spawned-conn",
+      [{ type: "text", text: "新指令" }],
+      null,
+      null,
+      null,
+      true
+    )
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "question_task_stopped",
+      stopped: false,
+    })
+    expect(h.store!.getConnection(TAB)?.questionTimedOut).toBe(false)
+    // 旧终态事件及旧快照都不能误停新任务。
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_task_stopped",
+      stopped: true,
+    })
+    hydrateSnapshot(handlers, { event_seq: 2 } as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)?.questionTimedOut).toBe(false)
+  })
 
   it("MCP 问题在第 60 秒结束回合、收到新消息和快照后仍可回答，旧 ID 不清新题", async () => {
     const handlers = await connectOwner()

@@ -320,7 +320,8 @@ export async function acpPrompt(
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  explicitUserResume = false
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -334,6 +335,7 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      explicitUserResume,
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()

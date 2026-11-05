@@ -376,6 +376,7 @@ export interface ConnectionState {
    *  `pending_question`; MCP requests survive turn end until resolved. Distinct
    *  from the free-text `pendingQuestion` above. */
   pendingAskQuestion: PendingQuestionState | null
+  questionTimedOut?: boolean
   /** Awaiting-decision Grok `exit_plan_mode` approval (the plan the agent is
    *  blocked on). Set from a `plan_approval_request` event or a snapshot's
    *  `pending_plan_approval`; cleared on `plan_approval_resolved` or turn end. */
@@ -732,6 +733,7 @@ type Action =
       pendingQuestion: PendingQuestion
     }
   | { type: "CLEAR_PENDING_QUESTION"; contextKey: string }
+  | { type: "SET_QUESTION_TASK_STOPPED"; contextKey: string; stopped: boolean }
   | {
       type: "SET_ASK_QUESTION"
       contextKey: string
@@ -2296,6 +2298,7 @@ function connectionsReducer(
         steeredMessageIds: EMPTY_STEERED_MESSAGE_IDS,
         pendingPermission: hydratedPendingPermission,
         pendingAskQuestion: action.patch.pendingAskQuestion,
+        questionTimedOut: action.patch.questionTimedOut,
         pendingPlanApproval: action.patch.pendingPlanApproval,
         pendingUserMessage: action.patch.pendingUserMessage,
         promptCapabilities: mergedPromptCapabilities,
@@ -2887,6 +2890,14 @@ function connectionsReducer(
         ...conn,
         pendingQuestion: null,
       })
+      return next
+    }
+
+    case "SET_QUESTION_TASK_STOPPED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, questionTimedOut: action.stopped })
       return next
     }
 
@@ -3592,6 +3603,7 @@ export interface AcpActionsValue {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      explicitUserResume?: boolean
     }
   ): Promise<void>
   setMode(contextKey: string, modeId: string): Promise<void>
@@ -5433,6 +5445,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               void requestWindowAttention("question_request")
             }
           }
+          break
+        case "question_task_stopped":
+          dispatch({
+            type: "SET_QUESTION_TASK_STOPPED",
+            contextKey,
+            stopped: e.stopped,
+          })
           break
         case "question_resolved":
           // The question was answered (this or another window) or canceled.
@@ -8165,6 +8184,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        explicitUserResume?: boolean
       }
     ) => {
       const conn = storeRef.current.connections.get(contextKey)
@@ -8176,7 +8196,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           blocks,
           opts?.folderId ?? null,
           opts?.conversationId ?? null,
-          opts?.clientMessageId ?? null
+          opts?.clientMessageId ?? null,
+          opts?.explicitUserResume ?? false
         )
       } catch (e) {
         // Same reasoning as `cancel`: the backend disowning this id proves the

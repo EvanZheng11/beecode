@@ -12126,18 +12126,19 @@ pub async fn acp_prompt(
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    explicit_user_resume: Option<bool>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
     manager
-        .send_prompt_linked_with_message_id(
+        .send_prompt_linked_with_resume(
             &db,
             &connection_id,
             blocks,
             folder_id,
             conversation_id,
-            None,
             client_message_id,
+            explicit_user_resume.unwrap_or(false),
         )
         .await
         .map(|_| ())

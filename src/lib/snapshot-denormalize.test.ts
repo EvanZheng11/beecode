@@ -29,6 +29,16 @@ function baseSnapshot(
   }
 }
 
+describe("denormalizeSnapshot — question timeout", () => {
+  it("重连保留耗尽终态，旧快照缺省兼容", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ question_timed_out: true }))
+        .questionTimedOut
+    ).toBe(true)
+    expect(denormalizeSnapshot(baseSnapshot()).questionTimedOut).toBe(false)
+  })
+})
+
 describe("denormalizeSnapshot — active_delegations", () => {
   it("carries active_delegations through to the patch", () => {
     const patch = denormalizeSnapshot(

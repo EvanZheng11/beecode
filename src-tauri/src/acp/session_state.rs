@@ -1313,6 +1313,9 @@ impl SessionState {
                     }
                 }
             }
+            AcpEvent::QuestionTaskStopped { stopped } => {
+                self.question_timed_out = *stopped;
+            }
             AcpEvent::QuestionResolved { question_id } => {
                 // Mirror `PermissionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
@@ -2526,6 +2529,7 @@ impl SessionState {
             active_tool_calls: self.snapshot_tool_calls(),
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
+            question_timed_out: self.question_timed_out,
             pending_plan_approval: self.pending_plan_approval.clone(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
@@ -2621,6 +2625,9 @@ pub struct LiveSessionSnapshot {
     /// the wire so every snapshot stays byte-identical with the pre-feature shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<PendingQuestionState>,
+    /// 旧快照缺省为 false；耗尽状态跨重连保留，阻止旧队列恢复。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub question_timed_out: bool,
     /// The agent's in-flight Grok `exit_plan_mode` approval (see
     /// `SessionState.pending_plan_approval`). `#[serde(default)]` so older
     /// payloads deserialize; `skip_serializing_if` keeps the common no-approval

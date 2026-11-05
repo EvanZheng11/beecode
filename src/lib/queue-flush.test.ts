@@ -42,6 +42,11 @@ describe("shouldQueueDirectSend", () => {
     expect(shouldQueueDirectSend(false, 1)).toBe(true)
   })
 
+  it("提问耗尽后保留旧队列，显式新输入可以越过旧队列", () => {
+    expect(shouldQueueDirectSend(false, 2, true)).toBe(false)
+    expect(shouldQueueDirectSend(true, 2, true)).toBe(false)
+  })
+
   it("sends a direct send immediately when the queue is empty", () => {
     expect(shouldQueueDirectSend(false, 0)).toBe(false)
   })
