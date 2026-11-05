@@ -76,7 +76,7 @@ function AlertDialogContent({
           data-slot="alert-dialog-content"
           data-size={size}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto group/alert-dialog-content grid w-full gap-6 rounded-3xl p-6 duration-200 [animation-timing-function:var(--ease-apple)] outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-md",
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto group/alert-dialog-content grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full gap-4 overflow-y-auto rounded-3xl px-6 pt-5 pb-5 duration-200 [animation-timing-function:var(--ease-apple)] outline-none has-[[data-slot=alert-dialog-footer]:last-child]:pb-0 data-[size=default]:max-w-[26.25rem] data-[size=sm]:max-w-xs",
             className
           )}
           {...props}
@@ -110,7 +110,7 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "flex flex-col-reverse gap-2 group-data-[size=sm]/alert-dialog-content:grid group-data-[size=sm]/alert-dialog-content:grid-cols-2 sm:flex-row sm:justify-end",
+        "flex flex-col-reverse gap-2 group-data-[size=sm]/alert-dialog-content:grid group-data-[size=sm]/alert-dialog-content:grid-cols-2 sm:flex-row sm:justify-end -mx-6 border-t px-6 py-3.5",
         className
       )}
       {...props}

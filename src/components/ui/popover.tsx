@@ -22,7 +22,7 @@ function PopoverTrigger({
 function PopoverContent({
   className,
   align = "center",
-  sideOffset = 4,
+  sideOffset = 6,
   ref,
   onPointerDownOutside,
   ...props

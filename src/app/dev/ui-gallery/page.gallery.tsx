@@ -12,6 +12,50 @@ import {
   type ThemeColor,
   type ZoomLevel,
 } from "@/lib/theme-presets"
+import { toast } from "sonner"
+import { AppToaster } from "@/components/ui/app-toaster"
+import { Label } from "@/components/ui/label"
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
+  Command,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination"
+import { Separator } from "@/components/ui/separator"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { FolderBadge } from "@/components/ui/folder-badge"
+import { AvatarBadge } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup, ButtonGroupText } from "@/components/ui/button-group"
 import { Input } from "@/components/ui/input"
@@ -94,6 +138,30 @@ import {
   DataTableRow,
 } from "@/components/ui/data-table"
 
+// 真实调用方在 DialogContent 上传的宽度/布局 class（按 AST 扫描 143 处调用归并），
+// 用来在同一页里并排核对「新默认 560px」对各类显式宽度的影响。
+const DIALOG_WIDTH_FIXTURES: { id: string; className?: string }[] = [
+  { id: "default" },
+  { id: "sm-md", className: "sm:max-w-md" },
+  { id: "sm-lg", className: "sm:max-w-lg" },
+  { id: "max-lg", className: "max-w-lg" },
+  { id: "sm-xl", className: "sm:max-w-xl" },
+  { id: "sm-2xl", className: "sm:max-w-2xl" },
+  { id: "max-3xl", className: "max-w-3xl" },
+  { id: "sm-28rem", className: "sm:max-w-[28rem]" },
+  { id: "sm-34rem", className: "sm:max-w-[34rem]" },
+  {
+    id: "p0-40rem",
+    className:
+      "flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[40rem]",
+  },
+  {
+    id: "p0-wide",
+    className:
+      "flex h-[min(47.5rem,calc(100vh-4rem))] max-w-[min(61.25rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0",
+  },
+]
+
 function Sample({
   title,
   children,
@@ -123,6 +191,7 @@ export default function UiGalleryPage() {
 
   return (
     <TooltipProvider>
+      <AppToaster position="bottom-right" closeButton />
       <main className="app-backdrop min-h-screen px-6 py-6 text-foreground">
         <div className="mx-auto max-w-[80rem]">
           <PageHeader
@@ -426,6 +495,227 @@ export default function UiGalleryPage() {
                   </Button>
                 }
               />
+            </Sample>
+            <Sample title="Dialog widths (real caller classes)">
+              <div className="flex flex-wrap gap-2">
+                {DIALOG_WIDTH_FIXTURES.map(({ id, className }) => (
+                  <Dialog key={id}>
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`gallery-dialog-${id}`}
+                      >
+                        {id}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className={className}>
+                      <DialogHeader
+                        className={
+                          className?.includes("p-0") ? "px-6 pt-5" : undefined
+                        }
+                      >
+                        <DialogTitle>{title}</DialogTitle>
+                        <DialogDescription>{description}</DialogDescription>
+                      </DialogHeader>
+                      <p
+                        className={
+                          className?.includes("p-0")
+                            ? "px-6 text-ui"
+                            : "text-ui"
+                        }
+                      >
+                        {id}
+                      </p>
+                      <DialogFooter
+                        className={
+                          className?.includes("p-0") ? "px-6 py-3.5" : undefined
+                        }
+                      >
+                        <DialogClose asChild>
+                          <Button variant="outline">{cancel}</Button>
+                        </DialogClose>
+                        <DialogClose asChild>
+                          <Button>{save}</Button>
+                        </DialogClose>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                ))}
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-testid="gallery-alert-sm"
+                    >
+                      alert-sm
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent size="sm">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>{title}</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {description}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>{cancel}</AlertDialogCancel>
+                      <AlertDialogAction variant="destructive">
+                        {save}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </Sample>
+            <Sample title="Toast / Tooltip / HoverCard / ContextMenu">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="gallery-toast-success"
+                  onClick={() => toast.success(title, { description })}
+                >
+                  success
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="gallery-toast-error"
+                  onClick={() => toast.error(title, { description })}
+                >
+                  error
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => toast.warning(title)}
+                >
+                  warning
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => toast.info(title)}
+                >
+                  info
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => toast.loading(title, { duration: 3200 })}
+                >
+                  loading
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={save}
+                      data-testid="gallery-tooltip-ghost"
+                    >
+                      <Plus />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{save}</TooltipContent>
+                </Tooltip>
+                <HoverCard>
+                  <HoverCardTrigger asChild>
+                    <Button variant="link" size="sm">
+                      HoverCard
+                    </Button>
+                  </HoverCardTrigger>
+                  <HoverCardContent>
+                    <p className="text-ui">{description}</p>
+                  </HoverCardContent>
+                </HoverCard>
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <div className="rounded-lg border border-dashed border-border px-3 py-1.5 text-ui">
+                      ContextMenu
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem>{save}</ContextMenuItem>
+                    <ContextMenuItem variant="destructive">
+                      {cancel}
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+              </div>
+            </Sample>
+            <Sample title="Label / Field / InputGroup">
+              <Field>
+                <FieldLabel htmlFor="gallery-field">{title}</FieldLabel>
+                <Input id="gallery-field" placeholder={description} />
+                <FieldDescription>{description}</FieldDescription>
+              </Field>
+              <Field data-invalid="true">
+                <Label htmlFor="gallery-field-invalid">{title}</Label>
+                <Input
+                  id="gallery-field-invalid"
+                  aria-invalid
+                  placeholder={description}
+                />
+                <FieldError>{description}</FieldError>
+              </Field>
+              <InputGroup>
+                <InputGroupAddon>
+                  <Search />
+                </InputGroupAddon>
+                <InputGroupInput aria-label="InputGroup" placeholder={title} />
+              </InputGroup>
+            </Sample>
+            <Sample title="Command / Pagination / Separator / ScrollArea">
+              <Command className="h-40 rounded-xl border border-border">
+                <CommandInput placeholder={title} />
+                <CommandList>
+                  <CommandGroup>
+                    <CommandItem>{save}</CommandItem>
+                    <CommandItem>{cancel}</CommandItem>
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink isActive>1</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink>2</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+              <Separator />
+              <ScrollArea className="h-16 rounded-lg border border-border p-2">
+                <p className="text-ui">
+                  {description} {description} {description}
+                </p>
+              </ScrollArea>
+            </Sample>
+            <Sample title="Avatar sizes / FolderBadge">
+              <div className="flex items-center gap-3">
+                <Avatar size="sm">
+                  <AvatarFallback>S</AvatarFallback>
+                </Avatar>
+                <Avatar>
+                  <AvatarFallback>M</AvatarFallback>
+                  <AvatarBadge />
+                </Avatar>
+                <Avatar size="lg">
+                  <AvatarFallback>L</AvatarFallback>
+                </Avatar>
+                <FolderBadge folderId={1} folderName="BeeCode" size="sm" />
+                <FolderBadge folderId={2} folderName="Codeg" size="md" />
+              </div>
             </Sample>
             <Sample title="DataTable">
               <DataTable>

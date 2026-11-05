@@ -50,6 +50,9 @@ function DialogOverlay({
   )
 }
 
+// 调用方自带内边距（p-0、px-4 等）的对话框沿用旧布局，不套规范的头/内容/底三段式内边距
+const OWN_PADDING = /(^|\s)(?:[\w-]+:)?p[xytblrse]?-/
+
 function DialogContent({
   className,
   children,
@@ -83,19 +86,24 @@ function DialogContent({
     },
     [setNode]
   )
+  const padded = !OWN_PADDING.test(className ?? "")
   return (
     <DialogPortal>
       <DialogOverlay />
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-4">
         <DialogPrimitive.Content
           data-slot="dialog-content"
+          data-padded={padded ? "" : undefined}
           ref={contentRef}
           onPointerDownOutside={(event) => {
             onPointerDownOutside?.(event)
             guardOutsidePress(event)
           }}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto relative grid max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-3xl p-6 duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong group/dialog-content pointer-events-auto relative grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full max-w-[35rem] overflow-y-auto rounded-3xl duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
+            padded
+              ? "gap-4 px-6 pt-5 pb-4 has-[[data-slot=dialog-footer]:last-child]:pb-0"
+              : "gap-6 p-6",
             showCloseButton && "[&_[data-slot=dialog-header]]:pe-10",
             className
           )}
@@ -112,7 +120,7 @@ function DialogContent({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "absolute top-4 end-4 hover:text-destructive focus-visible:text-destructive",
+                  "absolute top-4.5 end-4 hover:text-destructive focus-visible:text-destructive",
                   closeButtonClassName
                 )}
               >
@@ -143,6 +151,8 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="dialog-footer"
       className={cn(
         "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        // 规范 §8.8：默认内边距的对话框里，底部栏通栏、上分隔线、py-3.5
+        "group-data-padded/dialog-content:-mx-6 group-data-padded/dialog-content:border-t group-data-padded/dialog-content:px-6 group-data-padded/dialog-content:py-3.5",
         className
       )}
       {...props}

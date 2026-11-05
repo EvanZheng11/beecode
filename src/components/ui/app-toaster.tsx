@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useSyncExternalStore } from "react"
+import { useEffect, useSyncExternalStore, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import { useTheme } from "next-themes"
 import { Toaster, toast, useSonner, type ToasterProps } from "sonner"
@@ -65,6 +65,21 @@ function ToastOcclusion() {
   return null
 }
 
+/** 状态圆点（规范 §8.13）：8px，颜色取状态令牌；loading 不在此列，沿用 sonner 自带转圈 */
+function StatusDot({ className }: { className: string }) {
+  return <span aria-hidden className={`size-2 rounded-full ${className}`} />
+}
+
+const STATUS_ICONS: ToasterProps["icons"] = {
+  success: <StatusDot className="bg-tone-success" />,
+  error: <StatusDot className="bg-tone-danger" />,
+  warning: <StatusDot className="bg-tone-warning" />,
+  info: <StatusDot className="bg-primary" />,
+}
+
+/** 规范 §8.13：默认 3.2 秒、宽 360px；调用方显式传入的值优先 */
+const DEFAULT_DURATION_MS = 3200
+
 export function AppToaster(props: ToasterProps) {
   const { resolvedTheme } = useTheme()
   const theme = props.theme ?? (resolvedTheme === "dark" ? "dark" : "light")
@@ -82,11 +97,15 @@ export function AppToaster(props: ToasterProps) {
       <Toaster
         {...props}
         theme={theme}
+        duration={props.duration ?? DEFAULT_DURATION_MS}
+        icons={{ ...STATUS_ICONS, ...props.icons }}
+        style={{ "--width": "22.5rem", ...props.style } as CSSProperties}
         toastOptions={{
           ...props.toastOptions,
           // 只换外观：sonner 内置样式特异性更高，故用 ! 覆盖背景、圆角与内边距
           classNames: {
-            toast: "surface-glass-strong! rounded-2xl! px-4! py-3! text-ui!",
+            toast:
+              "surface-glass-strong! anim-slide rounded-2xl! px-4! py-3! text-ui!",
             title: "font-semibold",
             description: "text-xs! text-foreground/80!",
             ...props.toastOptions?.classNames,
