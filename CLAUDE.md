@@ -121,3 +121,9 @@ INSTA_UPDATE=auto cargo test --features test-utils     # 自动写新 .snap
 - ESLint：next/core-web-vitals + typescript + prettier
 - TypeScript：strict 模式，启用 `noUnusedLocals` 和 `noUnusedParameters`
 - Rust：2021 edition，使用 `thiserror` 定义错误类型
+
+## UI 样式规范
+
+- 前端界面（`src/` 下的组件、页面、`globals.css`、主题预设）的新增或修改必须遵循 [`docs/design/ui-style-guide.md`](docs/design/ui-style-guide.md)：Apple 风格的颜色令牌、圆角、字号、密度（页面级舒适 / 工作区紧凑）、玻璃层、动效、组件规范和交互习惯。
+- 全量 UI 改造按 [`docs/superpowers/plans/2026-11-05-apple-ui-refresh.md`](docs/superpowers/plans/2026-11-05-apple-ui-refresh.md) 分阶段执行，完成一个阶段就更新该文件的执行记录。
+- 样式改动不得改变组件行为、props、i18n 键名或 `data-*` / `aria-*` 测试锚点；组件中不写死颜色值和像素字号。
