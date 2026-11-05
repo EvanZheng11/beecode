@@ -1244,6 +1244,10 @@
   --primary-text: var(--activity-accent);
   /* 危险按钮的实心悬停态不借用主色前景：黄色预设的主色前景是深棕色。 */
   --destructive-foreground: oklch(1 0 0);
+  --switch-thumb: oklch(1 0 0);
+  --scrim: oklch(0 0 0 / 20%);
+  --drawer-scrim: oklch(0 0 0 / 10%);
+  --image-scrim: oklch(0 0 0 / 80%);
   --shadow-tint: 0 0 0;
   --shadow-glass:
     0 1px 1px rgb(0 0 0 / 0.02), 0 8px 28px rgb(var(--shadow-tint) / 0.06);
@@ -1257,6 +1261,7 @@
 .dark {
   --primary-soft: color-mix(in oklab, var(--primary) 18%, var(--background));
   --destructive-foreground: var(--background);
+  --scrim: oklch(0 0 0 / 50%);
   --shadow-glass:
     0 1px 1px rgb(0 0 0 / 0.2), 0 8px 28px rgb(var(--shadow-tint) / 0.35);
   --shadow-pop:
@@ -1276,6 +1281,10 @@
   --color-primary-soft: var(--primary-soft);
   --color-primary-text: var(--primary-text);
   --color-switch-on: var(--switch-on);
+  --color-switch-thumb: var(--switch-thumb);
+  --color-scrim: var(--scrim);
+  --color-drawer-scrim: var(--drawer-scrim);
+  --color-image-scrim: var(--image-scrim);
   --shadow-glass: var(--shadow-glass);
   --shadow-pop: var(--shadow-pop);
   --color-activity-rail: var(--activity-rail);
