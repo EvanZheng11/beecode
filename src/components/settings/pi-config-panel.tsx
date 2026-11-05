@@ -272,7 +272,7 @@ function PiModelLevelsHint({
   }
   if (requested && clamped && clamped !== requested) {
     return (
-      <p className="text-2xs text-amber-600 dark:text-amber-400">
+      <p className="text-2xs text-tone-warning">
         {t("pi.levelClamped", {
           model,
           level: label(requested),
@@ -976,7 +976,7 @@ export function PiConfigPanel({
                     {t("pi.binaryChecking")}
                   </span>
                 ) : piStatus?.found ? (
-                  <span className="flex items-start gap-1.5 text-emerald-600">
+                  <span className="flex items-start gap-1.5 text-tone-success">
                     <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span className="min-w-0">
                       <span className="font-medium">
@@ -1061,7 +1061,7 @@ export function PiConfigPanel({
             </div>
 
             {piRuntimeIsTooOld(piStatus?.version) && (
-              <p className="text-2xs text-amber-600 dark:text-amber-400">
+              <p className="text-2xs text-tone-warning">
                 {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
               </p>
             )}
@@ -1120,7 +1120,7 @@ export function PiConfigPanel({
                 <p
                   className={cn(
                     "flex items-start gap-1.5 text-2xs",
-                    validation.found ? "text-emerald-600" : "text-destructive"
+                    validation.found ? "text-tone-success" : "text-destructive"
                   )}
                 >
                   {validation.found ? (
@@ -1145,7 +1145,7 @@ export function PiConfigPanel({
                 </p>
               )}
               {piRuntimeIsTooOld(validation?.version) && (
-                <p className="text-2xs text-amber-600 dark:text-amber-400">
+                <p className="text-2xs text-tone-warning">
                   {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
                 </p>
               )}
@@ -1175,7 +1175,7 @@ export function PiConfigPanel({
                     </p>
                   )}
                   {configDir.trim() !== "" && (
-                    <p className="text-2xs text-amber-600 dark:text-amber-400">
+                    <p className="text-2xs text-tone-warning">
                       {t("pi.configDirSkillsNote")}
                     </p>
                   )}
@@ -1200,7 +1200,7 @@ export function PiConfigPanel({
                   so beats letting the user discover it as missing history.
                 */}
                 {(configDir.trim() !== "" || sessionDir.trim() !== "") && (
-                  <p className="text-2xs text-amber-600 dark:text-amber-400">
+                  <p className="text-2xs text-tone-warning">
                     {t("pi.dirHistoryNote")}
                   </p>
                 )}
@@ -1635,7 +1635,7 @@ export function PiConfigPanel({
                   className={cn(
                     "shrink-0 rounded px-1.5 py-0.5 text-3xs font-medium",
                     entry.trusted
-                      ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      ? "bg-tone-warning/15 text-tone-warning"
                       : "bg-muted text-muted-foreground"
                   )}
                 >

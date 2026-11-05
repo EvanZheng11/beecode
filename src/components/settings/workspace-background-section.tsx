@@ -95,7 +95,7 @@ export function WorkspaceBackgroundSection() {
   const pct = (v: number) => `${Math.round(v * 100)}%`
 
   return (
-    <section className="rounded-xl border bg-card p-4 space-y-4">
+    <section className="surface-glass rounded-2xl p-5 space-y-4">
       <div className="flex items-center gap-2">
         <ImageIcon className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-sm font-semibold">

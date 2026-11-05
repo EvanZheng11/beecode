@@ -18,8 +18,8 @@ const SIZE_CLASS: Record<ConversationTagChipSize, string> = {
   // The sidebar row's existing badge geometry (the running-count chip): a
   // 15px box, 10px text. Capped narrow — two chips must still leave the title
   // something to show.
-  xs: "h-[0.9375rem] max-w-[4.5rem] px-[0.3125rem] text-[0.625rem]",
-  sm: "h-[1.125rem] max-w-[8rem] px-[0.4375rem] text-[0.6875rem]",
+  xs: "h-[0.9375rem] max-w-[4.5rem] px-[0.3125rem] text-3xs",
+  sm: "h-[1.125rem] max-w-[8rem] px-[0.4375rem] text-2xs",
 }
 
 /**

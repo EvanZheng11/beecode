@@ -53,9 +53,9 @@ function parseOpenAgentsSettingsPayload(payload: string): {
 
 function AlertLevelIcon({ level }: { level: AlertLevel }) {
   if (level === "error") {
-    return <CircleAlert className="h-3 w-3 shrink-0 text-red-500" />
+    return <CircleAlert className="h-3 w-3 shrink-0 text-tone-danger" />
   }
-  return <CircleAlert className="h-3 w-3 shrink-0 text-amber-500" />
+  return <CircleAlert className="h-3 w-3 shrink-0 text-tone-warning" />
 }
 
 /** The trigger takes the colour of the worst alert it holds: red only when
@@ -63,8 +63,8 @@ function AlertLevelIcon({ level }: { level: AlertLevel }) {
 function triggerTone(alerts: { level: AlertLevel }[]): string {
   if (alerts.length === 0) return ""
   return alerts.some((a) => a.level === "error")
-    ? "text-red-500"
-    : "text-amber-500"
+    ? "text-tone-danger"
+    : "text-tone-warning"
 }
 
 function AlertActionButton({ action }: { action: AlertAction }) {

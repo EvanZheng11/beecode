@@ -53,7 +53,7 @@ export function StatusBarTasks() {
               <div key={task.id} className="space-y-1">
                 <div className="flex items-center gap-2 text-xs">
                   {task.status === "running" ? (
-                    <Spinner className="h-3 w-3 text-blue-500" />
+                    <Spinner className="h-3 w-3 text-tone-info" />
                   ) : (
                     <Clock className="h-3 w-3 text-muted-foreground" />
                   )}
@@ -62,7 +62,7 @@ export function StatusBarTasks() {
                 {task.status === "running" && task.progress != null && (
                   <div className="h-1 rounded-full bg-muted ml-5">
                     <div
-                      className="h-full rounded-full bg-blue-500 transition-all"
+                      className="h-full rounded-full bg-tone-info transition-all"
                       style={{ width: `${task.progress}%` }}
                     />
                   </div>

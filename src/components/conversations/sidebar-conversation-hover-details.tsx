@@ -103,7 +103,7 @@ export function SidebarConversationHoverDetails({
     // inline `user-select: text` onto the content element once a pointer goes
     // down inside it, and an explicit value here wins over that inherited one
     // without needing `!important`.
-    <div className="min-w-0 space-y-3 text-[0.8125rem] select-none">
+    <div className="min-w-0 space-y-3 text-ui select-none">
       <div className="min-w-0 space-y-1.5">
         {/* Clamped rather than truncated: the row already shows a one-line
             ellipsis, so the whole point of the bubble is to reveal more of the
@@ -150,7 +150,7 @@ export function SidebarConversationHoverDetails({
               {isWorktree && (
                 <Badge
                   variant="secondary"
-                  className="h-4 px-1.5 text-[0.625rem] font-normal"
+                  className="h-4 px-1.5 text-3xs font-normal"
                 >
                   {t("worktree")}
                 </Badge>

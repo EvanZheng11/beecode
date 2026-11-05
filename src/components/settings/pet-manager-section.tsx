@@ -187,7 +187,7 @@ export function PetManagerSection() {
     <Collapsible
       open={expanded}
       onOpenChange={setExpanded}
-      className="overflow-hidden rounded-xl border bg-card"
+      className="overflow-hidden surface-glass rounded-2xl"
       asChild
     >
       <section>
@@ -274,8 +274,11 @@ export function PetManagerSection() {
               <Loader2 className="h-4 w-4 animate-spin" />
             </div>
           ) : pets.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
-              <PawPrint className="mx-auto mb-2 h-6 w-6 opacity-60" />
+            <div className="rounded-xl border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-ui text-muted-foreground">
+              <PawPrint
+                strokeWidth={1.4}
+                className="mx-auto mb-3 size-7 opacity-60"
+              />
               <div>{t("noPets")}</div>
             </div>
           ) : (

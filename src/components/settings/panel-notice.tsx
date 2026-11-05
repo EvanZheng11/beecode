@@ -23,7 +23,7 @@ export function PanelNotice({
       className={cn(
         "flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-5",
         tone === "warning"
-          ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-400"
+          ? "border-tone-warning/30 bg-tone-warning/5 text-tone-warning"
           : "border-border/70 bg-muted/40 text-muted-foreground"
       )}
     >

@@ -39,17 +39,17 @@ type IndicatorState = CodegMcpServiceState | "unknown"
  * service is not faulty in either case, and colouring them would train people
  * to ignore the badge when it does go red. */
 const BADGE_TONE: Record<IndicatorState, string> = {
-  running: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  stopped: "bg-red-500/10 text-red-600 dark:text-red-400",
-  unavailable: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-500",
+  running: "bg-tone-success/10 text-tone-success",
+  stopped: "bg-tone-danger/10 text-tone-danger",
+  unavailable: "bg-tone-warning/10 text-tone-warning",
   disabled: "bg-muted text-muted-foreground",
   unknown: "bg-muted text-muted-foreground",
 }
 
 const DOT_TONE: Record<IndicatorState, string> = {
-  running: "bg-emerald-500",
-  stopped: "bg-red-500",
-  unavailable: "bg-yellow-500",
+  running: "bg-tone-success",
+  stopped: "bg-tone-danger",
+  unavailable: "bg-tone-warning",
   disabled: "bg-muted-foreground/50",
   unknown: "bg-muted-foreground/50",
 }
@@ -329,7 +329,7 @@ export function StatusBarMcp() {
         )}
 
         {errorBanner && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2 py-1.5 text-2xs break-words text-red-400">
+          <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2 py-1.5 text-2xs break-words text-tone-danger">
             {errorBanner}
           </div>
         )}

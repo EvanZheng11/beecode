@@ -359,7 +359,7 @@ export const SidebarTagFilterBar = memo(function SidebarTagFilterBar({
             style={tagChipStyle(tag.color)}
             className={cn(
               "forge-label group/chip inline-flex h-[0.9375rem] max-w-[8rem] min-w-0 items-center gap-[0.125rem] rounded-full border pr-[0.1875rem] pl-[0.3125rem]",
-              "text-[0.625rem] leading-none font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              "text-3xs leading-none font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
             )}
           >
             <span className="min-w-0 truncate">{tag.name}</span>
@@ -370,7 +370,7 @@ export const SidebarTagFilterBar = memo(function SidebarTagFilterBar({
           </button>
         ))}
         {tags.length > 1 ? (
-          <span className="text-[0.625rem] whitespace-nowrap text-muted-foreground">
+          <span className="text-3xs whitespace-nowrap text-muted-foreground">
             {filter.mode === "all" ? t("modeAll") : t("modeAny")}
           </span>
         ) : null}

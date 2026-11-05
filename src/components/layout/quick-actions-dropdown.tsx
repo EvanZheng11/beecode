@@ -251,7 +251,7 @@ export function QuickActionsDropdown() {
               {tSidebar("automations")}
             </span>
             {unseenFailures > 0 && (
-              <span className="inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-destructive">
+              <span className="inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-3xs font-medium leading-none text-destructive">
                 {unseenFailures}
               </span>
             )}
@@ -260,7 +260,7 @@ export function QuickActionsDropdown() {
             <ListTodo />
             <span className="min-w-0 flex-1 truncate">{tSidebar("tasks")}</span>
             {attentionCount > 0 && (
-              <span className="inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
+              <span className="inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-3xs font-medium leading-none text-primary">
                 {attentionCount}
               </span>
             )}

@@ -329,7 +329,7 @@ export function StatusBarUpdate() {
         )}
 
         {errorMessage && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2 py-1.5 text-2xs text-red-400">
+          <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2 py-1.5 text-2xs text-tone-danger">
             {t("updateError", { message: errorMessage })}
           </div>
         )}
@@ -348,7 +348,7 @@ export function StatusBarUpdate() {
         )}
 
         {blockerHint && (
-          <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
+          <p className="text-2xs leading-5 text-tone-warning">{blockerHint}</p>
         )}
 
         {/* Docker upgrades only live as long as the container does. */}

@@ -38,7 +38,7 @@ const TRIGGER_CLASS = cn(
   "focus-visible:ring-2 focus-visible:ring-ring/50",
   // `data-*` rules come after `hover:` in the generated CSS, so the selected
   // tab keeps its tint under the pointer.
-  "data-[state=active]:bg-primary/10 data-[state=active]:text-primary",
+  "data-[state=active]:bg-primary-soft data-[state=active]:text-primary-text",
   "[&_svg]:pointer-events-none [&_svg]:shrink-0"
 )
 

@@ -299,7 +299,7 @@ function UnavailableMark({ label }: { label: string }) {
       variant="outline"
       className={cn(
         MARK_CLASS,
-        "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+        "border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
       )}
     >
       {ta("optionUnavailable", { value: label })}
@@ -704,7 +704,7 @@ export function StatusLine({
           tone === "error"
             ? "text-destructive"
             : tone === "warning"
-              ? "text-amber-700 dark:text-amber-400"
+              ? "text-tone-warning"
               : "text-muted-foreground"
         )}
       >

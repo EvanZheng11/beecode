@@ -21,7 +21,7 @@ const SIZE_CLASS: Record<ConversationStatusDotSize, string> = {
   md: "h-2 w-2",
 }
 
-const FALLBACK_COLOR = "bg-gray-400 dark:bg-gray-500"
+const FALLBACK_COLOR = "bg-muted-foreground/60"
 
 export function ConversationStatusDot({
   status,

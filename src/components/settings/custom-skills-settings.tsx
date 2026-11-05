@@ -660,7 +660,7 @@ export function CustomSkillsBody({
   return (
     <div className="flex flex-col h-full min-h-0">
       {loadError && (
-        <div className="mb-3 shrink-0 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+        <div className="mb-3 shrink-0 rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
           {loadError}
         </div>
       )}
@@ -1038,7 +1038,7 @@ export function CustomSkillsBody({
                     {t("importFromAgent.loading")}
                   </div>
                 ) : agentImportError ? (
-                  <div className="p-3 text-xs text-red-400">
+                  <div className="p-3 text-xs text-tone-danger">
                     {agentImportError}
                   </div>
                 ) : agentImportUnsupported ? (

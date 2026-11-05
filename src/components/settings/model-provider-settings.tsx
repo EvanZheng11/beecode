@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -93,16 +94,14 @@ export function ModelProviderSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <section className="space-y-3 px-3 pt-3 md:px-4 md:pt-4">
-        <div>
-          <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-          <p className="text-sm text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </div>
+      <section className="mx-auto w-full max-w-[80rem] px-4 pt-4 md:px-6 md:pt-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+        />
       </section>
 
-      <section className="mt-4 space-y-2 px-3 pb-3 md:px-4 md:pb-4">
+      <section className="mx-auto mt-4 w-full max-w-[80rem] space-y-2 px-4 pb-4 md:px-6 md:pb-6">
         <div className="flex items-center justify-between gap-2">
           <Select
             value={filter ?? "__all__"}

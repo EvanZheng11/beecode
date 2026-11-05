@@ -475,7 +475,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
     // Repeated per panel rather than replacing the card: the strip is not
     // ours to collapse, and a tab that opens onto nothing explains nothing.
     const unsupported = (
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
+      <div className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-xs text-tone-warning">
         {t("remoteUnsupported")}
       </div>
     )
@@ -552,12 +552,12 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
             />
           )}
           {passphraseMismatch && (
-            <p className="text-2xs text-red-400">
+            <p className="text-2xs text-tone-danger">
               {t("export.passphraseMismatch")}
             </p>
           )}
           {passphrase.length === 0 ? (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+            <div className="flex items-start gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
               <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>{t("export.noPassphraseWarning")}</span>
             </div>
@@ -588,7 +588,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
         )}
 
         {degraded.length > 0 && (
-          <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+          <div className="space-y-1 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
             <p className="font-medium">{t("export.degradedTitle")}</p>
             <p>{t("export.degradedHint")}</p>
             <ul className="space-y-0.5 pt-1">
@@ -652,7 +652,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
         </div>
 
         {pendingBlocked && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
             <span>{t("restore.pendingBlockedHint")}</span>
             <Button
               type="button"
@@ -720,7 +720,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
               })}
             </div>
             {!preview.compatible && (
-              <div className="text-red-400">
+              <div className="text-tone-danger">
                 {t("restore.preview.incompatibleHint")}
               </div>
             )}
@@ -770,7 +770,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
                   </p>
                 ) : conflicts && conflicts.length > 0 ? (
                   <div className="space-y-1">
-                    <p className="text-2xs text-amber-500">
+                    <p className="text-2xs text-tone-warning">
                       {t("restore.external.conflictCount", {
                         count: conflicts.length,
                       })}
@@ -781,7 +781,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
                   </div>
                 ) : null}
                 {runningAgents.length > 0 && (
-                  <p className="text-2xs text-amber-500">
+                  <p className="text-2xs text-tone-warning">
                     {t("restore.external.agentsRunning", {
                       count: runningAgents.length,
                       agents: runningAgents.join(", "),
@@ -809,7 +809,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
         )}
 
         {preview?.manifest && (
-          <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-2xs text-red-400">
+          <div className="flex items-start gap-2 rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-2xs text-tone-danger">
             <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
             <span>
               {t("restore.replaceWarning")}
@@ -966,7 +966,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
               <div className="space-y-2 text-left text-xs">
                 <p>{t("restore.result.needsRestart")}</p>
                 {staged?.externalDowngraded && (
-                  <p className="text-amber-500">
+                  <p className="text-tone-warning">
                     {t("restore.result.downgraded", {
                       agents: staged.externalDowngraded.agents.join(", "),
                       path: staged.externalDowngraded.path,
@@ -999,7 +999,7 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
                 )}
                 {!!staged?.refusedExternal?.length && (
                   <details>
-                    <summary className="cursor-pointer text-amber-500">
+                    <summary className="cursor-pointer text-tone-warning">
                       {t("restore.result.refused", {
                         count: staged.refusedExternal.length,
                       })}

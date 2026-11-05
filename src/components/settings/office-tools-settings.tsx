@@ -111,9 +111,9 @@ function DetectionCard({
       className={cn(
         "rounded-lg border p-4",
         healthy
-          ? "border-green-500/30 bg-green-500/5"
+          ? "border-tone-success/30 bg-tone-success/5"
           : installed
-            ? "border-amber-500/40 bg-amber-500/5"
+            ? "border-tone-warning/40 bg-tone-warning/5"
             : "border-muted bg-muted/5"
       )}
     >
@@ -126,14 +126,14 @@ function DetectionCard({
             ) : healthy ? (
               <Badge
                 variant="outline"
-                className="h-5 px-1.5 text-3xs border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400"
+                className="h-5 px-1.5 text-3xs border-tone-success/40 bg-tone-success/10 text-tone-success"
               >
                 {t("detection.installed")}
               </Badge>
             ) : installed ? (
               <Badge
                 variant="outline"
-                className="h-5 px-1.5 text-3xs border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                className="h-5 px-1.5 text-3xs border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
               >
                 {t("detection.notRunnable")}
               </Badge>
@@ -155,7 +155,7 @@ function DetectionCard({
             </div>
           )}
           {installed && runtimeError && (
-            <p className="text-2xs text-amber-600 dark:text-amber-400 mt-1.5 whitespace-pre-wrap break-words">
+            <p className="text-2xs text-tone-warning mt-1.5 whitespace-pre-wrap break-words">
               {runtimeError}
             </p>
           )}

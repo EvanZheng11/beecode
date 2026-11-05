@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -631,16 +632,14 @@ export function BrowserSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("title")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {desktop ? t("description") : t("descriptionWeb")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("title")}
+          description={desktop ? t("description") : t("descriptionWeb")}
+        />
 
         {policy && !policy.enabled ? (
-          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
+          <p className="rounded-lg border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-foreground">
             {t("managedDisabled")}
           </p>
         ) : null}

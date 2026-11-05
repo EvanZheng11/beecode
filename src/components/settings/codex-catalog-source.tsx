@@ -326,7 +326,7 @@ export function CodexListUrlField({
             className="h-8 font-mono text-2xs"
           />
           {listHost && baseHost && listHost !== baseHost && (
-            <p className="flex items-start gap-1 text-2xs text-amber-600 dark:text-amber-400">
+            <p className="flex items-start gap-1 text-2xs text-tone-warning">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
               {t("keySentTo", { host: listHost })}
             </p>
@@ -353,13 +353,13 @@ export function CodexListNotices({
   return (
     <>
       {list.rows?.warnings.includes("no_usable_models") && (
-        <p className="flex items-start gap-1.5 text-2xs text-amber-600 dark:text-amber-400">
+        <p className="flex items-start gap-1.5 text-2xs text-tone-warning">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           {t("codexCatalog.no_usable_models")}
         </p>
       )}
       {list.formatChanged && editable && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-2xs text-amber-600 dark:text-amber-400">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-tone-warning/30 bg-tone-warning/5 px-3 py-1.5 text-2xs text-tone-warning">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">
             {t("formatChanged", {
@@ -660,7 +660,7 @@ export function CodexCatalogStatusLine({
       </div>
       <div className="space-y-1 px-3 py-2">
         {status.pendingLocalChanges && (
-          <p className="flex items-start gap-1 text-2xs text-amber-600 dark:text-amber-400">
+          <p className="flex items-start gap-1 text-2xs text-tone-warning">
             <Info className="mt-0.5 h-3 w-3 shrink-0" />
             {t("pendingLocalChanges")}
           </p>
@@ -671,7 +671,7 @@ export function CodexCatalogStatusLine({
             className={cn(
               "text-2xs",
               line.tone === "muted" && "text-muted-foreground",
-              line.tone === "warn" && "text-amber-600 dark:text-amber-400",
+              line.tone === "warn" && "text-tone-warning",
               line.tone === "error" && "text-destructive"
             )}
           >

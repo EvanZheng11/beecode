@@ -623,7 +623,7 @@ export function CodexModelListEditor({
           />
         )}
         {hasCustomization && (
-          <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-600 dark:text-amber-400">
+          <div className="flex items-start gap-2 rounded-xl border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{t("customizedNotice")}</span>
           </div>
@@ -850,8 +850,8 @@ function CodexModelRow({
         onClick={onMakeDefault}
         disabled={readOnly}
         className={cn(
-          "flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-amber-500 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
-          isDefault && "text-amber-500"
+          "flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-tone-warning focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
+          isDefault && "text-tone-warning"
         )}
       >
         <Star className={cn("h-3.5 w-3.5", isDefault && "fill-current")} />
@@ -871,7 +871,7 @@ function CodexModelRow({
       ) : null}
       <span className="flex-1" />
       {badge ? (
-        <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 text-2xs text-amber-600 dark:text-amber-400">
+        <span className="shrink-0 rounded-full bg-tone-warning/10 px-1.5 text-2xs text-tone-warning">
           {badge}
         </span>
       ) : null}
@@ -880,7 +880,7 @@ function CodexModelRow({
           type="button"
           variant="ghost"
           size="icon-xs"
-          className="text-muted-foreground hover:text-red-500"
+          className="text-muted-foreground hover:text-tone-danger"
           onClick={onRemove}
           aria-label={t("remove")}
           title={t("remove")}
@@ -1019,8 +1019,8 @@ function CodexCustomRow({
           onClick={onMakeDefault}
           disabled={readOnly || !entry.slug}
           className={cn(
-            "mt-1.5 shrink-0 text-muted-foreground transition-colors hover:text-amber-500 disabled:opacity-40",
-            isDefault && "text-amber-500"
+            "mt-1.5 shrink-0 text-muted-foreground transition-colors hover:text-tone-warning disabled:opacity-40",
+            isDefault && "text-tone-warning"
           )}
         >
           <Star className={cn("h-4 w-4", isDefault && "fill-current")} />
@@ -1061,7 +1061,7 @@ function CodexCustomRow({
             type="button"
             variant="ghost"
             size="icon"
-            className="mt-0.5 h-7 w-7 shrink-0 text-muted-foreground hover:text-red-500"
+            className="mt-0.5 h-7 w-7 shrink-0 text-muted-foreground hover:text-tone-danger"
             onClick={onRemove}
             aria-label={t("remove")}
           >

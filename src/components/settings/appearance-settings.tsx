@@ -12,6 +12,7 @@ import {
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -63,6 +64,8 @@ type ThemeMode = "system" | "light" | "dark"
 
 export function AppearanceSettings() {
   const t = useTranslations("AppearanceSettings")
+  // 页头复用设置壳已有的导航文案，避免新增 i18n 键
+  const tNav = useTranslations("SettingsShell")
   const { theme, resolvedTheme, setTheme } = useTheme()
   const { themeColor, setThemeColor } = useThemeColor()
   const { zoomLevel, setZoomLevel } = useZoomLevel()
@@ -84,9 +87,10 @@ export function AppearanceSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader title={tNav("nav.appearance")} />
         {/* ===== Theme Mode ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Sun className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("sectionTitle")}</h2>
@@ -148,7 +152,7 @@ export function AppearanceSettings() {
         </section>
 
         {/* ===== Theme Color ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <span
               className="size-4 rounded-full border"
@@ -203,7 +207,7 @@ export function AppearanceSettings() {
         <CustomStyleSection />
 
         {/* ===== Zoom Level ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Type className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">
@@ -249,7 +253,7 @@ export function AppearanceSettings() {
         <WorkspaceBackgroundSection />
 
         {/* ===== New conversation — mode selection area ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <LayoutGrid className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">
@@ -273,7 +277,7 @@ export function AppearanceSettings() {
         </section>
 
         {/* ===== Chat animations ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">
@@ -299,7 +303,7 @@ export function AppearanceSettings() {
         <ChatHtmlSettingsSection />
 
         {/* ===== Chat content width ===== */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <MoveHorizontal className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">

@@ -778,8 +778,8 @@ export function KimiCodeConfigPanel({
             <span
               className={cn(
                 "inline-flex h-2 w-2 shrink-0 rounded-full",
-                status === "saved" && "bg-emerald-500",
-                status === "dirty" && "bg-amber-500",
+                status === "saved" && "bg-tone-success",
+                status === "dirty" && "bg-tone-warning",
                 status === "unconfigured" && "bg-muted-foreground/40"
               )}
             />
@@ -794,7 +794,7 @@ export function KimiCodeConfigPanel({
             </span>
           </div>
           {dirty && (
-            <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-3xs text-amber-700 dark:text-amber-400">
+            <span className="shrink-0 rounded bg-tone-warning/10 px-1.5 py-0.5 text-3xs text-tone-warning">
               {t("kimiCode.statusDirty")}
             </span>
           )}
@@ -829,7 +829,7 @@ export function KimiCodeConfigPanel({
         )}
 
         {overridingEnvKeys.length > 0 && (
-          <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
+          <p className="flex items-start gap-1.5 text-2xs text-tone-warning">
             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
               {t("kimiCode.envOverrideWarning", {
@@ -840,7 +840,7 @@ export function KimiCodeConfigPanel({
         )}
 
         {providerModels.list && (
-          <p className="flex items-start gap-1.5 text-2xs text-emerald-700 dark:text-emerald-400">
+          <p className="flex items-start gap-1.5 text-2xs text-tone-success">
             <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
               {fetchedModels.length > 0
@@ -1108,7 +1108,7 @@ export function KimiCodeConfigPanel({
             </div>
 
             {modelUnlisted && (
-              <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
+              <p className="flex items-start gap-1.5 text-2xs text-tone-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>{t("kimiCode.modelNotInList")}</span>
               </p>
@@ -1327,7 +1327,7 @@ export function KimiCodeConfigPanel({
               className="min-h-[8.75rem] font-mono text-2xs"
               disabled={saving}
             />
-            <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
+            <p className="flex items-start gap-1.5 text-2xs text-tone-warning">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
               <span>{t("kimiCode.rawEditorWarning")}</span>
             </p>

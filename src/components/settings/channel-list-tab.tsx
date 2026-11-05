@@ -239,9 +239,12 @@ export function ChannelListTab() {
       </div>
 
       {channels.length === 0 ? (
-        <section className="rounded-xl border bg-card p-8 text-center">
-          <MessageCircle className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-          <p className="text-sm text-muted-foreground">{t("noChannels")}</p>
+        <section className="surface-glass rounded-2xl p-8 text-center">
+          <MessageCircle
+            strokeWidth={1.4}
+            className="mx-auto mb-3 size-7 text-muted-foreground/60"
+          />
+          <p className="text-ui text-muted-foreground">{t("noChannels")}</p>
         </section>
       ) : (
         <section className="space-y-2">
@@ -253,7 +256,7 @@ export function ChannelListTab() {
             return (
               <div
                 key={ch.id}
-                className="rounded-xl border bg-card p-4 flex items-center gap-4"
+                className="surface-glass rounded-2xl p-5 flex items-center gap-4"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -270,7 +273,7 @@ export function ChannelListTab() {
                               <span
                                 role="button"
                                 tabIndex={0}
-                                className="inline-flex cursor-help rounded-sm text-yellow-600 outline-none focus-visible:ring-1 focus-visible:ring-ring dark:text-yellow-500"
+                                className="inline-flex cursor-help rounded-sm text-tone-warning outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                 aria-label={t("weixinReconnectNotice")}
                               >
                                 <AlertCircle className="h-3 w-3" />
@@ -286,12 +289,12 @@ export function ChannelListTab() {
                     <span
                       className={`inline-block h-2 w-2 rounded-full ${
                         isConnected
-                          ? "bg-green-500"
+                          ? "bg-tone-success"
                           : status === "connecting"
-                            ? "bg-yellow-500 animate-pulse"
+                            ? "bg-tone-warning animate-pulse"
                             : status === "error"
-                              ? "bg-red-500"
-                              : "bg-gray-400"
+                              ? "bg-tone-danger"
+                              : "bg-muted-foreground/50"
                       }`}
                     />
                   </div>

@@ -353,7 +353,7 @@ export function SearchCommandDialog({
                     onSelect={() => handleSelectFile(entry)}
                   >
                     {entry.kind === "dir" ? (
-                      <Folder className="w-4 h-4 shrink-0 text-blue-500" />
+                      <Folder className="w-4 h-4 shrink-0 text-tone-info" />
                     ) : (
                       <File className="w-4 h-4 shrink-0 text-muted-foreground" />
                     )}

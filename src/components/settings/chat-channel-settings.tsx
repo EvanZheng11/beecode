@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl"
 
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ChannelListTab } from "./channel-list-tab"
@@ -14,14 +15,16 @@ export function ChatChannelSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <Tabs defaultValue="channels" className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-3">
-          <div>
-            <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-            <p className="text-sm text-muted-foreground">
-              {t("sectionDescription")}
-            </p>
-          </div>
+      <Tabs
+        defaultValue="channels"
+        className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6"
+      >
+        <section>
+          <PageHeader
+            title={t("sectionTitle")}
+            description={t("sectionDescription")}
+            className="mb-4"
+          />
           <TabsList>
             <TabsTrigger value="channels">{t("tabs.channels")}</TabsTrigger>
             <TabsTrigger value="commands">{t("tabs.commands")}</TabsTrigger>

@@ -593,7 +593,7 @@ export function ConfigSyncSettings() {
               <ul className="space-y-1">
                 {SCOPE_INCLUDED.map((key) => (
                   <li key={key} className="flex items-start gap-1.5 text-2xs">
-                    <Check className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-500" />
+                    <Check className="mt-0.5 h-3 w-3 shrink-0 text-tone-success" />
                     <span>{t(`scopeIncluded.${key}`)}</span>
                   </li>
                 ))}
@@ -1020,15 +1020,15 @@ export function ConfigSyncSettings() {
             {/* The warning has to stop saying "plaintext" the moment it stops
                 being true, or it trains the user to ignore it. */}
             {encrypt ? (
-              <div className="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3">
-                <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+              <div className="flex items-start gap-2 rounded-lg border border-tone-success/40 bg-tone-success/5 p-3">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-tone-success" />
                 <p className="text-2xs text-muted-foreground leading-5">
                   {t("encryptedNotice")}
                 </p>
               </div>
             ) : (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
-                <ShieldAlert className="h-4 w-4 shrink-0 text-amber-600" />
+              <div className="flex items-start gap-2 rounded-lg border border-tone-warning/40 bg-tone-warning/5 p-3">
+                <ShieldAlert className="h-4 w-4 shrink-0 text-tone-warning" />
                 <p className="text-2xs text-muted-foreground leading-5">
                   {t("plaintextWarning")}
                 </p>

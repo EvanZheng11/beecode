@@ -28,6 +28,7 @@ import {
 } from "@/components/shared/settings-section"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -509,13 +510,11 @@ export function GeneralSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+        />
 
         {loadError && (
           <SettingsError>
@@ -605,7 +604,7 @@ export function GeneralSettings() {
                   </Button>
                 </div>
                 {customPathExists === false && customShellPath.trim() && (
-                  <p className="text-2xs text-amber-500">
+                  <p className="text-2xs text-tone-warning">
                     {t("terminalShellNotFoundWarning")}
                   </p>
                 )}

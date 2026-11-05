@@ -487,13 +487,13 @@ export function SessionDirectoryDialog({
       ? "shadow-[inset_0_2px_0_0_var(--color-primary)]"
       : drop.pos === "after"
         ? "shadow-[inset_0_-2px_0_0_var(--color-primary)]"
-        : "bg-primary/10 ring-1 ring-primary ring-inset"
+        : "bg-primary-soft ring-1 ring-primary ring-inset"
   }
   const rankBadge = (rank: DirectoryRank | undefined) =>
     rank === "archived"
-      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+      ? "bg-tone-warning/10 text-tone-warning"
       : rank === "active"
-        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+        ? "bg-tone-success/10 text-tone-success"
         : "bg-muted text-muted-foreground"
   const rankLabel = (rank: DirectoryRank | undefined) =>
     rank === "archived"
@@ -655,7 +655,7 @@ export function SessionDirectoryDialog({
             aria-rowcount={rows.length + 1}
             aria-colcount={5}
             className={cn(
-              "mx-6 flex min-h-0 flex-1 flex-col overflow-x-auto rounded-xl border",
+              "mx-6 flex min-h-0 flex-1 flex-col overflow-x-auto rounded-2xl border",
               dragging && "select-none"
             )}
           >
@@ -663,7 +663,7 @@ export function SessionDirectoryDialog({
               role="row"
               className={cn(
                 COLUMNS,
-                "md:min-w-[780px] shrink-0 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+                "md:min-w-[780px] shrink-0 border-b bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground"
               )}
             >
               <div role="columnheader" className="flex items-center">
@@ -747,11 +747,11 @@ export function SessionDirectoryDialog({
                         className={cn(
                           COLUMNS,
                           ROW_H,
-                          "border-b border-border/60 px-3 text-sm last:border-0 hover:bg-muted/35",
+                          "border-b border-border/60 px-3 text-ui transition-colors duration-150 last:border-0 hover:bg-primary/4",
                           row.kind === "group" && "bg-muted/25 font-medium",
                           row.kind === "conversation" &&
-                            "text-[13px] text-muted-foreground",
-                          checked && "bg-primary/5",
+                            "text-ui text-muted-foreground",
+                          checked && "bg-primary-soft",
                           sorting && canMove && "cursor-grab touch-none",
                           dragging === row.key && "opacity-40",
                           dropClass(row.key)
@@ -817,7 +817,7 @@ export function SessionDirectoryDialog({
                             {name}
                           </span>
                           {folder && row.rank !== "active" && (
-                            <span className="shrink-0 rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground md:hidden">
+                            <span className="shrink-0 rounded-full bg-muted px-1.5 text-2xs text-muted-foreground md:hidden">
                               {rankLabel(row.rank)}
                             </span>
                           )}
@@ -842,7 +842,7 @@ export function SessionDirectoryDialog({
                                   toggleIn(setExpandedSessions, row.key)
                                 }
                                 className={cn(
-                                  "flex shrink-0 items-center gap-0.5 rounded px-1 text-[11px] text-muted-foreground hover:bg-muted",
+                                  "flex shrink-0 items-center gap-0.5 rounded px-1 text-2xs text-muted-foreground hover:bg-muted",
                                   sessionsOpen && "bg-muted text-foreground"
                                 )}
                               >
@@ -1040,7 +1040,7 @@ export function SessionDirectoryDialog({
                 className={cn(
                   "md:min-w-[780px] shrink-0 border-t border-dashed py-2 text-center text-xs",
                   drop?.rowKey === "root"
-                    ? "bg-primary/10 text-primary"
+                    ? "bg-primary-soft text-primary-text"
                     : "text-muted-foreground"
                 )}
               >

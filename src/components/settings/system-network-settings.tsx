@@ -34,6 +34,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -449,10 +450,11 @@ export function SystemNetworkSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <div className="flex items-center justify-between">
-            <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+          actions={
             <Button
               variant="ghost"
               className="size-5 rounded-full"
@@ -460,20 +462,17 @@ export function SystemNetworkSettings() {
             >
               <GithubMarkIcon className="size-5" />
             </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </section>
+          }
+        />
 
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             {checkingUpdate ? (
               <RefreshCw className="h-4 w-4 text-muted-foreground animate-spin" />
             ) : availableUpdate ? (
               <ArrowUpCircle className="h-4 w-4 text-muted-foreground" />
             ) : lastCheckedAt ? (
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <CheckCircle2 className="h-4 w-4 text-tone-success" />
             ) : (
               <RefreshCw className="h-4 w-4 text-muted-foreground" />
             )}
@@ -638,7 +637,9 @@ export function SystemNetworkSettings() {
             )}
 
             {blockerHint && (
-              <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
+              <p className="text-2xs leading-5 text-tone-warning">
+                {blockerHint}
+              </p>
             )}
 
             {availableUpdate &&
@@ -672,7 +673,7 @@ export function SystemNetworkSettings() {
           </div>
 
           {bannerError && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
               {t("updateError", { message: bannerError })}
             </div>
           )}
@@ -701,7 +702,7 @@ export function SystemNetworkSettings() {
             }
           >
             {autostartError !== null && (
-              <p className="text-2xs text-amber-500">
+              <p className="text-2xs text-tone-warning">
                 {t("autostartUnavailable", { message: autostartError })}
               </p>
             )}
@@ -710,7 +711,7 @@ export function SystemNetworkSettings() {
 
         <CliAccessSettings />
 
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Wifi className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("proxyTitle")}</h2>
@@ -721,7 +722,7 @@ export function SystemNetworkSettings() {
           </p>
 
           {loadError && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
               {t("loadFailed", { message: loadError })}
             </div>
           )}
@@ -802,7 +803,7 @@ export function SystemNetworkSettings() {
           </div>
         </section>
 
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Languages className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("languageTitle")}</h2>
