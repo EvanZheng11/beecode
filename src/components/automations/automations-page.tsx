@@ -112,8 +112,8 @@ import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 const AUTOMATION_CHANGED_EVENT = "automation://changed"
 
 const STATUS_STYLES: Record<string, string> = {
-  running: "bg-primary/10 text-primary",
-  succeeded: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  running: "bg-primary-soft text-primary-text",
+  succeeded: "bg-tone-success/10 text-tone-success",
   failed: "bg-destructive/10 text-destructive",
   cancelled: "bg-muted text-muted-foreground",
   skipped: "bg-muted text-muted-foreground",
@@ -747,8 +747,8 @@ function PageToolbar({
 // history; an enabled one is colored by its last run (emerald when it has never
 // run yet, i.e. "ready").
 const RUN_STATUS_DOT: Record<string, string> = {
-  running: "bg-amber-500",
-  succeeded: "bg-emerald-500",
+  running: "bg-tone-warning",
+  succeeded: "bg-tone-success",
   failed: "bg-destructive",
   cancelled: "bg-muted-foreground/50",
   skipped: "bg-muted-foreground/50",
@@ -757,8 +757,8 @@ const RUN_STATUS_DOT: Record<string, string> = {
 // Run-history timeline node tint per status — colors the node ring and the
 // trigger icon inside it; falls back to a neutral border for unknown states.
 const RUN_NODE_RING: Record<string, string> = {
-  running: "border-amber-500/50 text-amber-600 dark:text-amber-400",
-  succeeded: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+  running: "border-tone-warning/50 text-tone-warning",
+  succeeded: "border-tone-success/50 text-tone-success",
   failed: "border-destructive/50 text-destructive",
   cancelled: "border-border text-muted-foreground",
   skipped: "border-border text-muted-foreground",
@@ -774,8 +774,8 @@ function AutomationDot({
   const color = !enabled
     ? "bg-muted-foreground/40"
     : status
-      ? (RUN_STATUS_DOT[status] ?? "bg-emerald-500")
-      : "bg-emerald-500"
+      ? (RUN_STATUS_DOT[status] ?? "bg-tone-success")
+      : "bg-tone-success"
   return (
     <span
       className={cn(
@@ -892,7 +892,7 @@ export function AutomationListItem({
             className={cn(
               // The border is always in the box (transparent when unselected)
               // so selecting a row never shifts its height by 2px.
-              "group flex h-8 w-full items-center rounded-full border pr-1 transition-colors",
+              "group flex h-8 w-full items-center rounded-md border pr-1 transition-colors",
               // Selection can't lean on fill alone: in the light theme
               // `--accent` and `--muted` are the SAME token value
               // (oklch(0.97)), so `bg-accent` on the muted list panel is a
@@ -903,14 +903,14 @@ export function AutomationListItem({
               // rows stay off the chip so their layered hover:bg-* keeps
               // working — the chip's unlayered background would swallow it.
               selected
-                ? "border-border ws-chrome-border bg-accent ws-msg-chip"
+                ? "border-border ws-chrome-border bg-primary-soft ws-msg-chip"
                 : "border-transparent hover:bg-accent/60"
             )}
           >
             <button
               type="button"
               onClick={onSelect}
-              className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-full pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-md pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
               <span className="relative flex size-5 shrink-0 items-center justify-center">
                 <AgentIcon
@@ -949,7 +949,7 @@ export function AutomationListItem({
                   // Turned on a span, not the icon (an SVG's turn lays the
                   // page out every frame; see the sidebar's running badge).
                   <span className="inline-flex animate-spin" aria-hidden="true">
-                    <Loader2 className="size-3.5 text-amber-600 dark:text-amber-400" />
+                    <Loader2 className="size-3.5 text-tone-warning" />
                   </span>
                 ) : timeLabel ? (
                   <span

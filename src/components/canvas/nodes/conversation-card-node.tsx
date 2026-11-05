@@ -51,7 +51,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
   // member simply drops out of the grid.
   if (!conversation) {
     return (
-      <div className="canvas-board-units flex h-full w-full flex-col items-start justify-between overflow-hidden rounded-xl border border-dashed border-foreground/20 bg-card/60 p-3 opacity-70">
+      <div className="canvas-board-units flex h-full w-full flex-col items-start justify-between overflow-hidden rounded-2xl border border-dashed border-foreground/20 bg-card/60 p-3 shadow-glass opacity-70">
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Unlink className="size-3.5" aria-hidden="true" />
           <span className="text-xs">{t("unresolvedConversation")}</span>
@@ -90,7 +90,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
         // selected — ReactFlow selects before it moves anything — so the ring
         // says so, and a card that also tilts is a sticker effect on an element
         // whose whole job is to land on an exact grid slot.
-        "canvas-board-units flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card px-2.5 py-2 transition-colors",
+        "canvas-board-units flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card px-2.5 py-2 shadow-glass transition-colors",
         "border-foreground/15 hover:border-foreground/30",
         running &&
           "ring-1 ring-primary/30 motion-safe:[animation:canvas-breathe_2.6s_ease-in-out_infinite]",
@@ -103,7 +103,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
           wash — this sits on the card's OPAQUE surface where the region's sits
           on a translucent frame, so the same opacity would read as a slab and
           drown the title. */}
-      <ColorWash color={data.color} className="rounded-xl" opacity={0.08} />
+      <ColorWash color={data.color} className="rounded-2xl" opacity={0.08} />
       {/* One row, one height, one line box. `h-3.5` states the height rather
           than letting the tallest child discover it — with `items-center` that
           is what actually centres four things of four different sizes (a 14px
@@ -128,7 +128,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
             it: the flex spacer is the same element either way, just carrying
             text when there is text. */}
         <span
-          className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground"
+          className="min-w-0 flex-1 truncate font-mono text-[0.625em] text-muted-foreground"
           dir="ltr"
           title={conversation.model ?? undefined}
         >
@@ -141,7 +141,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
             // the same line box or their baselines disagree by the difference.
             // It used to say `leading-none py-px` to keep from setting the
             // row's height — the row states its own height now, so it can't.
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 font-mono text-[10px] font-medium text-primary"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary-soft px-1.5 font-mono text-[0.625em] font-medium text-primary-text"
             title={t("childCount", {
               count: conversation.child_count,
             })}
@@ -167,7 +167,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
           The 0.75 left over still goes to `mt-auto`, and `min-h-0` keeps the
           order of sacrifice right if a future row ever overflows: the title
           gives, the two metadata rows don't. */}
-      <p className="relative mt-[7px] line-clamp-4 min-h-0 text-[13px] font-medium leading-snug">
+      <p className="relative mt-[7px] line-clamp-4 min-h-0 text-[0.8125em] font-medium leading-snug">
         {title}
       </p>
       {/* Where the conversation lives: folder on the left, branch on the right.
@@ -175,7 +175,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
           a non-git folder has no branch), so neither is allowed to reserve space
           the other could use — hence `min-w-0` on each and `justify-between`
           rather than a fixed spacer. */}
-      <div className="relative mt-auto flex min-w-0 shrink-0 items-center justify-between gap-1.5 pt-[7px] text-[11px] leading-tight text-muted-foreground">
+      <div className="relative mt-auto flex min-w-0 shrink-0 items-center justify-between gap-1.5 pt-[7px] text-[0.6875em] leading-tight text-muted-foreground">
         {data.folderName ? (
           <span
             className="flex min-w-0 items-center gap-0.5"

@@ -228,7 +228,7 @@ export function TaskScheduleDialog({
                 aria-pressed={value === preset.value}
                 className={cn(
                   "h-7 rounded-full bg-muted/70 px-3 text-xs font-medium hover:bg-muted",
-                  value === preset.value && "bg-primary/10 text-primary"
+                  value === preset.value && "bg-primary-soft text-primary-text"
                 )}
                 onClick={() => applyCombined(preset.value)}
               >

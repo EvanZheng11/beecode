@@ -180,7 +180,7 @@ describe("AutomationsPage (master-detail)", () => {
     // An SVG element's turn lays the page out every frame while it runs.
     automations = [{ ...FIXTURE, last_run_status: "running" }]
     const { container } = renderPage()
-    const badge = container.querySelector(".text-amber-600")
+    const badge = container.querySelector(".text-tone-warning")
     expect(badge?.tagName).toBe("svg")
     expect(badge?.parentElement).toHaveClass("animate-spin")
     expect(badge).not.toHaveClass("animate-spin")

@@ -29,6 +29,13 @@ describe("TemplateGallery", () => {
     )
   })
 
+  it("uses theme tokens for template accents", () => {
+    for (const template of AUTOMATION_TEMPLATES) {
+      expect(template.accent).toMatch(/text-(primary-text|tone-)/)
+      expect(template.accent).not.toMatch(/(?:violet|orange|amber|blue)-\d/)
+    }
+  })
+
   it("calls onPick(null) for the blank card", () => {
     const onPick = renderGallery()
     fireEvent.click(screen.getByText("Blank automation"))

@@ -5,7 +5,7 @@
  * fades around the spot, with a pointer for a click or a scroll and a caret
  * for typing. Drawn in its own small window (`computer-marker`) that codeg
  * moves onto the spot, shows for a moment and hides again; clicks pass
- * through it. Violet, the colour codeg marks an agent's doings with.
+ * through it.
  *
  * Each mark carries a new id, so a second click on the same spot plays
  * again rather than being taken for the first.
@@ -62,10 +62,10 @@ export function ComputerMarker() {
           data-action={mark.action}
           className="relative size-24 animate-[computer-marker-fade_1100ms_ease-out_forwards]"
         >
-          <span className="absolute inset-0 m-auto size-8 animate-[computer-marker-ring_900ms_ease-out_forwards] rounded-full border-2 border-violet-500" />
-          <span className="absolute inset-0 m-auto size-2.5 rounded-full bg-violet-500 shadow-[0_0_0_2px_white]" />
+          <span className="absolute inset-0 m-auto size-8 animate-[computer-marker-ring_900ms_ease-out_forwards] rounded-full border-2 border-primary" />
+          <span className="absolute inset-0 m-auto size-2.5 rounded-full bg-primary ring-2 ring-background" />
           <Glyph
-            className="absolute left-1/2 top-1/2 size-5 fill-violet-500 text-white drop-shadow"
+            className="absolute left-1/2 top-1/2 size-5 fill-primary text-primary-foreground drop-shadow"
             strokeWidth={1.5}
           />
         </div>

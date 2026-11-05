@@ -48,18 +48,18 @@ export function ConversationBoardCard({
   let icon: React.ReactNode = null
   switch (conversation.status) {
     case "in_progress":
-      tone = "gap-1 text-[0.6875rem] text-primary"
+      tone = "gap-1 text-[0.6875rem] text-primary-text"
       icon = (
         <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
       )
       break
     case "pending_review":
       tone =
-        "rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
+        "rounded-full border border-tone-warning/40 bg-tone-warning/10 px-2 py-1 text-[0.625rem] text-tone-warning"
       break
     case "completed":
       tone =
-        "gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[0.625rem] text-emerald-600 dark:text-emerald-400"
+        "gap-1 rounded-full bg-tone-success/10 px-2 py-1 text-[0.625rem] text-tone-success"
       icon = (
         <Check
           className="size-2.5 shrink-0"
@@ -83,7 +83,7 @@ export function ConversationBoardCard({
         }
       }}
       className={cn(
-        "group/card flex cursor-pointer flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-left",
+        "group/card flex cursor-pointer flex-col rounded-2xl border border-foreground/15 bg-card ws-msg-card p-3 text-start shadow-glass",
         "transition-colors hover:border-primary",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       )}

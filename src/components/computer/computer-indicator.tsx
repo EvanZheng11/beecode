@@ -189,7 +189,7 @@ export function ComputerIndicator() {
               data-tauri-drag-region
               className={cn(
                 "size-2 shrink-0 rounded-full",
-                acting ? "animate-pulse bg-red-500" : "bg-violet-500"
+                acting ? "animate-pulse bg-destructive" : "bg-primary"
               )}
             />
             <span

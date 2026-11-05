@@ -109,7 +109,7 @@ export function StatusChip({
     case "preparing":
     case "running":
     case "merging":
-      tone = "gap-1 text-[0.6875rem] text-primary"
+      tone = "gap-1 text-[0.6875rem] text-primary-text"
       icon = (
         <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
       )
@@ -117,11 +117,11 @@ export function StatusChip({
     case "awaiting_input":
     case "review":
       tone =
-        "rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
+        "rounded-full border border-tone-warning/40 bg-tone-warning/10 px-2 py-1 text-[0.625rem] text-tone-warning"
       break
     case "done":
       tone =
-        "gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[0.625rem] text-emerald-600 dark:text-emerald-400"
+        "gap-1 rounded-full bg-tone-success/10 px-2 py-1 text-[0.625rem] text-tone-success"
       icon = (
         <Check
           className="size-2.5 shrink-0"
@@ -179,11 +179,11 @@ export function statusAccent(task: WorkTask): string {
     case "awaiting_input":
     case "review":
     case "merging":
-      return "bg-amber-500"
+      return "bg-tone-warning"
     case "failed":
       return "bg-destructive"
     case "done":
-      return "bg-emerald-500"
+      return "bg-tone-success"
     case "canceled":
       return "bg-muted-foreground/25"
   }
@@ -259,7 +259,7 @@ export function MergeQueuedChip({
       : t("badgeMergeQueued")
   return (
     <span
-      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-amber-600 dark:text-amber-400"
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-tone-warning/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-tone-warning"
       title={t("badgeMergeQueuedHint")}
     >
       <GitMerge className="size-2.5 shrink-0" aria-hidden="true" />
@@ -275,7 +275,7 @@ export function PreflightChip({ task }: { task: WorkTask }) {
   if (!light || task.status !== "review") return null
   const tone =
     light.status === "passed"
-      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+      ? "bg-tone-success/10 text-tone-success"
       : light.status === "failed"
         ? "bg-destructive/10 text-destructive"
         : "bg-muted text-muted-foreground"
@@ -319,7 +319,7 @@ export function WorktreeRemovedChip({ task }: { task: WorkTask }) {
   if (!worktreeWasRemoved(task)) return null
   return (
     <span
-      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-amber-600 dark:text-amber-400"
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-tone-warning/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-tone-warning"
       title={t("badgeWorktreeRemoved")}
     >
       <FolderX className="size-2.5 shrink-0" aria-hidden="true" />
@@ -377,7 +377,7 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
   if (task.status !== "todo" || !task.scheduled_at) return null
   return (
     <span
-      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary"
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary-text"
       title={t("scheduleBadge", {
         time: formatScheduleFull(task.scheduled_at),
       })}
@@ -408,9 +408,7 @@ export function TaskCard({
   const stat =
     task.files_changed != null && task.files_changed > 0 ? (
       <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[0.625rem]">
-        <span className="text-emerald-600 dark:text-emerald-400">
-          +{task.additions ?? 0}
-        </span>
+        <span className="text-tone-success">+{task.additions ?? 0}</span>
         <span className="text-destructive">-{task.deletions ?? 0}</span>
       </span>
     ) : null
@@ -447,7 +445,7 @@ export function TaskCard({
         // border-foreground/15, not border-border: a card is white-on-white
         // here, and the token border all but vanishes on that canvas (the
         // empty column's dashed outline had to be derived the same way).
-        "group/card flex cursor-pointer flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-left",
+        "group/card flex cursor-pointer flex-col rounded-2xl border border-foreground/15 bg-card ws-msg-card p-3 text-start shadow-glass",
         // Hover is a border colour change only — no lift, no shadow.
         "transition-colors hover:border-primary",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -490,7 +488,7 @@ export function TaskCard({
         <PreflightChip task={task} />
         <WorktreeRemovedChip task={task} />
         {task.cleanup_state === "failed" ? (
-          <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] text-amber-600 dark:text-amber-400">
+          <span className="rounded-full bg-tone-warning/10 px-1.5 py-0.5 text-[0.625rem] text-tone-warning">
             {t("badgeCleanupFailed")}
           </span>
         ) : null}
@@ -518,7 +516,7 @@ export function TaskCard({
             href={sourceUrl}
             // The card itself opens the detail sheet — keep the click local.
             onClick={(e) => e.stopPropagation()}
-            className="inline-block max-w-full truncate align-bottom font-mono text-[0.625rem] text-primary/80 hover:underline"
+            className="inline-block max-w-full truncate align-bottom font-mono text-[0.625rem] text-primary-text hover:underline"
             title={sourceUrl}
           >
             #{source.number} · {source.owner_repo}

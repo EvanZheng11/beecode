@@ -1710,7 +1710,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
             className={cn(
               embedded ? PILL_COMPACT : PILL,
               assignedMe &&
-                "bg-primary/10 text-primary hover:bg-primary/15 dark:hover:bg-primary/15"
+                "bg-primary-soft text-primary-text hover:bg-primary/15 dark:hover:bg-primary/15"
             )}
             onClick={() => resetTo(() => setAssignedMe((v) => !v))}
           >
@@ -2294,7 +2294,7 @@ function LabelFilter({
           className={cn(
             compact ? PILL_COMPACT : PILL,
             active &&
-              "bg-primary/10 text-primary hover:bg-primary/15 dark:hover:bg-primary/15"
+              "bg-primary-soft text-primary-text hover:bg-primary/15 dark:hover:bg-primary/15"
           )}
         >
           <Funnel

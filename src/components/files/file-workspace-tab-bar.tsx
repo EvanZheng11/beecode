@@ -547,7 +547,7 @@ const FileWorkspaceTabItem = memo(function FileWorkspaceTabItem({
                 : [
                     "shrink-0 rounded-full px-3 hover:bg-primary/8",
                     active
-                      ? "bg-primary/10 text-foreground"
+                      ? "bg-primary-soft text-foreground"
                       : "text-muted-foreground",
                   ]
             )}

@@ -61,7 +61,7 @@ export function CardFrame({
         // the board's scale, and the board is zoomed with its own control. The
         // menus it opens are portalled out and stay on the app's scale, which is
         // right — those are chrome, not board content.
-        "canvas-board-units flex h-full w-full cursor-auto flex-col overflow-hidden rounded-2xl border bg-card transition-colors select-text",
+        "canvas-board-units flex h-full w-full cursor-auto flex-col overflow-hidden rounded-2xl border bg-card shadow-glass transition-colors select-text",
         selected
           ? "border-primary ring-2 ring-primary/25"
           : "border-foreground/15"
@@ -102,7 +102,7 @@ export function CardFrame({
         )}
       >
         {icon}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+        <span className="min-w-0 flex-1 truncate text-[0.8125em] font-semibold">
           {title}
         </span>
         {actions}

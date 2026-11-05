@@ -74,7 +74,7 @@ export function WorkbenchPageTitle({
           {title}
         </button>
       ) : (
-        <h1 className="min-w-0 truncate pl-1 text-[0.8125rem] font-semibold leading-none">
+        <h1 className="min-w-0 truncate ps-1 text-ui font-semibold leading-none">
           {title}
         </h1>
       )}

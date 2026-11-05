@@ -945,7 +945,7 @@ export function TaskDetailSheet({
                     // task awaiting input is waiting on them in the most
                     // literal sense: its agent is stopped until they answer.
                     (isReview && !deferred) || awaitingInput
-                      ? "border-amber-500/30 bg-amber-500/5 dark:border-amber-400/25"
+                      ? "border-tone-warning/30 bg-tone-warning/5"
                       : "border-border/70 bg-muted/30"
                   )}
                 >
@@ -953,7 +953,7 @@ export function TaskDetailSheet({
                       first-time user sees a paused task and no reply box, and
                       would otherwise reach for the only verb they recognize. */}
                   {awaitingInput ? (
-                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                    <p className="flex items-start gap-1.5 text-xs text-tone-warning">
                       <Hand
                         className="mt-px size-3.5 shrink-0"
                         aria-hidden="true"
@@ -968,7 +968,7 @@ export function TaskDetailSheet({
                       the panel would read as if the acceptance never
                       registered. */}
                   {mergeQueued ? (
-                    <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                    <p className="flex items-center gap-1.5 text-xs text-tone-warning">
                       <Clock className="size-3.5 shrink-0" aria-hidden="true" />
                       <span className="min-w-0 break-words">
                         {t("badgeMergeQueuedHint")}
@@ -982,7 +982,7 @@ export function TaskDetailSheet({
                         className={cn(
                           "flex items-center gap-1.5 text-xs",
                           task.preflight.status === "passed" &&
-                            "text-emerald-600 dark:text-emerald-400",
+                            "text-tone-success",
                           task.preflight.status === "failed" &&
                             "text-destructive",
                           task.preflight.status === "running" &&
@@ -1260,7 +1260,7 @@ export function TaskDetailSheet({
                       ahead of the task rather than behind it. */}
                   {task.status === "todo" && task.scheduled_at ? (
                     <InfoRow label={t("detailScheduled")}>
-                      <span className="inline-flex items-center gap-1 text-primary">
+                      <span className="inline-flex items-center gap-1 text-primary-text">
                         <CalendarClock className="size-3" aria-hidden="true" />
                         {formatDateTime(task.scheduled_at)}
                       </span>

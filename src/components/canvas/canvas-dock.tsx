@@ -255,7 +255,7 @@ export function CanvasViewportPanel() {
         )}
         <div
           ref={pillRef}
-          className="flex items-center gap-0.5 rounded-full border border-border bg-background/95 p-1 shadow-lg supports-backdrop-filter:backdrop-blur-sm"
+          className="surface-glass flex items-center gap-0.5 rounded-xl border border-border p-1"
           role="toolbar"
           aria-label={t("viewportControls")}
         >
@@ -778,7 +778,7 @@ export function CanvasDock({
           // the selection, and a narrow window must fold it rather than push it
           // off the edge.
           "flex flex-wrap items-center justify-center gap-0.5",
-          "rounded-full border border-border bg-background/95 p-1 shadow-lg supports-backdrop-filter:backdrop-blur-sm"
+          "surface-glass rounded-xl border border-border p-1"
         )}
         // The strip is CENTRED, so half of whatever it grows to reaches toward
         // the corner the viewport panel sits in. Folding early is the price of

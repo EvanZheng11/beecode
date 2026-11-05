@@ -624,7 +624,7 @@ export function TasksPage() {
                 />
                 {t("filter")}
                 {activeFilters > 0 ? (
-                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary tabular-nums">
+                  <span className="rounded-full bg-primary-soft px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary-text tabular-nums">
                     {activeFilters}
                   </span>
                 ) : null}
@@ -800,7 +800,7 @@ export function TasksPage() {
                 <div
                   key={col}
                   ref={col === "inProgress" ? inProgressColRef : undefined}
-                  className="flex min-h-0 flex-col gap-2"
+                  className="surface-glass flex min-h-0 flex-col gap-2 rounded-2xl p-2"
                 >
                   <div className="flex h-6 shrink-0 items-center gap-2 px-0.5">
                     {/* A short upright bar rather than a dot: it echoes the
@@ -812,8 +812,8 @@ export function TasksPage() {
                         "h-3.5 w-[3px] shrink-0 rounded-full",
                         col === "todo" && "bg-muted-foreground/50",
                         col === "inProgress" && "bg-primary",
-                        col === "attention" && "bg-amber-500",
-                        col === "done" && "bg-emerald-500"
+                        col === "attention" && "bg-tone-warning",
+                        col === "done" && "bg-tone-success"
                       )}
                       aria-hidden="true"
                     />
@@ -823,7 +823,7 @@ export function TasksPage() {
                     {/* The count is a pill in the toolbar's muted-pill
                         language, so the two header rows read as one block. */}
                     {col === "attention" && columnCount > 0 ? (
-                      <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-amber-600 tabular-nums dark:text-amber-400">
+                      <span className="rounded-full bg-tone-warning/12 px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-tone-warning tabular-nums">
                         {columnCount}
                       </span>
                     ) : (
@@ -973,7 +973,7 @@ export function TasksPage() {
                   <StatusChip task={drag.task} />
                 </div>
                 {dropArmed ? (
-                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary">
+                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary-text">
                     <Play className="size-3" aria-hidden="true" />
                     {t("dropToStart")}
                   </span>
