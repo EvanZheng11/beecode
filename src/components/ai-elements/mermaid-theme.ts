@@ -13,6 +13,77 @@
  */
 
 import type { MermaidConfig } from "@streamdown/mermaid"
+import { toHexColor } from "@/lib/custom-style"
+
+export interface MermaidThemeTokens {
+  primary: string
+  card: string
+  muted: string
+  border: string
+  foreground: string
+  mutedForeground: string
+  primaryText: string
+}
+
+/** 从当前生效变量取色，包含自定义配色；解析失败仍沿用原明暗调色板。 */
+export function readMermaidThemeTokens(): MermaidThemeTokens | undefined {
+  if (typeof document === "undefined") return undefined
+  const style = getComputedStyle(document.documentElement)
+  const read = (name: string) => style.getPropertyValue(`--${name}`).trim()
+  if (!read("primary")) return undefined
+  return {
+    primary: read("primary"),
+    card: read("card"),
+    muted: read("muted"),
+    border: read("border"),
+    foreground: read("foreground"),
+    mutedForeground: read("muted-foreground"),
+    primaryText: read("primary-text"),
+  }
+}
+
+function mixHex(
+  foreground: string,
+  background: string,
+  amount: number
+): string {
+  return `#${[1, 3, 5]
+    .map((start) => {
+      const front = parseInt(foreground.slice(start, start + 2), 16)
+      const back = parseInt(background.slice(start, start + 2), 16)
+      return Math.round(front * amount + back * (1 - amount))
+        .toString(16)
+        .padStart(2, "0")
+    })
+    .join("")}`
+}
+
+function paletteFromTokens(tokens: MermaidThemeTokens, dark: boolean) {
+  const primary = toHexColor(tokens.primary)
+  const card = toHexColor(tokens.card)
+  const muted = toHexColor(tokens.muted)
+  const foreground = toHexColor(tokens.foreground)
+  const mutedForeground = toHexColor(tokens.mutedForeground)
+  if (!primary || !card || !muted || !foreground || !mutedForeground) {
+    return null
+  }
+  // 深色 border 通常是半透明白色，Mermaid 不接受这种 CSS 颜色；在卡片上实色化。
+  const border = toHexColor(tokens.border) ?? mixHex(foreground, card, 0.1)
+  return {
+    primaryColor: mixHex(primary, card, dark ? 0.18 : 0.1),
+    primaryBorderColor: dark
+      ? (toHexColor(tokens.primaryText) ?? primary)
+      : mixHex(primary, card, 0.6),
+    primaryTextColor: foreground,
+    lineColor: mutedForeground,
+    textColor: foreground,
+    edgeLabelBackground: card,
+    clusterBkg: muted,
+    clusterBorder: border,
+    titleColor: foreground,
+    edgeLabelBorder: border,
+  }
+}
 
 /** Mermaid's `flowchart.curve`. `basis` (the default) is the spline that makes
  *  a two-hop edge bulge sideways; `linear` draws axis-aligned right angles,
@@ -24,6 +95,7 @@ export interface MermaidDiagramOptions {
   /** Resolved UI font stack. Defaults to the app's CSS variable. */
   fontFamily?: string
   curve?: MermaidCurve
+  tokens?: MermaidThemeTokens
 }
 
 /**
@@ -73,7 +145,7 @@ const DARK = {
  * render (see `./mermaid-view.ts` for why the attribute is the one that
  * actually works on macOS).
  */
-export const NODE_CORNER_RADIUS = 8
+export const NODE_CORNER_RADIUS = 10
 
 /**
  * Rounded nodes/clusters plus the pill-shaped edge label of the target design.
@@ -108,8 +180,15 @@ function diagramCss(edgeLabelBorder: string): string {
 export function mermaidDiagramConfig(
   options: MermaidDiagramOptions
 ): MermaidConfig {
-  const { isDarkMode, fontFamily = DEFAULT_FONT, curve = "linear" } = options
-  const palette = isDarkMode ? DARK : LIGHT
+  const {
+    isDarkMode,
+    fontFamily = DEFAULT_FONT,
+    curve = "linear",
+    tokens,
+  } = options
+  const palette =
+    (tokens && paletteFromTokens(tokens, isDarkMode)) ||
+    (isDarkMode ? DARK : LIGHT)
   return {
     theme: "base",
     darkMode: isDarkMode,

@@ -6,10 +6,12 @@ import type { editor as MonacoEditorNs } from "monaco-editor"
 import {
   THEME_COLORS,
   DEFAULT_THEME_COLOR,
+  THEME_COLOR_PREVIEW,
   type ThemeColor,
 } from "./theme-presets"
 import { useCustomStyle, useWorkspaceBackground } from "@/hooks/use-appearance"
 import { toHexColor } from "./custom-style"
+import { themeColorHex } from "./theme-color-hex"
 
 // Editor canvas background per theme color = that theme's `--card` token (see the
 // [data-theme="…"] blocks in globals.css). The file editor is a card surface, so it
@@ -59,6 +61,27 @@ export const EDITOR_LINE_HIGHLIGHT: Record<
   blue: { light: "#eff4fd", dark: "#23282f" },
   yellow: { light: "#f8f4eb", dark: "#2b271f" },
   violet: { light: "#f4f3fc", dark: "#27262f" },
+}
+
+// 深色主色与 globals.css 逐预设对应；第三方编辑器必须接收具体颜色。
+const DARK_PRIMARY: Record<ThemeColor, string> = {
+  apple: "oklch(0.56 0.18 256)",
+  neutral: "oklch(0.87 0 0)",
+  zinc: "oklch(0.92 0.004 286.32)",
+  slate: "oklch(0.929 0.013 255.508)",
+  stone: "oklch(0.923 0.003 48.717)",
+  gray: "oklch(0.928 0.006 264.531)",
+  red: "oklch(0.637 0.237 25.331)",
+  rose: "oklch(0.645 0.246 16.439)",
+  orange: "oklch(0.646 0.222 41.116)",
+  green: "oklch(0.696 0.17 162.48)",
+  blue: "oklch(0.623 0.214 259.815)",
+  yellow: "oklch(0.795 0.184 86.047)",
+  violet: "oklch(0.541 0.281 293.009)",
+}
+
+export function editorAccent(color: ThemeColor, dark: boolean): string {
+  return themeColorHex(dark ? DARK_PRIMARY[color] : THEME_COLOR_PREVIEW[color])!
 }
 
 // A Monaco theme name encodes both axes: light/dark mode and the active theme color.
@@ -538,13 +561,19 @@ function withCanvasBackground(
   // 外观设置页的「自定义配色」改了 --card / --muted 时传进来（已转成 #rrggbb）。
   // 不传即沿用预设的硬编码表 —— 零回归。
   canvasOverride?: string,
-  lineHighlightOverride?: string
+  lineHighlightOverride?: string,
+  accentOverride?: string
 ): Record<string, string> {
   const opaqueBg =
     canvasOverride ?? EDITOR_CANVAS_BG[color][dark ? "dark" : "light"]
   const bg = opaqueBg + alphaHexSuffix
+  const accent = accentOverride ?? editorAccent(color, dark)
   return {
     ...base,
+    "editorCursor.foreground": accent,
+    "editor.selectionBackground": `${accent}40`,
+    "editor.inactiveSelectionBackground": `${accent}24`,
+    "editor.selectionHighlightBackground": `${accent}24`,
     "editor.background": bg,
     "editorGutter.background": bg,
     "peekViewEditor.background": bg,
@@ -716,15 +745,17 @@ export function defineCustomCanvasTheme(
   baseTheme: string,
   canvas: string,
   lineHighlight: string,
-  alpha?: number
+  alpha?: number,
+  accent?: string
 ): string {
   const alphaSuffix =
     alpha === undefined
       ? ""
       : `-wsbg${Math.round(Math.min(1, Math.max(0, alpha)) * 100)}`
+  const accentSuffix = accent ? `-p${canvasColorKey(accent)}` : ""
   const name = `${baseTheme}-c${canvasColorKey(canvas)}-l${canvasColorKey(
     lineHighlight
-  )}${alphaSuffix}`
+  )}${alphaSuffix}${accentSuffix}`
 
   let defined = wsbgDefinedThemes.get(monaco)
   if (!defined) {
@@ -744,7 +775,8 @@ export function defineCustomCanvasTheme(
       dark,
       alpha === undefined ? "" : editorAlphaHex(alpha),
       canvas,
-      lineHighlight
+      lineHighlight,
+      accent
     ),
   })
   defined.add(name)
@@ -783,15 +815,17 @@ export function useMonacoWorkspaceTheme(monaco: Monaco | null): string {
   // 罕见取值回落到预设值（局部退化，不会整块崩掉）。
   const customCanvas = toHexColor(activeTokenOverrides.card ?? "")
   const customLine = toHexColor(activeTokenOverrides.muted ?? "")
+  const customAccent = toHexColor(activeTokenOverrides.primary ?? "")
 
-  if (monaco && (customCanvas || customLine)) {
+  if (monaco && (customCanvas || customLine || customAccent)) {
     const { color, dark } = parseMonacoThemeName(baseTheme)
     return defineCustomCanvasTheme(
       monaco,
       baseTheme,
       customCanvas ?? EDITOR_CANVAS_BG[color][dark ? "dark" : "light"],
       customLine ?? EDITOR_LINE_HIGHLIGHT[color][dark ? "dark" : "light"],
-      workspaceBgEnabled ? WSBG_CANVAS_ALPHA : undefined
+      workspaceBgEnabled ? WSBG_CANVAS_ALPHA : undefined,
+      customAccent ?? undefined
     )
   }
 

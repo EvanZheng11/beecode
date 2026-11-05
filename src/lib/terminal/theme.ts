@@ -1,5 +1,6 @@
 import type { ITheme } from "@xterm/xterm"
 import { toHexColor } from "@/lib/custom-style"
+import { themeColorHex } from "@/lib/theme-color-hex"
 
 const DARK_THEME: ITheme = {
   background: "#1a1a1a",
@@ -96,7 +97,15 @@ function resolveBackgroundColor(
  */
 export function getTerminalTheme(container: HTMLElement | null): ITheme {
   const dark = isDarkMode()
-  const baseTheme = dark ? DARK_THEME : LIGHT_THEME
+  const base = dark ? DARK_THEME : LIGHT_THEME
+  const primary = getComputedStyle(document.documentElement)
+    .getPropertyValue("--primary")
+    .trim()
+  const accent = primary ? themeColorHex(primary) : null
+  // 只改变光标和选区；ANSI 16 色保持不变，避免终端程序输出失去语义。
+  const baseTheme = accent
+    ? { ...base, cursor: accent, selectionBackground: `${accent}40` }
+    : base
 
   // 背景图开启：终端画布透明，透出所属 ws-surface 面板的磨砂表面（跟随面板不透明度滑块），
   // 而非用不透明色盖住背景图。只改 background；cursorAccent 保留主题不透明色，块状光标下的

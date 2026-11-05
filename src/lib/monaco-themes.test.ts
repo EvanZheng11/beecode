@@ -4,6 +4,8 @@ import {
   configureLanguageValidation,
   defineMonacoThemes,
   defineWorkspaceBgTheme,
+  defineCustomCanvasTheme,
+  editorAccent,
   EDITOR_CANVAS_BG,
   EDITOR_LINE_HIGHLIGHT,
   monacoThemeName,
@@ -151,6 +153,39 @@ describe("configureLanguageValidation", () => {
     expect(call?.[1].colors["editor.lineHighlightBackground"]).toBe(
       EDITOR_LINE_HIGHLIGHT.blue.dark
     )
+  })
+
+  it("光标与选区跟随每套预设的主色，透明背景不影响选区", () => {
+    const { monaco } = makeMonaco()
+    defineMonacoThemes(
+      monaco as unknown as Parameters<typeof defineMonacoThemes>[0]
+    )
+    for (const color of THEME_COLORS) {
+      for (const dark of [false, true]) {
+        const call = monaco.editor.defineTheme.mock.calls.find(
+          (item) => item[0] === monacoThemeName(color, dark)
+        )
+        const accent = editorAccent(color, dark)
+        expect(call?.[1].colors["editorCursor.foreground"]).toBe(accent)
+        expect(call?.[1].colors["editor.selectionBackground"]).toBe(
+          `${accent}40`
+        )
+      }
+    }
+    const name = defineCustomCanvasTheme(
+      monaco as unknown as Parameters<typeof defineCustomCanvasTheme>[0],
+      monacoThemeName("apple", false),
+      "#ffffff",
+      "#f5f5f7",
+      0,
+      "#123456"
+    )
+    const custom = monaco.editor.defineTheme.mock.calls.find(
+      (item) => item[0] === name
+    )
+    expect(custom?.[1].colors["editor.background"]).toBe("#ffffff00")
+    expect(custom?.[1].colors["editorCursor.foreground"]).toBe("#123456")
+    expect(custom?.[1].colors["editor.selectionBackground"]).toBe("#12345640")
   })
 
   it("lets the sticky-scroll band go transparent with the canvas in the workspace-bg variant", () => {

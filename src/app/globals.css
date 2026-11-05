@@ -2104,6 +2104,8 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
+  border-radius: calc(var(--radius) * 1.4);
+  border: 1px solid var(--border);
   background-color: transparent;
 }
 
@@ -2135,7 +2137,7 @@
 [data-streamdown="code-block"]
   > div:has(> [data-streamdown="code-block-actions"]) {
   top: 0;
-  right: 0.75rem;
+  inset-inline-end: 0.75rem;
   height: var(--sd-code-header-height);
 }
 
@@ -2206,6 +2208,71 @@
   vertical-align: middle;
 }
 
+/* Markdown 正文遵循统一字号与语义配色；不改变列表测量和内容结构。 */
+.chat-markdown {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.chat-markdown [data-streamdown="heading-1"] {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.chat-markdown [data-streamdown="heading-2"] {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+.chat-markdown [data-streamdown="heading-3"] {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.chat-markdown
+  :is(
+    [data-streamdown="heading-4"],
+    [data-streamdown="heading-5"],
+    [data-streamdown="heading-6"]
+  ) {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.chat-markdown a {
+  color: var(--primary-text);
+  text-underline-offset: 0.2em;
+}
+.chat-markdown a:hover {
+  text-decoration-line: underline;
+}
+.chat-markdown blockquote {
+  border-inline-start: 3px solid var(--primary-soft);
+  color: var(--muted-foreground);
+}
+.chat-markdown hr {
+  border-color: var(--border);
+}
+[data-streamdown="table-header"] {
+  position: sticky;
+  top: 0;
+  background-color: color-mix(in oklab, var(--card) 95%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+[data-streamdown="table"] :is(th, td) {
+  max-width: 32rem;
+  overflow: hidden;
+  padding: 0.625rem 0.875rem;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-streamdown="table"] tbody tr {
+  height: 2.75rem;
+  border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+  transition: background-color 150ms ease-out;
+}
+[data-streamdown="table"] tbody tr:hover {
+  background-color: color-mix(in oklab, var(--primary) 4%, transparent);
+}
+
 /* A plan in its card is a document inside the reply, often inside the
    timeline: its headings step down from a reply's own (Streamdown's 1.875rem
    h1 would tower over the 0.875rem text around the card). */
@@ -2263,7 +2330,7 @@
    圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。底色透明：
    2.7 给它加了不透明的 bg-background，会把开图时 thead/tbody 的半透明染色垫成实底。 */
 [data-streamdown="table-wrapper"] > div:has(> [data-streamdown="table"]) {
-  border-radius: 0.5rem;
+  border-radius: calc(var(--radius) * 1.4);
   border: 1px solid var(--border);
   background-color: transparent;
 }

@@ -78,6 +78,7 @@ function mountContainer(panelBackground: string): HTMLElement {
 beforeEach(() => {
   document.documentElement.classList.remove("dark")
   document.documentElement.removeAttribute("data-workspace-bg")
+  document.documentElement.style.removeProperty("--primary")
   document.body.innerHTML = ""
 })
 
@@ -86,6 +87,31 @@ afterEach(() => {
 })
 
 describe("getTerminalTheme", () => {
+  it("光标和选区跟随主色，ANSI 与透明画布保留原语义", async () => {
+    stubCanvas(fakeContext({}))
+    const getTerminalTheme = await loadGetTerminalTheme()
+    const original = getTerminalTheme(null)
+    document.documentElement.style.setProperty("--primary", "#0071e3")
+    const accented = getTerminalTheme(null)
+    expect(accented.cursor).toBe("#0071e3")
+    expect(accented.selectionBackground).toBe("#0071e340")
+    for (const color of [
+      "red",
+      "green",
+      "blue",
+      "yellow",
+      "magenta",
+      "cyan",
+      "black",
+      "white",
+    ] as const) {
+      expect(accented[color]).toBe(original[color])
+    }
+    document.documentElement.setAttribute("data-workspace-bg", "on")
+    expect(getTerminalTheme(null).background).toBe("rgba(255, 255, 255, 0)")
+    expect(getTerminalTheme(null).cursor).toBe("#0071e3")
+  })
+
   it("把面板的 oklch 底色归一成十六进制再交给 xterm", async () => {
     stubCanvas(fakeContext({ "oklch(0.98 0 0)": [247, 247, 247, 255] }))
     const getTerminalTheme = await loadGetTerminalTheme()

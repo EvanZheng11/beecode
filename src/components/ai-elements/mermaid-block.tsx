@@ -66,7 +66,11 @@ import {
   type Point,
   type Size,
 } from "./mermaid-view"
-import { mermaidDiagramConfig, NODE_CORNER_RADIUS } from "./mermaid-theme"
+import {
+  mermaidDiagramConfig,
+  NODE_CORNER_RADIUS,
+  readMermaidThemeTokens,
+} from "./mermaid-theme"
 import { renderPlantUml } from "./plantuml-engine"
 import { useMermaidEngine } from "./streamdown-plugins"
 
@@ -660,7 +664,7 @@ function ControlChip({
   return (
     <div
       className={cn(
-        "absolute z-10 flex items-center gap-0.5 rounded-lg border border-border bg-background/90 p-0.5 shadow-sm supports-backdrop-filter:backdrop-blur-sm",
+        "surface-glass absolute z-10 flex items-center gap-0.5 rounded-full p-0.5",
         className
       )}
     >
@@ -840,7 +844,7 @@ function DiagramCard({
           className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent"
         />
       )}
-      <ControlChip className="top-2 right-2">
+      <ControlChip className="top-2 end-2">
         <DownloadMenu kind={kind} source={source} svg={svg} />
         <CopySourceButton source={source} />
         <Dialog>
@@ -863,7 +867,7 @@ function DiagramCard({
           />
         </Dialog>
       </ControlChip>
-      <ControlChip className="bottom-2 left-2">
+      <ControlChip className="bottom-2 start-2">
         <ZoomControls controller={controller} />
       </ControlChip>
     </div>
@@ -871,7 +875,7 @@ function DiagramCard({
 }
 
 function MermaidBlockImpl({ source }: { source: string }) {
-  const { isDarkMode } = useAppearance()
+  const { isDarkMode, themeColor, customTheme } = useAppearance()
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   const active = useNearViewport(root)
 
@@ -881,9 +885,27 @@ function MermaidBlockImpl({ source }: { source: string }) {
   // theme switch work at all: a context update pierces the `memo` around
   // `MessageResponse` and the one around Streamdown itself, neither of which
   // compares anything theme-shaped.
+  const [themeTokens, setThemeTokens] =
+    useState<ReturnType<typeof readMermaidThemeTokens>>()
+  useEffect(() => {
+    const sync = () => {
+      const next = readMermaidThemeTokens()
+      setThemeTokens((previous) =>
+        JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+      )
+    }
+    // Provider 在 effect 中应用覆盖；延后一微任务读取，避免拿到切换前的变量。
+    queueMicrotask(sync)
+    const observer = new MutationObserver(sync)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "style"],
+    })
+    return () => observer.disconnect()
+  }, [themeColor, customTheme])
   const config = useMemo<MermaidConfig>(
-    () => mermaidDiagramConfig({ isDarkMode }),
-    [isDarkMode]
+    () => mermaidDiagramConfig({ isDarkMode, tokens: themeTokens }),
+    [isDarkMode, themeTokens]
   )
   const render = useMermaidRenderer(config)
   const state = useRenderedDiagram(render, source, active)

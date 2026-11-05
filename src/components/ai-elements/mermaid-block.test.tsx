@@ -185,7 +185,7 @@ describe("mermaidDiagramConfig", () => {
   it("draws straight axis-aligned edges and rounded node boxes", () => {
     const config = mermaidDiagramConfig({ isDarkMode: false })
     expect(config.flowchart?.curve).toBe("linear")
-    expect(config.themeCSS).toMatch(/\.node rect[^{]*\{[^}]*rx:\s*8/)
+    expect(config.themeCSS).toMatch(/\.node rect[^{]*\{[^}]*rx:\s*10/)
   })
 
   it("switches the node fill between light and dark", () => {
