@@ -304,7 +304,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
       <div className="flex-1 min-h-0 flex">
         {/* Desktop sidebar */}
         {!isMobile && (
-          <aside className="flex min-h-0 w-60 shrink-0 flex-col border-e border-sidebar-border bg-sidebar/70 px-3 py-4">
+          <aside className="flex min-h-0 w-60 max-w-[40vw] shrink-0 flex-col border-e border-sidebar-border bg-sidebar/70 px-3 py-4">
             {navContent}
           </aside>
         )}

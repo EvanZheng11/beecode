@@ -294,7 +294,7 @@ export function ChannelListTab() {
                             ? "bg-tone-warning animate-pulse"
                             : status === "error"
                               ? "bg-tone-danger"
-                              : "bg-gray-400"
+                              : "bg-muted-foreground/50"
                       }`}
                     />
                   </div>

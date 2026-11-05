@@ -129,12 +129,12 @@ export function SettingsSection({
               plain, because clicking there does not fold anything. */}
           <div
             className={cn(
-              "relative flex justify-between gap-3 border-b border-transparent p-5 transition-colors has-[[data-slot=collapsible-trigger]:hover]:bg-muted/50",
+              "relative flex flex-wrap justify-between gap-3 border-b border-transparent p-5 transition-colors has-[[data-slot=collapsible-trigger]:hover]:bg-muted/50",
               description ? "items-start" : "items-center",
               expanded && "border-border"
             )}
           >
-            <div className="min-w-0 flex-1 space-y-1">
+            <div className="min-w-0 flex-1 basis-56 space-y-1">
               {/* The button goes inside the h2, not the other way round:
                   role=button flattens its descendants' semantics, which would
                   drop the section out of the page's heading list — so the
@@ -190,11 +190,11 @@ export function SettingsSection({
           sits on the heading's line, without one the two center on each other. */}
       <div
         className={cn(
-          "flex justify-between gap-3",
+          "flex flex-wrap justify-between gap-3",
           description ? "items-start" : "items-center"
         )}
       >
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 flex-1 basis-56 space-y-1">
           <h2 className="text-heading-sm font-semibold tracking-tight">
             {htmlFor ? (
               // A `<label>` inside the heading, so clicking the title works the
