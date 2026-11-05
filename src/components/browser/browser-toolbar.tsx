@@ -295,7 +295,7 @@ export function BrowserToolbar({
     // shape: `h-10` and the same hairline, and NO fill of its own, so the
     // active tab's fill above flows into it and a workspace background image
     // shows through exactly as it does on a file tab's header.
-    <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border/50 px-1.5">
+    <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5">
       <button
         type="button"
         className={ICON_BTN}

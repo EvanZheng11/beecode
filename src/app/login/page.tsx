@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { isDesktop } from "@/lib/platform"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   codegAuthHeaders,
   probeProxyAuthentication,
@@ -79,39 +81,53 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="w-full max-w-sm space-y-6 px-4">
-        <div className="space-y-2 text-center">
-          <h1 className="text-2xl font-bold tracking-tight">{t("brand")}</h1>
-          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
+    <div className="app-backdrop flex min-h-screen items-center justify-center px-6 py-10 text-foreground">
+      <div className="grid w-full max-w-[72rem] items-center gap-12 lg:grid-cols-2">
+        <div className="hidden space-y-5 lg:block" aria-hidden="true">
+          <div className="flex size-16 items-center justify-center rounded-2xl bg-primary-soft text-primary-text shadow-glass">
+            <span className="text-2xl font-semibold">B</span>
+          </div>
+          <p className="text-display font-semibold tracking-tight">
+            {t("brand")}
+          </p>
+          <p className="max-w-md text-heading text-muted-foreground">
+            {t("subtitle")}
+          </p>
         </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder={t("tokenPlaceholder")}
-              autoFocus
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base md:text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
+        <div className="surface-glass-strong anim-fade-up w-full max-w-[28rem] space-y-6 justify-self-center rounded-3xl p-6 sm:p-8">
+          <div className="space-y-2 text-center">
+            <h1 className="text-2xl font-bold tracking-tight">{t("brand")}</h1>
+            <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
           </div>
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Input
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={t("tokenPlaceholder")}
+                autoFocus
+                className="h-11"
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={!token || loading}
-            className="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground ring-offset-background transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-          >
-            {loading ? t("connecting") : t("connect")}
-          </button>
-        </form>
+            {error && <p className="text-sm text-destructive">{error}</p>}
 
-        <p className="text-center text-xs text-muted-foreground">
-          {t("helpText")}
-        </p>
+            <Button
+              type="submit"
+              size="lg"
+              disabled={!token || loading}
+              className="w-full"
+            >
+              {loading ? t("connecting") : t("connect")}
+            </Button>
+          </form>
+
+          <p className="text-center text-xs text-muted-foreground">
+            {t("helpText")}
+          </p>
+        </div>
       </div>
     </div>
   )

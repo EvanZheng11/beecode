@@ -34,7 +34,7 @@ function ImportSessionsPageInner() {
   }, [t])
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="app-backdrop flex h-screen flex-col overflow-hidden text-foreground">
       <AppTitleBar
         center={
           <div className="text-sm font-semibold tracking-tight">

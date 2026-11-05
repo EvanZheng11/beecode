@@ -2144,7 +2144,7 @@ export function MessageInput({
         className={cn(
           "block",
           folderBranchPickerAttached &&
-            "overflow-hidden rounded-xl transition-colors",
+            "overflow-hidden rounded-2xl transition-colors",
           folderBranchPickerAttached &&
             showDragActive &&
             "ring-1 ring-primary/40"
@@ -2168,7 +2168,7 @@ export function MessageInput({
                 // vanishes over a workspace background image); it adapts per theme
                 // (dark ink in light mode, light ink in dark) and stays legible.
                 // Focus still swaps to `border-ring` below.
-                "codeg-composer-chrome @container relative flex flex-col rounded-xl border border-foreground/20 bg-transparent transition-colors",
+                "codeg-composer-chrome surface-glass @container relative flex flex-col rounded-2xl border border-foreground/20 transition-colors",
                 boxMinHeight,
                 // Standard focus ring — always shown when the composer is
                 // focused (the plain default input style). `bg-background
@@ -2181,8 +2181,8 @@ export function MessageInput({
                 // rounded box (clipped by the wrapper) reads as one control and
                 // the ring isn't clipped away.
                 folderBranchPickerAttached
-                  ? "bg-background ws-transparent-bg focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"
-                  : "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+                  ? "bg-background ws-transparent-bg focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/20"
+                  : "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/20",
                 // Active session, tiled across multiple sessions: a gradient
                 // flows around the border to mark which tile is active — but ONLY
                 // while the composer itself is not focused. Focusing it hides the
@@ -2355,7 +2355,7 @@ export function MessageInput({
           </ContextMenuContent>
         </ContextMenu>
         {/* 底栏与输入框操作栏对齐；窄屏空间不足时自动换行。 */}
-        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-b-2xl px-2 pt-1 text-xs text-muted-foreground">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             {hasFolderBranchPicker && (
               <ConversationFolderBranchPicker

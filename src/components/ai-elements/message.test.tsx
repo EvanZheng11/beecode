@@ -54,14 +54,14 @@ import {
 } from "./message"
 
 describe("MessageContent", () => {
-  it("rounds a user's bubble into a capsule", () => {
+  it("按紧凑消息规范使用双倍圆角气泡", () => {
     render(
       <Message from="user">
         <MessageContent>Run the tests</MessageContent>
       </Message>
     )
     const bubble = screen.getByText("Run the tests")
-    expect(bubble).toHaveClass("group-[.is-user]:rounded-3xl")
+    expect(bubble).toHaveClass("group-[.is-user]:rounded-2xl")
     expect(bubble).not.toHaveClass("group-[.is-user]:rounded-lg")
   })
 })

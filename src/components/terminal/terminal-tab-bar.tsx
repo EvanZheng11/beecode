@@ -84,14 +84,14 @@ export function TerminalTabBar({
   }
 
   return (
-    <div className="flex items-center h-8 bg-muted/50 border-b gap-0.5 px-1 shrink-0">
+    <div className="flex items-center h-8 bg-card/60 border-b border-border gap-0.5 px-1 shrink-0">
       {tabs.map((tab) => (
         <ContextMenu key={tab.id}>
           <ContextMenuTrigger asChild>
             <div
               className={`flex items-center gap-1 h-6 px-2 rounded-sm text-xs cursor-pointer select-none ${
                 tab.id === activeTabId
-                  ? "bg-background text-foreground"
+                  ? "bg-card text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
               onClick={() => switchTerminal(tab.id)}
@@ -119,7 +119,7 @@ export function TerminalTabBar({
                 <span className="truncate max-w-[7.5rem]">{tab.title}</span>
               )}
               <button
-                className="ml-1 rounded-sm hover:bg-muted-foreground/20 p-0.5"
+                className="ms-1 rounded-md hover:bg-accent p-0.5"
                 onClick={(e) => {
                   e.stopPropagation()
                   closeTerminal(tab.id)
@@ -195,7 +195,7 @@ export function TerminalTabBar({
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6 shrink-0 ml-auto"
+        className="h-6 w-6 shrink-0 ms-auto"
         onClick={toggle}
         title={t("hideTerminal", {
           shortcut: formatShortcutLabel(shortcuts.toggle_terminal, isMac),

@@ -315,13 +315,13 @@ export const TabItem = memo(function TabItem({
                     // widens the mask so the close button never covers the title).
                     "browser-tab-content w-full min-w-0 overflow-hidden rounded-t-lg px-2 pb-1.5",
                     isActive
-                      ? "bg-background ws-transparent-bg text-foreground"
+                      ? "bg-card ws-transparent-bg text-foreground"
                       : "isolate browser-tab-hover text-muted-foreground hover:text-foreground ws-strip-line",
                   ]
                 : [
                     "shrink-0 rounded-full px-3 hover:bg-primary/8",
                     isActive
-                      ? "bg-primary/10 text-foreground"
+                      ? "bg-primary-soft text-foreground"
                       : "text-muted-foreground",
                   ]
             )}

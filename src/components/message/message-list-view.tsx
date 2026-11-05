@@ -1275,7 +1275,7 @@ const MessageSentTime = memo(function MessageSentTime({
       dateTime={timestamp ?? undefined}
       title={formatted.full}
       className={cn(
-        "shrink-0 text-[0.625rem] font-medium leading-none text-muted-foreground/70 tabular-nums",
+        "shrink-0 text-2xs font-medium leading-none text-muted-foreground/70 tabular-nums",
         className
       )}
     >

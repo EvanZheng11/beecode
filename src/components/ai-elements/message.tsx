@@ -58,7 +58,7 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
           // reserving the full `max-w-[88%]` box — the inner bubble
           // (`MessageContent`) is already `w-fit`, so this just drops the
           // phantom full-width wrapper. Assistant keeps `w-full`.
-          "is-user ml-auto justify-end w-fit max-w-[88%]"
+          "is-user ms-auto justify-end w-fit max-w-[88%]"
         : "is-assistant w-full",
       className
     )}
@@ -85,7 +85,7 @@ export const MessageContent = ({
       // default `--radius` (2.2 × 0.625rem against 0.75rem + 1.25rem +
       // 0.75rem), so a line is a capsule and a longer message keeps the same
       // round corners.
-      "group-[.is-user]:ml-auto group-[.is-user]:w-fit group-[.is-user]:max-w-full group-[.is-user]:rounded-3xl group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground ws-msg-secondary",
+      "group-[.is-user]:ms-auto group-[.is-user]:w-fit group-[.is-user]:max-w-full group-[.is-user]:rounded-2xl group-[.is-user]:bg-secondary group-[.is-user]:px-3.5 group-[.is-user]:py-2 group-[.is-user]:text-foreground ws-msg-secondary",
       "group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground",
       className
     )}
