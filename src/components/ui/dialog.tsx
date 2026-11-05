@@ -42,7 +42,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-black/80 duration-100 supports-backdrop-filter:backdrop-blur-xs fixed inset-0 z-50",
+        "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 bg-foreground/20 dark:bg-background/70 duration-200 supports-backdrop-filter:backdrop-blur-[2px] fixed inset-0 z-50",
         className
       )}
       {...props}
@@ -95,8 +95,8 @@ function DialogContent({
             guardOutsidePress(event)
           }}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 bg-background ring-border pointer-events-auto relative grid max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-4xl p-6 shadow-2xl ring-1 duration-100 outline-none",
-            showCloseButton && "[&_[data-slot=dialog-header]]:pr-10",
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto relative grid max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-3xl p-6 duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
+            showCloseButton && "[&_[data-slot=dialog-header]]:pe-10",
             className
           )}
           {...props}
@@ -112,7 +112,7 @@ function DialogContent({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "absolute top-4 right-4 hover:text-destructive focus-visible:text-destructive",
+                  "absolute top-4 end-4 hover:text-destructive focus-visible:text-destructive",
                   closeButtonClassName
                 )}
               >
@@ -157,7 +157,7 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg font-medium", className)}
+      className={cn("text-heading font-semibold tracking-tight", className)}
       {...props}
     />
   )
@@ -170,7 +170,7 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground text-xs", className)}
       {...props}
     />
   )

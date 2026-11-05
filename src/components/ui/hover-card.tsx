@@ -54,7 +54,7 @@ function HoverCardContent({
           // other axis to `auto` once one is, which would put a stray horizontal
           // scrollbar under content that merely wraps. Same pairing as
           // `SelectContent` / `DropdownMenuContent`.
-          "bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ring-foreground/5 rounded-2xl p-3 text-sm shadow-2xl ring-1 duration-100 z-50 w-72 max-h-(--radix-hover-card-content-available-height) origin-(--radix-hover-card-content-transform-origin) overflow-x-hidden overflow-y-auto outline-hidden",
+          "surface-glass-strong text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 rounded-xl p-3 text-ui duration-200 z-50 w-72 max-h-(--radix-hover-card-content-available-height) origin-(--radix-hover-card-content-transform-origin) overflow-x-hidden overflow-y-auto outline-hidden",
           className
         )}
         {...props}
