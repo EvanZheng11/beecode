@@ -25,6 +25,8 @@ export function SearchInput({
           else if (ref) ref.current = node
         }}
         className={cn(
+          // 规范 §8.3：搜索框保持胶囊形，调用方 className 仍可覆盖
+          "rounded-full",
           className,
           "!pe-9 [&::-webkit-search-cancel-button]:hidden"
         )}

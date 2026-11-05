@@ -14,7 +14,7 @@ function Checkbox({
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer size-4 shrink-0 rounded-[4px] border border-input outline-none transition-shadow focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:data-[state=checked]:bg-primary data-[state=indeterminate]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground dark:data-[state=indeterminate]:bg-primary",
+        "peer size-4.5 shrink-0 rounded-sm border border-input outline-none transition-shadow focus-visible:border-ring focus-visible:ring-4 focus-visible:ring-ring/15 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=indeterminate]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground",
         className
       )}
       {...props}
@@ -24,9 +24,9 @@ function Checkbox({
         className="flex items-center justify-center text-current"
       >
         {props.checked === "indeterminate" ? (
-          <Minus className="size-3.5" />
+          <Minus className="size-3.5" strokeWidth={3} />
         ) : (
-          <Check className="size-3.5" />
+          <Check className="size-3.5" strokeWidth={3} />
         )}
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
