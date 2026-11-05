@@ -4,7 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 export default function SettingsMonitoringPage() {
   return (
     <ScrollArea className="h-full">
-      <div className="w-full p-3 md:p-4">
+      <div className="mx-auto w-full max-w-[80rem] p-4 md:p-6">
         <ResourceMonitorSettings />
       </div>
     </ScrollArea>

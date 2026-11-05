@@ -165,11 +165,11 @@ function collectDirPaths(entries: GitStatusEntry[]) {
 function statusColor(status: string) {
   switch (status.charAt(0).toUpperCase()) {
     case "A":
-      return "text-green-500"
+      return "text-tone-success"
     case "D":
-      return "text-red-500"
+      return "text-tone-danger"
     case "M":
-      return "text-blue-500"
+      return "text-tone-info"
     default:
       return "text-muted-foreground"
   }
@@ -366,7 +366,10 @@ export function StashWorkspace({ folderPath }: StashWorkspaceProps) {
   }
 
   return (
-    <ResizablePanelGroup direction="horizontal" className="h-full">
+    <ResizablePanelGroup
+      direction="horizontal"
+      className="h-full overflow-hidden rounded-2xl border bg-card shadow-glass"
+    >
       {/* Left panel: stash cards */}
       <ResizablePanel defaultSize={35} minSize={25}>
         <ScrollArea className="h-full">
@@ -487,12 +490,12 @@ function StashCard({
       <ContextMenu>
         <ContextMenuTrigger>
           <Collapsible open={isExpanded} onOpenChange={onToggle}>
-            <div className="group rounded-lg border bg-card">
+            <div className="group rounded-xl border bg-card">
               <div className="relative flex items-center">
                 <CollapsibleTrigger asChild>
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-t-lg px-3 py-2 text-left text-sm transition-colors group-hover:bg-muted/50"
+                    className="flex w-full items-center gap-2 rounded-t-xl px-3 py-2 text-left text-sm transition-colors group-hover:bg-muted/50"
                     disabled={actionLoading}
                   >
                     <ChevronRight

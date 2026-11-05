@@ -42,7 +42,7 @@ function ImportSessionsPageInner() {
           </div>
         }
       />
-      <main className="min-h-0 flex-1">
+      <main className="min-h-0 flex-1 p-3">
         <ImportSessionsWindow
           focusPath={focusPath}
           onClose={() => void closeWindow()}

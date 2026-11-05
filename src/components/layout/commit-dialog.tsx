@@ -1061,7 +1061,7 @@ export function CommitWorkspace({
   return (
     <div
       ref={containerRef}
-      className="flex h-full min-h-0 overflow-hidden rounded-lg border bg-card"
+      className="flex h-full min-h-0 overflow-hidden rounded-2xl border bg-card shadow-glass"
     >
       <ResizablePanelGroup
         direction="horizontal"

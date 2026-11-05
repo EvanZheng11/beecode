@@ -23,7 +23,7 @@ function ProjectBootPageInner() {
         }
       />
 
-      <main className="min-h-0 flex-1">
+      <main className="min-h-0 flex-1 p-3">
         <ProjectBootWorkspace />
       </main>
 

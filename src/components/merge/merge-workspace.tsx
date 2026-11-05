@@ -191,7 +191,7 @@ export function MergeWorkspace({
     <div className="flex h-full flex-col gap-2">
       <ResizablePanelGroup
         direction="horizontal"
-        className="flex-1 min-h-0 rounded-lg border"
+        className="flex-1 min-h-0 overflow-hidden rounded-2xl border bg-card shadow-glass"
       >
         {/* Left sidebar: conflict file list */}
         <ResizablePanel defaultSize={18} minSize={12} maxSize={30}>
@@ -208,7 +208,7 @@ export function MergeWorkspace({
                     <button
                       key={file}
                       type="button"
-                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
                         isSelected
                           ? "bg-accent text-accent-foreground"
                           : "hover:bg-accent/50"
@@ -217,9 +217,9 @@ export function MergeWorkspace({
                       disabled={isResolved}
                     >
                       {isResolved ? (
-                        <Check className="h-3 w-3 shrink-0 text-green-500" />
+                        <Check className="h-3 w-3 shrink-0 text-tone-success" />
                       ) : (
-                        <FileWarning className="h-3 w-3 shrink-0 text-amber-500" />
+                        <FileWarning className="h-3 w-3 shrink-0 text-tone-warning" />
                       )}
                       <span
                         className={`truncate ${isResolved ? "text-muted-foreground line-through" : ""}`}

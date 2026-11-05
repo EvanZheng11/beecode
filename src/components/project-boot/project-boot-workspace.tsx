@@ -9,7 +9,10 @@ export function ProjectBootWorkspace() {
   const t = useTranslations("ProjectBoot")
 
   return (
-    <Tabs defaultValue="shadcn" className="flex h-full flex-col gap-0">
+    <Tabs
+      defaultValue="shadcn"
+      className="flex h-full flex-col gap-0 overflow-hidden rounded-2xl border bg-card shadow-glass"
+    >
       <div className="shrink-0 border-b px-4 py-2">
         <TabsList>
           <TabsTrigger value="shadcn">{t("tabs.shadcn")}</TabsTrigger>

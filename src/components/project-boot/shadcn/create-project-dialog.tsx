@@ -231,7 +231,7 @@ export function CreateProjectDialog({
                       </>
                     ) : pmInstalled ? (
                       <>
-                        <CircleCheck className="size-3.5 text-emerald-500" />
+                        <CircleCheck className="size-3.5 text-tone-success" />
                         <span className="text-muted-foreground">
                           {opt.label} v{pmVersion}
                         </span>

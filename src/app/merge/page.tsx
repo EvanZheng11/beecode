@@ -99,16 +99,16 @@ function MergePageInner() {
 
       <main className="flex-1 min-h-0 p-3">
         {!hasValidFolderId ? (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-ui text-destructive">
             {t("invalidFolderId")}
           </div>
         ) : loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <div className="flex h-full items-center justify-center text-ui text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             {t("loadingRepo")}
           </div>
         ) : error ? (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-ui text-destructive">
             {error}
           </div>
         ) : folder ? (

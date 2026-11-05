@@ -1,5 +1,6 @@
 "use client"
 
+import { EmptyState } from "@/components/ui/empty-state"
 import { SearchInput } from "@/components/ui/search-input"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
@@ -450,7 +451,7 @@ export function ImportSessionsWindow({
   // ── Render ──────────────────────────────────────────────────────────────
   if (phase === "scanning") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 overflow-hidden rounded-2xl border bg-card shadow-glass">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Loader2 className="h-4 w-4 animate-spin" />
           {t("scanningTitle")}
@@ -488,7 +489,7 @@ export function ImportSessionsWindow({
 
   if (phase === "error") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-8">
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 overflow-hidden rounded-2xl border bg-card shadow-glass">
         <TriangleAlert className="h-6 w-6 text-destructive" />
         <p className="text-sm font-medium">{t("scanFailed")}</p>
         {scanError && (
@@ -517,11 +518,11 @@ export function ImportSessionsWindow({
     const hasFailures =
       importResult.failed > 0 || importResult.errors.length > 0
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 overflow-hidden rounded-2xl border bg-card shadow-glass">
         {hasFailures ? (
           <TriangleAlert className="h-7 w-7 text-destructive" />
         ) : (
-          <CheckCircle2 className="h-7 w-7 text-green-500" />
+          <CheckCircle2 className="h-7 w-7 text-tone-success" />
         )}
         <p className="text-sm font-semibold">{t("doneTitle")}</p>
         <div className="grid grid-cols-4 gap-x-8 gap-y-2">
@@ -535,7 +536,7 @@ export function ImportSessionsWindow({
           ))}
         </div>
         {hasFailures && importResult.errors.length > 0 && (
-          <div className="max-h-28 w-full max-w-lg overflow-y-auto rounded-md border border-destructive/40 bg-destructive/5 p-2">
+          <div className="max-h-28 w-full max-w-lg overflow-y-auto rounded-xl border border-destructive/30 bg-destructive/10 p-3">
             {importResult.errors.map((message, index) => (
               <p key={index} className="text-xs text-destructive">
                 {message}
@@ -559,9 +560,9 @@ export function ImportSessionsWindow({
   const empty = !scan || scan.folders.length === 0
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-glass">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/50 px-4 py-3">
         <SearchInput
           wrapperClassName="w-56 shrink-0"
           value={search}
@@ -669,15 +670,17 @@ export function ImportSessionsWindow({
       {/* List */}
       <div className="min-h-0 flex-1">
         {empty ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-8">
-            <FolderPlus className="h-6 w-6 text-muted-foreground" />
-            <p className="text-sm font-medium">{t("empty")}</p>
-            <p className="text-xs text-muted-foreground">{t("emptyHint")}</p>
-          </div>
+          <EmptyState
+            className="h-full"
+            icon={FolderPlus}
+            description={<span className="font-medium">{t("empty")}</span>}
+          >
+            <p className="-mt-1 text-xs text-muted-foreground">
+              {t("emptyHint")}
+            </p>
+          </EmptyState>
         ) : rows.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-            {t("noMatches")}
-          </div>
+          <EmptyState className="h-full" description={t("noMatches")} />
         ) : (
           <ScrollArea
             className="h-full px-2 py-1.5"
@@ -734,7 +737,7 @@ export function ImportSessionsWindow({
       </div>
 
       {/* Footer */}
-      <div className="flex items-center gap-3 border-t border-border/50 px-3 py-2">
+      <div className="flex items-center gap-3 border-t border-border/50 px-4 py-3">
         {scan && (
           <span className="text-xs text-muted-foreground">
             {t("summaryCounts", {

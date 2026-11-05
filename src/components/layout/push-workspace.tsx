@@ -570,7 +570,7 @@ export function PushWorkspace({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl border bg-card shadow-glass">
       {/* Push target header: branch → remote/branch */}
       {pushInfoData && (
         <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -658,7 +658,7 @@ export function PushWorkspace({
                                 title={t("unpushed")}
                               >
                                 <CloudOff
-                                  className="text-amber-500"
+                                  className="text-tone-warning"
                                   size={12}
                                 />
                               </span>
