@@ -62,6 +62,9 @@
 | `--shadow-glass` | `0 1px 1px rgb(0 0 0 / 0.02), 0 8px 28px rgb(var(--shadow-tint) / 0.06)`；深色把两层透明度提到 0.2 / 0.35 | 卡片、侧栏 |
 | `--shadow-pop` | `0 12px 48px rgb(var(--shadow-tint) / 0.16), 0 2px 6px rgb(0 0 0 / 0.05)`；深色 0.5 / 0.3 | 浮层、对话框、可点击卡片悬停 |
 | `--switch-on` | 默认 `var(--primary)`；apple 预设 `var(--tone-success)` | 参考平台开关打开是绿色（iOS 习惯），只在 apple 预设生效 |
+| `--switch-thumb` | `oklch(1 0 0)`，明暗相同 | 开关滑块，不借用会随明暗变化的背景色 |
+| `--destructive-foreground` | 浅色白色，深色 `var(--background)` | 危险操作实心态；避免借用黄、绿预设的主色前景。13 套预设明暗对比度已覆盖测试 |
+| `--scrim` / `--drawer-scrim` / `--image-scrim` | 黑色；对话框浅色 20% / 深色 50%，抽屉 10%，图片灯箱 80% | 遮罩使用独立令牌，不用会变成浅色的 `foreground` 代替黑色 |
 | `--glass-alpha` / `--glass-strong-alpha` | 浅色 0.72 / 0.95；深色 0.68 / 0.92 | 玻璃层不透明度 |
 
 在 `@theme inline` 里注册为 `--color-primary-soft`、`--color-primary-text`、`--color-switch-on`、`--shadow-glass`、`--shadow-pop`，组件就能写 `bg-primary-soft`、`text-primary-text`、`shadow-glass`。
