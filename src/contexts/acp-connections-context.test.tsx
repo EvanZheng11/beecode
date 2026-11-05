@@ -8097,6 +8097,55 @@ describe("a switch that lands while another agent is still connecting", () => {
 })
 
 describe("connect failures land on the surface that asked", () => {
+  it.each(["web", "desktop"])(
+    "显示 %s 的 OpenCode 旧版错误和设置入口",
+    async (transport) => {
+      const message =
+        "The OpenCode found on PATH (/tmp/opencode) is version 1.19.4, which this version of Codeg no longer supports: it runs OpenCode 2."
+      const failure =
+        transport === "web"
+          ? { code: "task_execution_failed", message }
+          : message
+      h.acpConnect.mockRejectedValueOnce(failure)
+      await mountProvider()
+      await act(async () => {
+        await expect(
+          h.actions!.connect(TAB, "open_code", "/tmp/x", "sess-1")
+        ).rejects.toEqual(failure)
+      })
+      expect(h.store!.getConnectError(TAB)).toEqual({
+        agentType: "open_code",
+        title: "backendErrors.agentRuntimeOutdated",
+        detail: message,
+        opensAgentSettings: true,
+      })
+      const options = toastOptions(h.toastError.mock.calls[0])
+      expect(options.action?.label).toBe("actions.openAgentsSettings")
+      act(() => options.action!.onClick())
+      expect(h.openSettingsWindow).toHaveBeenCalledWith("agents", {
+        agentType: "open_code",
+      })
+    }
+  )
+
+  it("结构化错误展示 detail，未知对象不展示 JSON", async () => {
+    await mountProvider()
+    for (const [failure, detail] of [
+      [
+        { code: "permission_denied", message: "denied", detail: "no access" },
+        "no access",
+      ],
+      [{ unexpected: "secret" }, null],
+    ] as const) {
+      h.acpConnect.mockRejectedValueOnce(failure)
+      await act(async () => {
+        await expect(
+          h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+        ).rejects.toEqual(failure)
+      })
+      expect(h.store!.getConnectError(TAB)?.detail).toBe(detail)
+    }
+  })
   // A failed connect never produces a store entry, so its reason used to go
   // only to the status-bar alerts — for a saved conversation the ONLY place it
   // showed. It is a notification now (a toast, kept in the alert list) with

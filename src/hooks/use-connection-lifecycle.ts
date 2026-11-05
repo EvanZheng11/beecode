@@ -6,6 +6,7 @@ import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useTaskContext } from "@/contexts/task-context"
 import { useConnection, type UseConnectionReturn } from "@/hooks/use-connection"
 import { extractAppCommandError } from "@/lib/app-error"
+import { connectErrorMessage } from "@/lib/acp-error-presentation"
 import { notify } from "@/lib/notify"
 import { isConnectionBusy } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
@@ -115,11 +116,6 @@ export function shouldDisconnectOnUnmount(args: {
   if (args.transientUnmount) return false
   if (args.isViewer) return true
   return !isConnectionBusy(args)
-}
-
-function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
 }
 
 function isExpectedConnectError(error: unknown): boolean {
@@ -257,7 +253,7 @@ export function useConnectionLifecycle({
           setLastAutoConnectError({
             contextKey: contextKeyRef.current,
             agentType,
-            message: normalizeErrorMessage(e),
+            message: connectErrorMessage(e) || t("errors.connectionFailed"),
           })
         }
         if (!isExpectedConnectError(e)) {
@@ -267,7 +263,7 @@ export function useConnectionLifecycle({
     return () => {
       cancelled = true
     }
-  }, [isActive, workingDir, agentType])
+  }, [isActive, workingDir, agentType, t])
 
   // Status-bar task for the two legs that precede a usable session:
   //   "preparing"  — the caller is resolving what to connect to (see `preparing`)

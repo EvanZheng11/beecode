@@ -2,11 +2,45 @@ import { describe, expect, it } from "vitest"
 
 import {
   acpErrorNotifiesDesktop,
+  connectErrorMessage,
   isFailedTurnVerdict,
+  isOutdatedConnectError,
   isTurnFailureCode,
   rejectedPromptText,
   routeAcpError,
 } from "./acp-error-presentation"
+
+describe("连接错误", () => {
+  it.each([
+    [
+      { code: "task_execution_failed", message: "失败", detail: "具体原因" },
+      "具体原因",
+    ],
+    [{ message: "SDK 拒绝" }, "SDK 拒绝"],
+    [new Error("桌面错误"), "桌面错误"],
+    ["普通错误", "普通错误"],
+    ['{"code":"task_execution_failed","message":"服务错误"}', "服务错误"],
+    [{ unexpected: "secret" }, ""],
+    ['{"unexpected":"secret"}', ""],
+    ['{"broken":', ""],
+  ])("只提取可读消息 %#", (error, expected) => {
+    expect(connectErrorMessage(error)).toBe(expected)
+  })
+
+  it("识别结构化错误码及旧后端的 OpenCode 拒绝消息", () => {
+    const raw =
+      "The OpenCode found on PATH (/tmp/opencode) is version 1.19.4, which this version of Codeg no longer supports: it runs OpenCode 2."
+    expect(
+      isOutdatedConnectError(
+        { code: "agent_runtime_outdated", message: raw },
+        "open_code"
+      )
+    ).toBe(true)
+    expect(isOutdatedConnectError(raw, "open_code")).toBe(true)
+    expect(isOutdatedConnectError(raw, "pi")).toBe(false)
+    expect(isOutdatedConnectError("runs OpenCode 2", "open_code")).toBe(false)
+  })
+})
 
 describe("routeAcpError", () => {
   it("keeps session-state failures as the session's own error", () => {
