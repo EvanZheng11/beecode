@@ -221,7 +221,7 @@ export function HyperframesLauncher() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Film className="size-5 text-muted-foreground" />
-              <h3 className="text-lg font-semibold">
+              <h3 className="text-xl font-semibold tracking-tight">
                 {t("hyperframes.title")}
               </h3>
             </div>
@@ -293,7 +293,7 @@ export function HyperframesLauncher() {
                         </>
                       ) : pmInstalled ? (
                         <>
-                          <CircleCheck className="size-3.5 text-emerald-500" />
+                          <CircleCheck className="size-3.5 text-tone-success" />
                           <span className="text-muted-foreground">
                             {opt.label} v{pmVersion}
                           </span>
@@ -338,7 +338,7 @@ export function HyperframesLauncher() {
             </div>
 
             {error && (
-              <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui text-destructive">
                 {error}
               </div>
             )}
@@ -381,9 +381,9 @@ export function HyperframesLauncher() {
                         onClick={() => toggleAgent(a.id)}
                         disabled={skillsInstalling}
                         className={cn(
-                          "flex items-center justify-between gap-2 rounded-lg border p-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                          "flex items-center justify-between gap-2 rounded-xl border p-2.5 text-left text-sm transition-colors disabled:opacity-60",
                           isSelected
-                            ? "border-primary bg-primary/5"
+                            ? "border-primary bg-primary-soft"
                             : "hover:bg-muted/50"
                         )}
                       >
@@ -398,7 +398,7 @@ export function HyperframesLauncher() {
                           </span>
                         </span>
                         {installedMap[a.id] && (
-                          <span className="shrink-0 text-3xs text-emerald-600 dark:text-emerald-500">
+                          <span className="shrink-0 text-3xs text-tone-success">
                             {t("hyperframes.installedBadge")}
                           </span>
                         )}

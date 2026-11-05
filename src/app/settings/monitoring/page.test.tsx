@@ -30,6 +30,12 @@ describe("监控页面布局", () => {
     const settings = screen.getByTestId("monitor-settings")
     expect(scrollArea).toHaveClass("h-full")
     expect(scrollArea).toContainElement(settings)
-    expect(settings.parentElement).toHaveClass("w-full", "p-3", "md:p-4")
+    expect(settings.parentElement).toHaveClass(
+      "mx-auto",
+      "w-full",
+      "max-w-[80rem]",
+      "p-4",
+      "md:p-6"
+    )
   })
 })
