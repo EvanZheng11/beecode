@@ -277,7 +277,7 @@ describe("ForgeIssueRowItem", () => {
     const chip = screen.getByRole("button", { name: "To do" })
     for (const cls of geometry) expect(chip).toHaveClass(cls)
     // A live task is the accent fill; the shape is the one above.
-    expect(chip).toHaveClass("bg-primary/10")
+    expect(chip).toHaveClass("bg-primary-soft")
     expect(chip).not.toHaveClass("bg-secondary")
   })
 

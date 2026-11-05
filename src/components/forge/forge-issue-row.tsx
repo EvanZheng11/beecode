@@ -160,7 +160,7 @@ export const ROW_ACTION_GLYPH = "size-3.5"
  *  accent for a task still under way, neutral once it has settled. */
 export const CHIP_FILL = {
   active:
-    "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary dark:hover:bg-primary/15",
+    "bg-primary-soft text-primary-text hover:bg-primary/15 hover:text-primary-text dark:hover:bg-primary/15",
   settled:
     "bg-muted text-muted-foreground hover:bg-muted/80 dark:hover:bg-muted/80",
 } as const

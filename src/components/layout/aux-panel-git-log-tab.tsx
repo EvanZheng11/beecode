@@ -2329,12 +2329,12 @@ export function GitLogTab() {
                               ) : null}
                               <Commit
                                 className={cn(
-                                  "my-0.5 min-w-0 flex-1 rounded-lg border transition-colors",
+                                  "my-0.5 min-w-0 flex-1 rounded-md border transition-colors",
                                   index === 0 && "mt-2",
                                   isOpen
                                     ? "border-border/60 bg-muted/20"
                                     : isHead
-                                      ? "border-primary/25 bg-primary/5"
+                                      ? "border-primary/25 bg-primary-soft"
                                       : "border-transparent bg-transparent"
                                 )}
                                 onOpenChange={(open) => {
@@ -2413,7 +2413,7 @@ export function GitLogTab() {
                                           background. ms-auto (not ml-auto) so it
                                           stays on the trailing edge under RTL. */}
                                       <span
-                                        className="ms-auto flex shrink-0 items-center gap-0.5 font-mono text-3xs text-primary/80"
+                                        className="ms-auto flex shrink-0 items-center gap-0.5 font-mono text-3xs text-primary-text"
                                         title={entry.full_hash}
                                       >
                                         <Hash
