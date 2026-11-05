@@ -855,7 +855,7 @@ impl DelegationListener {
             return unknown_report(&req.task_id);
         };
         if self.questions.task_start_blocked(&entry.parent_connection_id).await {
-            return cancel("parent has an unanswered or stopped question");
+            return cancel("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
         }
         // Same call-time identity restoration as `process_status` /
         // `process_cancel_task`: like cancel, the resume result is free-form
@@ -1251,7 +1251,7 @@ impl DelegationListener {
     async fn authoring_context(&self, token: &str) -> Result<AuthoringContext, &'static str> {
         let entry = self.tokens.lookup(token).await.ok_or("invalid token")?;
         if self.questions.task_start_blocked(&entry.parent_connection_id).await {
-            return Err("parent has an unanswered or stopped question");
+            return Err("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
         }
         let conversation_id = self
             .parent_lookup
@@ -1308,7 +1308,7 @@ impl DelegationListener {
         }
 
         if self.questions.task_start_blocked(&entry.parent_connection_id).await {
-            return cancel("parent has an unanswered or stopped question");
+            return cancel("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response");
         }
 
         // 2. Resolve the parent's current conversation. Without one the

@@ -38,10 +38,19 @@ impl NativeQuestion {
     }
 
     pub(super) async fn wait(
-        mut self,
+        self,
         cancellation: impl Future<Output = ()>,
     ) -> Option<QuestionOutcome> {
-        tokio::pin!(cancellation);
+        self.wait_with_local_abort(cancellation, std::future::pending())
+            .await
+    }
+
+    pub(super) async fn wait_with_local_abort(
+        mut self,
+        cancellation: impl Future<Output = ()>,
+        local_abort: impl Future<Output = ()>,
+    ) -> Option<QuestionOutcome> {
+        tokio::pin!(cancellation, local_abort);
         let started = tokio::time::Instant::now();
         for round in 0..=self.config.retry_count {
             // 测试桩可不提供期限，生产注册入口始终提供共享句柄。
@@ -55,6 +64,11 @@ impl NativeQuestion {
                 let at = deadline.current().map(|point| point.at);
                 tokio::select! {
                     biased;
+                    () = &mut local_abort => {
+                        // 本地清理只撤本题，不把 Stop/替换消息误记为耗尽。
+                        self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        return None;
+                    }
                     () = &mut cancellation => {
                         // RPC 已撤回，无法继续原请求；仅本题仍在注册表时停任务。
                         let stopped = self.access.stop_timed_out_question(&self.connection_id, &self.registered.question_id).await;
@@ -132,6 +146,7 @@ impl NativeQuestion {
             // cancel_question 的广播可能等待锁；期间到达的撤回仍优先于默认答案。
             tokio::select! {
                 biased;
+                () = &mut local_abort => return None,
                 () = &mut cancellation => return None,
                 () = std::future::ready(()) => {}
             }
@@ -303,6 +318,34 @@ mod tests {
             assert_eq!(*access.rounds.lock().unwrap(), 1);
             assert_eq!(*access.stops.lock().unwrap(), u32::from(peer_withdrawal));
             assert!(access.pending.lock().unwrap().is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn local_abort_wins_over_upstream_and_cannot_stop_a_new_generation() {
+        for auto in [false, true] {
+            let access = Arc::new(Access::default());
+            let ask = question(&access, auto).await;
+            // 上游撤回与本地清理同时就绪：本地来源优先，不重提或默认回答。
+            assert!(ask
+                .wait_with_local_abort(std::future::ready(()), std::future::ready(()))
+                .await
+                .is_none());
+            assert_eq!(*access.stops.lock().unwrap(), 0);
+            assert_eq!(*access.rounds.lock().unwrap(), 1);
+            assert!(access.pending.lock().unwrap().is_none());
+            let old = question(&access, auto).await;
+            access.cancel_questions_by_parent("parent").await;
+            let next = question(&access, auto).await;
+            assert!(old
+                .wait_with_local_abort(std::future::ready(()), std::future::ready(()))
+                .await
+                .is_none());
+            assert_eq!(*access.stops.lock().unwrap(), 0);
+            assert_eq!(
+                access.pending.lock().unwrap().as_ref().unwrap().0,
+                next.registered.question_id
+            );
         }
     }
 

@@ -10559,14 +10559,11 @@ async fn try_bridge_pi_select_ask(
     let state = Arc::clone(state);
     let emitter = emitter.clone();
     let cancellation = responder.cancellation();
-    // 等待器统一清理当前轮次；权限队列 drain 和对端撤回都属于取消。
+    // 本地权限清理与上游撤回分别处理，前者不得停止替换后的任务。
     tokio::spawn(async move {
         let answer = registered
-            .wait(async {
-                tokio::select! {
-                    () = cancellation.cancelled() => {},
-                    _ = abort_rx => {},
-                }
+            .wait_with_local_abort(async { cancellation.cancelled().await }, async {
+                let _ = abort_rx.await;
             })
             .await;
         match answer {
@@ -10735,11 +10732,8 @@ async fn try_bridge_antigravity_ask(
 
     tokio::spawn(async move {
         let answer = registered
-            .wait(async {
-                tokio::select! {
-                    () = cancellation.cancelled() => {},
-                    _ = abort_rx => {},
-                }
+            .wait_with_local_abort(async { cancellation.cancelled().await }, async {
+                let _ = abort_rx.await;
             })
             .await;
         match answer {
@@ -13745,13 +13739,13 @@ async fn drain_replaced_turn_leftovers(
     delegation_injection: Option<&DelegationInjection>,
     conn_id: &str,
 ) {
-    drain_permissions(perms, state, emitter).await;
     if let Some(inj) = delegation_injection {
         inj.questions.cancel_questions_by_parent(conn_id).await;
         inj.plan_approvals
             .cancel_plan_approvals_by_parent(conn_id)
             .await;
     }
+    drain_permissions(perms, state, emitter).await;
 }
 
 /// One poll of the replacement prompt. `None` means the request is in flight
@@ -15928,17 +15922,17 @@ async fn run_conversation_loop(
                                     .map(|inj| Arc::clone(&inj.plan_approvals));
                                 tokio::spawn(async move {
                                     let _ = prompt_response.await;
+                                    if let Some(questions) = barrier_questions {
+                                        questions
+                                            .cancel_questions_by_parent(&barrier_conn)
+                                            .await;
+                                    }
                                     drain_permissions(
                                         &barrier_perms,
                                         &barrier_state,
                                         &barrier_emitter,
                                     )
                                     .await;
-                                    if let Some(questions) = barrier_questions {
-                                        questions
-                                            .cancel_questions_by_parent(&barrier_conn)
-                                            .await;
-                                    }
                                     if let Some(plans) = barrier_plans {
                                         plans
                                             .cancel_plan_approvals_by_parent(&barrier_conn)
@@ -16131,6 +16125,10 @@ async fn run_conversation_loop(
                                             pending.replies.push(reply);
                                         } else {
                                             state.write().await.replacing_turn = true;
+                                            // 先撤销旧题的停止权，再触发上游取消/peer close。
+                                            drain_replaced_turn_leftovers(
+                                                perms, state, emitter, delegation_injection, conn_id,
+                                            ).await;
                                             let (interrupted, teardown) =
                                                 if let Some(inj) = delegation_injection {
                                                     let cancel = inj
@@ -16149,14 +16147,6 @@ async fn run_conversation_loop(
                                                 .release_all_for_session(sid.0.as_ref())
                                                 .await;
                                             tracked_terminal_tool_calls.clear();
-                                            drain_replaced_turn_leftovers(
-                                                perms,
-                                                state,
-                                                emitter,
-                                                delegation_injection,
-                                                conn_id,
-                                            )
-                                            .await;
                                             replace = Some(ReplacePending {
                                                 blocks,
                                                 replies: vec![reply],
@@ -16263,6 +16253,10 @@ async fn run_conversation_loop(
                                             "stopped before the inserted message was accepted",
                                         );
                                     }
+                                    // 本地 Stop 先撤题，避免上游取消使旧 waiter 误停新任务。
+                                    if let Some(inj) = delegation_injection {
+                                        inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -16343,22 +16337,7 @@ async fn run_conversation_loop(
                                     // DelegationCompleted emit.
                                     if let Some(inj) = delegation_injection {
                                         inj.broker.cancel_by_parent_turn(conn_id).await;
-                                        // Reclaim any parked `ask_user_question` /
-                                        // Grok `exit_plan_mode` approval owned by this
-                                        // connection. Unlike `perms` (drained inline
-                                        // above), these registries live on the manager
-                                        // and are otherwise only drained on full
-                                        // connection teardown -- but a turn-scoped
-                                        // Cancel keeps the connection alive. Without
-                                        // this the entry lingers, and the
-                                        // one-pending-per-connection guard in
-                                        // `register_{question,plan_approval}` then
-                                        // silently rejects the NEXT one on this
-                                        // connection (its card never shows). Idempotent
-                                        // with the cleanup-guard drain (empty map ->
-                                        // no-op); the dropped sender declines the tool /
-                                        // replies disconnect, exactly like the
-                                        // permission drain above.
+                                        // 回收取消通知在途期间到达的旧回合请求。
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
                                         inj.plan_approvals
                                             .cancel_plan_approvals_by_parent(conn_id)
@@ -16400,6 +16379,9 @@ async fn run_conversation_loop(
                                     tracing::info!(
                                         "[ACP] disconnect requested during prompting; connection_id={conn_id}"
                                     );
+                                    if let Some(inj) = delegation_injection {
+                                        inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
                                     let _ = cx.send_notification_to(
                                         Agent,
                                         CancelNotification::new(sid.clone()),
@@ -16563,6 +16545,9 @@ async fn run_conversation_loop(
                 let _ = reply.send(send_stop_async_task_request(&cx, &sid, &task_id).await);
             }
             Some(ConnectionCommand::Cancel) => {
+                if let Some(inj) = delegation_injection {
+                    inj.questions.cancel_questions_by_parent(conn_id).await;
+                }
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 let _ = cx.send_notification_to(Agent, CancelNotification::new(sid.clone()));
@@ -16679,6 +16664,9 @@ async fn run_conversation_loop(
                 }
             }
             Some(ConnectionCommand::Disconnect) | None => {
+                if let Some(inj) = delegation_injection {
+                    inj.questions.cancel_questions_by_parent(conn_id).await;
+                }
                 break;
             }
         }
@@ -51012,6 +51000,114 @@ mod tests {
             steers[0]["p"],
             serde_json::json!([{"type": "text", "text": "make it blue"}])
         );
+    }
+
+    // 强制权限 drain 先于题注册表清理完成，复现 Stop/替换消息的旧交错。
+    #[tokio::test]
+    async fn local_question_abort_does_not_stop_the_task() {
+        for agent_type in [AgentType::Pi, AgentType::Antigravity] {
+            let manager = Arc::new(crate::acp::manager::ConnectionManager::new());
+            let mut commands = manager
+                .insert_test_connection_live("local-abort", agent_type, None, EventEmitter::Noop)
+                .await;
+            let state = manager.get_state("local-abort").await.unwrap();
+            let mut events = state.read().await.event_stream().subscribe();
+            let config = crate::acp::question::QuestionRuntimeConfig::new();
+            config
+                .set(crate::acp::question::QuestionConfig {
+                    enabled: true,
+                    ..Default::default()
+                })
+                .await;
+            let access = Some((
+                Arc::new(crate::acp::manager::ConnectionManagerQuestionLookup {
+                    manager: manager.clone(),
+                }) as Arc<dyn crate::acp::question::SessionQuestionAccess>,
+                config,
+            ));
+            let perms = PendingPermissions::default();
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+            let agent = tokio::spawn(Agent.builder().connect_with(agent_end, async move |cx: ConnectionTo<Client>| {
+                let request: RequestPermissionRequest = serde_json::from_value(serde_json::json!({
+                    "sessionId": "s1",
+                    "toolCall": {
+                        "toolCallId": if agent_type == AgentType::Pi { "pi-ui-test" } else { "interaction_test" },
+                        "title": "选择？", "kind": "other", "status": "pending",
+                        "rawInput": if agent_type == AgentType::Pi { serde_json::json!({ "method": "select", "title": "选择？", "options": ["甲", "乙"] }) } else { serde_json::json!({}) }
+                    },
+                    "options": [
+                        {"optionId": "choice-0", "name": "甲", "kind": "allow_once"},
+                        {"optionId": "choice-1", "name": "乙", "kind": "allow_once"}
+                    ]
+                })).unwrap();
+                let reply = cx.send_request_to(Client, request).block_task().await?;
+                assert!(matches!(reply.outcome, RequestPermissionOutcome::Cancelled));
+                Ok::<(), agent_client_protocol::Error>(())
+            }));
+            let bridge_state = state.clone();
+            let bridge_perms = perms.clone();
+            let client = tokio::spawn(
+                Client
+                    .builder()
+                    .on_receive_request(
+                        async move |req: RequestPermissionRequest,
+                                    responder: Responder<RequestPermissionResponse>,
+                                    _cx: ConnectionTo<Agent>| {
+                            let result = if agent_type == AgentType::Pi {
+                                try_bridge_pi_select_ask(
+                                    &access,
+                                    "local-abort",
+                                    &bridge_state,
+                                    &EventEmitter::Noop,
+                                    &bridge_perms,
+                                    &req,
+                                    responder,
+                                )
+                                .await
+                            } else {
+                                try_bridge_antigravity_ask(
+                                    &access,
+                                    "local-abort",
+                                    &bridge_state,
+                                    &EventEmitter::Noop,
+                                    &bridge_perms,
+                                    &req,
+                                    responder,
+                                )
+                                .await
+                            };
+                            assert!(result.is_ok());
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(client_end, async |_cx: ConnectionTo<Agent>| {
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    }),
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if matches!(
+                        events.recv().await.unwrap().payload,
+                        AcpEvent::QuestionRequest { .. }
+                    ) {
+                        break;
+                    }
+                }
+                drain_permissions(&perms, &state, &EventEmitter::Noop).await;
+                // 等真实桥完成取消，再允许后续注册表清理，调度不依赖 sleep。
+                agent.await.unwrap().unwrap();
+            })
+            .await
+            .unwrap();
+            client.abort();
+            assert!(
+                !state.read().await.question_timed_out,
+                "本地 abort 不是提问耗尽：{agent_type:?}"
+            );
+            assert!(commands.try_recv().is_err(), "本地 abort 不得额外排 Cancel");
+            assert!(state.read().await.pending_question.is_none());
+        }
     }
 
     struct AntigravityTestAnswer {

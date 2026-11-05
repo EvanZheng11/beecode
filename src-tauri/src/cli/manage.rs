@@ -254,6 +254,7 @@ async fn run_inner(
             "cli_automation_run",
             &AutomationRunRequest {
                 automation_id: args.id,
+                caller: env.caller.clone(),
             },
             Duration::from_secs(300),
         )

@@ -4600,7 +4600,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         use crate::acp::delegation::spawner::SpawnerError;
         // 在实际新建子连接前再次按父连接验门禁，不取消已运行子任务。
         if self.manager.question_blocks_task_start(parent_connection_id).await {
-            return Err(SpawnerError::Spawn("parent has an unanswered or stopped question".into()));
+            return Err(SpawnerError::Spawn("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response".into()));
         }
         // Resolve the parent connection so we can inherit its emitter and
         // owner_window. Falling back is not safe: a child whose emitter is
@@ -4733,7 +4733,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
     {
         use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
         if self.manager.question_blocks_task_start(parent_connection_id).await {
-            return Err(SpawnerError::Spawn("parent has an unanswered or stopped question".into()));
+            return Err(SpawnerError::Spawn("parent is unavailable or blocked by an unanswered/stopped question; do not start remaining work until an explicit user response".into()));
         }
         // Same parent inheritance as `spawn` — a resumed child whose emitter is
         // wired to a different broadcaster would stream to nobody.
