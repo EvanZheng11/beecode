@@ -44,7 +44,8 @@ const TRIGGER_CLASS = cn(
   "h-8 max-w-[15rem] gap-1.5 rounded-full border-transparent bg-muted/70 px-3",
   "text-[0.8125rem] font-medium shadow-none hover:bg-muted"
 )
-const TRIGGER_ACTIVE_CLASS = "bg-primary/10 text-primary hover:bg-primary/15"
+const TRIGGER_ACTIVE_CLASS =
+  "bg-primary-soft text-primary-text hover:bg-primary/15"
 
 /** One selectable row. Selection is a trailing check so the text column stays
  *  flush-left — no phantom indent on unchecked rows. */

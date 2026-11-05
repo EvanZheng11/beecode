@@ -112,7 +112,7 @@ import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 const AUTOMATION_CHANGED_EVENT = "automation://changed"
 
 const STATUS_STYLES: Record<string, string> = {
-  running: "bg-primary/10 text-primary",
+  running: "bg-primary-soft text-primary-text",
   succeeded: "bg-tone-success/10 text-tone-success",
   failed: "bg-destructive/10 text-destructive",
   cancelled: "bg-muted text-muted-foreground",
@@ -892,7 +892,7 @@ export function AutomationListItem({
             className={cn(
               // The border is always in the box (transparent when unselected)
               // so selecting a row never shifts its height by 2px.
-              "group flex h-8 w-full items-center rounded-full border pr-1 transition-colors",
+              "group flex h-8 w-full items-center rounded-md border pr-1 transition-colors",
               // Selection can't lean on fill alone: in the light theme
               // `--accent` and `--muted` are the SAME token value
               // (oklch(0.97)), so `bg-accent` on the muted list panel is a
@@ -910,7 +910,7 @@ export function AutomationListItem({
             <button
               type="button"
               onClick={onSelect}
-              className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-full pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-md pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
               <span className="relative flex size-5 shrink-0 items-center justify-center">
                 <AgentIcon

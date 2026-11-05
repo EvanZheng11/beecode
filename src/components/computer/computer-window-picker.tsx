@@ -158,7 +158,7 @@ function Thumbnail({ targetId }: { targetId: string }) {
 }
 
 /** One shareable window: its picture, whose it is, and what it is shared
- *  for. The tile takes the colour of its level — violet to be read, red to
+ *  for. The tile takes the colour of its level — primary to be read, danger to
  *  be acted on — as the strip over the screen does. */
 function WindowTile({
   item: w,
@@ -190,8 +190,9 @@ function WindowTile({
       className={cn(
         "flex flex-col overflow-hidden rounded-2xl border bg-card transition-[border-color,box-shadow]",
         level === "none" && "hover:border-foreground/20",
-        level === "read" && "border-violet-500/70 ring-2 ring-violet-500/15",
-        level === "control" && "border-red-500/70 ring-2 ring-red-500/15"
+        level === "read" && "border-primary/70 ring-2 ring-primary/25",
+        level === "control" &&
+          "border-tone-danger/70 ring-2 ring-tone-danger/15"
       )}
     >
       <div className="relative">
@@ -250,8 +251,9 @@ function ScreenCard({
       aria-label={t("screenTitle")}
       className={cn(
         "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border bg-card px-3 py-2.5 transition-[border-color,box-shadow]",
-        level === "read" && "border-violet-500/70 ring-2 ring-violet-500/15",
-        level === "control" && "border-red-500/70 ring-2 ring-red-500/15"
+        level === "read" && "border-primary/70 ring-2 ring-primary/25",
+        level === "control" &&
+          "border-tone-danger/70 ring-2 ring-tone-danger/15"
       )}
     >
       <ScreenShare className="size-4 shrink-0 text-muted-foreground" />

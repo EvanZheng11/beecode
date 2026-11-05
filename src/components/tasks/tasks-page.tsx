@@ -624,7 +624,7 @@ export function TasksPage() {
                 />
                 {t("filter")}
                 {activeFilters > 0 ? (
-                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary tabular-nums">
+                  <span className="rounded-full bg-primary-soft px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary-text tabular-nums">
                     {activeFilters}
                   </span>
                 ) : null}
@@ -973,7 +973,7 @@ export function TasksPage() {
                   <StatusChip task={drag.task} />
                 </div>
                 {dropArmed ? (
-                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary">
+                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary-text">
                     <Play className="size-3" aria-hidden="true" />
                     {t("dropToStart")}
                   </span>

@@ -144,7 +144,7 @@ export function AgentConfigSection({
     >
       <p
         className={cn(
-          "min-w-0 text-xs text-amber-700 dark:text-amber-400",
+          "min-w-0 text-xs text-tone-warning",
           inline && "truncate"
         )}
         title={t("modelNotSwitched")}

@@ -174,7 +174,7 @@ export function TaskMergeDialog({
 
         <div className="flex flex-col gap-3">
           {willQueue ? (
-            <p className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-2 text-[0.8125rem] leading-snug text-amber-700 dark:text-amber-400">
+            <p className="flex items-start gap-2 rounded-lg bg-tone-warning/12 px-2.5 py-2 text-[0.8125rem] leading-snug text-tone-warning">
               <Clock className="mt-px size-3.5 shrink-0" aria-hidden="true" />
               <span>
                 {alreadyQueued

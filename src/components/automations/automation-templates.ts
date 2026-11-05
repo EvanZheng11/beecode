@@ -57,7 +57,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "code-review",
     icon: ScanSearch,
-    accent: "text-blue-500 bg-blue-500/10",
+    accent: "text-primary-text bg-primary-soft",
     titleKey: "tplCodeReviewTitle",
     descKey: "tplCodeReviewDesc",
     prompt:
@@ -69,7 +69,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "dependency-updates",
     icon: Package,
-    accent: "text-amber-500 bg-amber-500/10",
+    accent: "text-tone-warning bg-tone-warning/12",
     titleKey: "tplDependencyUpdatesTitle",
     descKey: "tplDependencyUpdatesDesc",
     prompt:
@@ -81,7 +81,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "test-coverage",
     icon: FlaskConical,
-    accent: "text-emerald-500 bg-emerald-500/10",
+    accent: "text-tone-success bg-tone-success/12",
     titleKey: "tplTestCoverageTitle",
     descKey: "tplTestCoverageDesc",
     prompt:
@@ -93,7 +93,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "todo-sweep",
     icon: ListChecks,
-    accent: "text-violet-500 bg-violet-500/10",
+    accent: "text-tone-info bg-tone-info/12",
     titleKey: "tplTodoSweepTitle",
     descKey: "tplTodoSweepDesc",
     prompt:
@@ -105,7 +105,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "ci-triage",
     icon: Wrench,
-    accent: "text-orange-500 bg-orange-500/10",
+    accent: "text-tone-warning bg-tone-warning/12",
     titleKey: "tplCiTriageTitle",
     descKey: "tplCiTriageDesc",
     prompt:
@@ -117,7 +117,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "release-notes",
     icon: Tag,
-    accent: "text-sky-500 bg-sky-500/10",
+    accent: "text-tone-info bg-tone-info/12",
     titleKey: "tplReleaseNotesTitle",
     descKey: "tplReleaseNotesDesc",
     prompt:
@@ -129,7 +129,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     id: "security-audit",
     icon: ShieldCheck,
-    accent: "text-rose-500 bg-rose-500/10",
+    accent: "text-tone-danger bg-tone-danger/10",
     titleKey: "tplSecurityAuditTitle",
     descKey: "tplSecurityAuditDesc",
     prompt:
