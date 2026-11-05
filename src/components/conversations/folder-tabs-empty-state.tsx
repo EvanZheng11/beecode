@@ -26,9 +26,10 @@ export function FolderTabsEmptyState() {
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <MessagesSquare
         aria-hidden="true"
-        className="h-8 w-8 text-muted-foreground/60"
+        strokeWidth={1.4}
+        className="size-7 text-muted-foreground/60"
       />
-      <p className="text-sm text-muted-foreground">
+      <p className="text-ui text-muted-foreground">
         {folder
           ? t("emptyFolderScope", { name: formatFolderLabelWithAlias(folder) })
           : t("emptyChatScope")}

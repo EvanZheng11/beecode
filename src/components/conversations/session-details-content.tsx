@@ -265,7 +265,7 @@ function CopyableValue({
         className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 group-hover/copy:opacity-100 group-focus-within/copy:opacity-100"
       >
         {copied ? (
-          <Check className="h-3 w-3 text-green-500" />
+          <Check className="h-3 w-3 text-tone-success" />
         ) : (
           <Copy className="h-3 w-3" />
         )}
@@ -299,7 +299,7 @@ export function SessionDetailsCard({
     <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
       <p
         title={title}
-        className="line-clamp-2 text-[0.8125rem] leading-[1.125rem] font-semibold [overflow-wrap:anywhere]"
+        className="line-clamp-2 text-ui leading-[1.125rem] font-semibold [overflow-wrap:anywhere]"
       >
         {title}
       </p>

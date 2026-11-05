@@ -3687,9 +3687,9 @@ describe("SidebarConversationList — folder header and folder-tabs mode", () =>
     // The folder on screen wears the selected-row tint, not only the ARIA.
     const row = (folderId: number) => header(folderId).parentElement!
     expect(row(2)).toHaveAttribute("data-scope-selected", "true")
-    expect(row(2).className).toContain("bg-sidebar-primary/8")
+    expect(row(2).className).toContain("bg-primary-soft")
     expect(row(1)).not.toHaveAttribute("data-scope-selected")
-    expect(row(1).className).not.toContain("bg-sidebar-primary/8")
+    expect(row(1).className).not.toContain("bg-primary-soft")
     act(() => {
       fireEvent.click(header(1))
     })

@@ -213,7 +213,7 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
             <span
               style={titleTint}
               className={cn(
-                "min-w-0 flex-shrink truncate text-left text-[0.875rem] font-normal",
+                "min-w-0 flex-shrink truncate text-left text-ui font-normal",
                 titleTint ? "folder-title-tint" : "text-sidebar-foreground/75"
               )}
             >
@@ -230,9 +230,9 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
                 className={cn(
                   "inline-flex shrink-0 items-center justify-center",
                   "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
-                  "text-[0.625rem] font-semibold leading-none tabular-nums",
-                  "bg-amber-500/12 text-amber-700",
-                  "dark:bg-amber-400/15 dark:text-amber-300"
+                  "text-3xs font-semibold leading-none tabular-nums",
+                  "bg-tone-warning/12 text-tone-warning",
+                  ""
                 )}
               >
                 <span aria-hidden>{runningCount}</span>

@@ -370,7 +370,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     "rounded-md text-sidebar-foreground",
                     "transition-colors duration-[120ms]",
                     isSelected
-                      ? "bg-sidebar-primary/8"
+                      ? "bg-primary-soft"
                       : "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
                   )}
                 >
@@ -454,10 +454,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     before it takes the rest. */}
                     <span
                       className={cn(
-                        "relative min-w-0 max-w-max flex-1 truncate text-[0.875rem] font-normal",
+                        "relative min-w-0 max-w-max flex-1 truncate text-ui font-normal",
                         // 选中态（当前激活的会话行）与「已在标签页打开」共用同一个主题
                         // accent 色，而不是继承默认的前景色：主题色令牌，不写死色值。
-                        (isSelected || isOpenInTab) && "text-primary"
+                        (isSelected || isOpenInTab) && "text-primary-text"
                       )}
                     >
                       {formatConversationTitle(conversation.title) ||
@@ -584,7 +584,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                             className="inline-flex animate-spin"
                             aria-hidden
                           >
-                            <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                            <Loader2 className="h-3.5 w-3.5 text-tone-warning" />
                           </span>
                           <span className="sr-only">
                             {tSidebar("statusRunningBadge")}

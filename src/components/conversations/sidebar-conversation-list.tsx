@@ -470,7 +470,7 @@ const FolderHeader = memo(function FolderHeader({
                 "transition-colors duration-150",
                 isDragging ? "cursor-grabbing" : "cursor-grab",
                 scopeSelected
-                  ? "bg-sidebar-primary/8"
+                  ? "bg-primary-soft"
                   : !isDragging &&
                       "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
               )}
@@ -536,7 +536,7 @@ const FolderHeader = memo(function FolderHeader({
                   <span
                     style={titleTint}
                     className={cn(
-                      "min-w-0 flex-shrink truncate text-left text-[0.875rem] font-normal",
+                      "min-w-0 flex-shrink truncate text-left text-ui font-normal",
                       titleTint
                         ? "folder-title-tint"
                         : "text-sidebar-foreground/75"
@@ -585,9 +585,9 @@ const FolderHeader = memo(function FolderHeader({
                       className={cn(
                         "inline-flex shrink-0 items-center justify-center",
                         "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
-                        "text-[0.625rem] font-semibold leading-none tabular-nums",
-                        "bg-amber-500/12 text-amber-700",
-                        "dark:bg-amber-400/15 dark:text-amber-300"
+                        "text-3xs font-semibold leading-none tabular-nums",
+                        "bg-tone-warning/12 text-tone-warning",
+                        ""
                       )}
                     >
                       <span aria-hidden>{runningCount}</span>
@@ -3266,7 +3266,7 @@ export function SidebarConversationList({
       // INSIDE the group rather than as another top-level row.
       return (
         <div
-          className="flex h-[2rem] items-center text-[0.75rem] text-muted-foreground/70"
+          className="flex h-[2rem] items-center text-xs text-muted-foreground/70"
           style={{
             paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${CONV_RAIL_DEPTH_STEP})`,
           }}
@@ -3315,7 +3315,7 @@ export function SidebarConversationList({
         // sits one level below its folder header, so the ancestor rail runs
         // through it and keeps that folder's spine going.
         <div
-          className="relative flex h-[2rem] items-center text-[0.75rem] text-muted-foreground/70"
+          className="relative flex h-[2rem] items-center text-xs text-muted-foreground/70"
           style={{
             paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
           }}
@@ -3335,7 +3335,7 @@ export function SidebarConversationList({
       // Folderless flat hint — no themeWrap, no conversation rail; align with the
       // section header's text inset (px-[0.5rem]) rather than the folder rail.
       return (
-        <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
+        <div className="px-[0.5rem] py-[0.375rem] text-xs text-muted-foreground/70">
           {filterNarrowed ? noMatchHint : t("noChats")}
         </div>
       )
@@ -3346,7 +3346,7 @@ export function SidebarConversationList({
       // actions (Open Folder / Clone / Import) are how you add the first folder.
       // Under a tag filter it means no folder has a match, which says so.
       return (
-        <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
+        <div className="px-[0.5rem] py-[0.375rem] text-xs text-muted-foreground/70">
           {filterNarrowed ? noMatchHint : t("noFolders")}
         </div>
       )
@@ -3358,7 +3358,7 @@ export function SidebarConversationList({
       // the kind filter narrows the list to nothing — the hint names the
       // filter so the user knows what to undo.
       return (
-        <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
+        <div className="px-[0.5rem] py-[0.375rem] text-xs text-muted-foreground/70">
           {filterNarrowed
             ? noMatchHint
             : recentFilter === "chats"
@@ -3401,7 +3401,7 @@ export function SidebarConversationList({
               // onto it — the row read as un-hovered while the cursor was still
               // inside it. Same reason the section headers put their group on
               // the row container rather than the toggle button.
-              "relative flex h-[1.9375rem] w-full items-center rounded-md text-left text-[0.75rem] text-muted-foreground/80 outline-none transition-colors duration-[120ms] group-hover/recent-more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/recent-more:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "relative flex h-[1.9375rem] w-full items-center rounded-md text-left text-xs text-muted-foreground/80 outline-none transition-colors duration-[120ms] group-hover/recent-more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/recent-more:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               // Reserved unconditionally (not just while hovered) so revealing
               // the reset icon never reflows the label under the cursor.
               showMore && row.canReset ? "pr-[1.75rem]" : "pr-[0.25rem]"
@@ -3461,7 +3461,7 @@ export function SidebarConversationList({
       // this placeholder; the content is lifted (relative) above the z-0 rails.
       return (
         <div
-          className="relative py-[0.375rem] text-[0.75rem] text-muted-foreground/70"
+          className="relative py-[0.375rem] text-xs text-muted-foreground/70"
           style={{
             paddingLeft: `calc(0.875rem + ${row.depth} * ${CONV_RAIL_DEPTH_STEP} + 0.875rem)`,
           }}
@@ -3631,7 +3631,7 @@ export function SidebarConversationList({
                             className={cn(
                               "flex h-[2rem] items-center rounded-md",
                               "border border-dashed border-sidebar-border",
-                              "px-[0.75rem] text-[0.75rem] text-muted-foreground/80"
+                              "px-[0.75rem] text-xs text-muted-foreground/80"
                             )}
                           >
                             <span className="truncate">

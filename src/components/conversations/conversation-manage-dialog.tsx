@@ -405,7 +405,7 @@ function BranchFilterSelect({
           // Looks only — the caller owns the metrics, so this trigger sizes
           // with the rest of the facet row.
           className={cn(
-            "justify-between gap-1.5 rounded-4xl border-input bg-input/30 px-3 font-normal hover:bg-input/50 dark:hover:bg-input/50",
+            "justify-between gap-1.5 rounded-lg border-input bg-input/30 px-3 font-normal hover:bg-input/50 dark:hover:bg-input/50",
             className
           )}
         >

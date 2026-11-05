@@ -917,8 +917,8 @@ describe("SidebarConversationCard — assistant sub-sessions", () => {
 })
 
 describe("SidebarConversationCard selected row", () => {
-  // 选中态标题用主题 accent 色（`text-primary`），而不是继承默认前景色。
-  const ACCENT_TITLE = /(^|\s)text-primary(\s|$)/
+  // 选中态标题用主题 accent 文字色（`text-primary-text`，规范 §2.2，保证在 primary-soft 底上对比度），而不是继承默认前景色。
+  const ACCENT_TITLE = /(^|\s)text-primary-text(\s|$)/
 
   function renderRow(isSelected: boolean) {
     return renderWithIntl(
