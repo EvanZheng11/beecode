@@ -428,7 +428,7 @@ function NoticeAction({
   return (
     <button
       type="button"
-      className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/8"
+      className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium text-primary-text hover:bg-primary/8"
       onClick={onClick}
     >
       {label}

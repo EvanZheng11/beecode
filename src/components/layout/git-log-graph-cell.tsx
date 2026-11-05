@@ -175,7 +175,7 @@ export function GitLogRefBadges({ refs }: { refs: readonly GitLogRef[] }) {
                   ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
                   : ref.kind === "remote"
                     ? "border-border bg-muted text-muted-foreground"
-                    : "border-primary/40 bg-primary/10 text-primary"
+                    : "border-primary/40 bg-primary-soft text-primary-text"
             )}
           >
             <Icon className="size-2.5 shrink-0" aria-hidden />
