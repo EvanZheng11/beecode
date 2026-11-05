@@ -137,9 +137,7 @@ function SharedRow({
             size="xs"
             variant="ghost"
             aria-label={t("level.change")}
-            className={cn(
-              level === "control" && "text-red-600 dark:text-red-400"
-            )}
+            className={cn(level === "control" && "text-tone-danger")}
           >
             {t(`level.${level === "control" ? "control" : "read"}`)}
             <ChevronDown className="size-3" />
@@ -338,7 +336,7 @@ function ComputerPopover() {
           )}
 
           {codegLeaks && (
-            <div className="flex gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-2xs text-amber-600 dark:text-amber-400">
+            <div className="flex gap-1.5 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2 py-1.5 text-2xs text-tone-warning">
               <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
               <span>{t("codegGranted")}</span>
             </div>
@@ -350,10 +348,7 @@ function ComputerPopover() {
               {" · "}
               {t("driver", { version: liveBackend.driverVersion })}
               {development && (
-                <span
-                  className="text-amber-600 dark:text-amber-400"
-                  title={t("devBuild")}
-                >
+                <span className="text-tone-warning" title={t("devBuild")}>
                   {" · "}
                   {t("devTag")}
                 </span>
@@ -375,9 +370,9 @@ function ComputerPopover() {
                   className="flex items-center gap-2 px-2 py-1.5"
                 >
                   {granted ? (
-                    <CircleCheck className="size-3.5 shrink-0 text-emerald-500" />
+                    <CircleCheck className="size-3.5 shrink-0 text-tone-success" />
                   ) : (
-                    <CircleAlert className="size-3.5 shrink-0 text-amber-500" />
+                    <CircleAlert className="size-3.5 shrink-0 text-tone-warning" />
                   )}
                   <span className="min-w-0 flex-1 truncate text-2xs font-medium">
                     {t(`permissions.${permission}`)}
@@ -494,10 +489,10 @@ function ComputerPopover() {
                     <span
                       className={cn(
                         line.outcome === "done"
-                          ? "text-emerald-600 dark:text-emerald-400"
+                          ? "text-tone-success"
                           : line.outcome === "refused"
-                            ? "text-amber-600 dark:text-amber-400"
-                            : "text-red-500"
+                            ? "text-tone-warning"
+                            : "text-tone-danger"
                       )}
                     >
                       {t(`activity.outcome.${line.outcome}`)}
@@ -509,7 +504,7 @@ function ComputerPopover() {
           )}
 
           {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2 py-1.5 text-2xs break-words text-red-500">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2 py-1.5 text-2xs break-words text-tone-danger">
               {error}
             </div>
           )}

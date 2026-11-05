@@ -240,11 +240,11 @@ export function SettingsShell({ children }: SettingsShellProps) {
 
   const navContent = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-2 pb-2 text-2xs font-medium text-muted-foreground">
+      <div className="px-3 pb-1.5 text-2xs font-medium text-muted-foreground">
         {t("preferences")}
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <nav className="space-y-1">
+        <nav className="space-y-0.5">
           {filteredNavItems.map((item) => {
             const Icon = item.icon
             const translationKey = `nav.${item.labelKey}` as const
@@ -256,13 +256,19 @@ export function SettingsShell({ children }: SettingsShellProps) {
                 key={item.href}
                 variant={active ? "secondary" : "ghost"}
                 size="sm"
-                className={cn("w-full justify-start px-2")}
+                className={cn(
+                  "h-9 w-full justify-start rounded-lg px-3 text-ui font-medium",
+                  // apple 预设：主导航激活项实心主色 + 主色前景 + 主色投影（规范 §9）；
+                  // 其他预设沿用 secondary 灰底，避免旧主题前景对比度不足。
+                  active &&
+                    "in-data-[theme=apple]:bg-primary in-data-[theme=apple]:text-primary-foreground in-data-[theme=apple]:shadow-[0_2px_8px_color-mix(in_oklab,var(--primary)_28%,transparent)] in-data-[theme=apple]:hover:bg-primary/90"
+                )}
                 type="button"
                 onClick={() => navigateTo(item.href)}
                 aria-current={active ? "page" : undefined}
               >
-                <span className="inline-flex items-center gap-1">
-                  <Icon className="h-3.5 w-3.5" />
+                <span className="inline-flex items-center gap-2.5">
+                  <Icon className="size-4" />
                   {t(translationKey)}
                 </span>
               </Button>
@@ -274,7 +280,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
   )
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground">
+    <div className="app-backdrop flex h-screen flex-col overflow-hidden text-foreground">
       <AppTitleBar
         left={
           isMobile ? (
@@ -289,14 +295,16 @@ export function SettingsShell({ children }: SettingsShellProps) {
           ) : undefined
         }
         center={
-          <div className="text-sm font-bold tracking-tight">{t("title")}</div>
+          <div className="text-ui font-semibold tracking-tight">
+            {t("title")}
+          </div>
         }
       />
 
       <div className="flex-1 min-h-0 flex">
         {/* Desktop sidebar */}
         {!isMobile && (
-          <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r px-2 py-3">
+          <aside className="flex min-h-0 w-60 shrink-0 flex-col border-e border-sidebar-border bg-sidebar/70 px-3 py-4">
             {navContent}
           </aside>
         )}

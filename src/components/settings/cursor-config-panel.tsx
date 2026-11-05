@@ -704,9 +704,9 @@ export function CursorConfigPanel({
             <span
               className={cn(
                 "inline-flex h-2 w-2 rounded-full",
-                authState === "ok" && "bg-emerald-500",
-                authState === "stale" && "bg-amber-500",
-                authState === "unauthenticated" && "bg-amber-500",
+                authState === "ok" && "bg-tone-success",
+                authState === "stale" && "bg-tone-warning",
+                authState === "unauthenticated" && "bg-tone-warning",
                 authState === "missing" && "bg-muted-foreground/40",
                 authState === "loading" &&
                   "bg-muted-foreground/40 animate-pulse"
@@ -724,7 +724,7 @@ export function CursorConfigPanel({
                       : t("cursor.authNotLoggedIn")}
             </span>
             {authState === "ok" && auth?.membership ? (
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-3xs text-emerald-600 dark:text-emerald-400">
+              <span className="rounded bg-tone-success/10 px-1.5 py-0.5 text-3xs text-tone-success">
                 {auth.membership}
               </span>
             ) : null}
@@ -750,7 +750,7 @@ export function CursorConfigPanel({
             rejected key is replaced in the field below — so the text is not
             shared. */}
         {authState === "stale" ? (
-          <p className="text-2xs text-amber-600 dark:text-amber-500">
+          <p className="text-2xs text-tone-warning">
             {t(
               mode === "custom"
                 ? "cursor.authUnverifiedHintApiKey"
@@ -778,7 +778,7 @@ export function CursorConfigPanel({
                 variant="ghost"
               >
                 {copied ? (
-                  <Check className="h-3 w-3 text-emerald-500" />
+                  <Check className="h-3 w-3 text-tone-success" />
                 ) : (
                   <Copy className="h-3 w-3" />
                 )}

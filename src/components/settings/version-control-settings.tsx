@@ -19,6 +19,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   AlertDialog,
@@ -449,16 +450,14 @@ export function VersionControlSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+        />
 
         {/* ---- Git Configuration ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("gitTitle")}</h2>
@@ -469,15 +468,15 @@ export function VersionControlSettings() {
               <div className="flex items-center gap-2">
                 {gitInfo?.installed ? (
                   <>
-                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                    <span className="text-green-600 dark:text-green-400 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-tone-success" />
+                    <span className="text-tone-success font-medium">
                       {t("gitDetected")}
                     </span>
                   </>
                 ) : (
                   <>
-                    <XCircle className="h-3.5 w-3.5 text-red-500" />
-                    <span className="text-red-600 dark:text-red-400 font-medium">
+                    <XCircle className="h-3.5 w-3.5 text-tone-danger" />
+                    <span className="text-tone-danger font-medium">
                       {t("gitNotFound")}
                     </span>
                   </>
@@ -543,7 +542,7 @@ export function VersionControlSettings() {
         </section>
 
         {/* ---- GitHub Accounts ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Github className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("githubTitle")}</h2>
@@ -581,7 +580,7 @@ export function VersionControlSettings() {
         </section>
 
         {/* ---- GitLab Accounts ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Gitlab className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("gitlabTitle")}</h2>
@@ -619,7 +618,7 @@ export function VersionControlSettings() {
         </section>
 
         {/* ---- Gitea Accounts ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <GitFork className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("giteaTitle")}</h2>
@@ -657,7 +656,7 @@ export function VersionControlSettings() {
         </section>
 
         {/* ---- CNB Accounts ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Cloud className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">{t("cnbTitle")}</h2>
@@ -695,7 +694,7 @@ export function VersionControlSettings() {
         </section>
 
         {/* ---- Git Accounts (non-forge) ---- */}
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center gap-2">
             <Globe className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold">

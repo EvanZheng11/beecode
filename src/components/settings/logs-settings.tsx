@@ -27,6 +27,7 @@ import { Virtualizer } from "virtua"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -150,11 +151,11 @@ function matchesFilter(
 function levelBadgeClasses(level: string): string {
   switch (level.toUpperCase()) {
     case "ERROR":
-      return "text-red-400"
+      return "text-tone-danger"
     case "WARN":
-      return "text-amber-400"
+      return "text-tone-warning"
     case "INFO":
-      return "text-sky-400"
+      return "text-tone-info"
     case "DEBUG":
       return "text-muted-foreground"
     default:
@@ -656,22 +657,20 @@ export function LogsSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+        />
 
         {loadError && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+          <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
             {loadError}
           </div>
         )}
 
         {/* Capture level */}
-        <section className="space-y-3 rounded-xl border bg-card p-4">
+        <section className="space-y-3 surface-glass rounded-2xl p-5">
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">{t("captureTitle")}</h2>
             <p className="text-xs leading-5 text-muted-foreground">
@@ -706,7 +705,9 @@ export function LogsSettings() {
             )}
           </div>
           {envLocked && (
-            <p className="text-2xs text-amber-500">{t("captureEnvLocked")}</p>
+            <p className="text-2xs text-tone-warning">
+              {t("captureEnvLocked")}
+            </p>
           )}
 
           {/* Per-module overrides */}
@@ -745,7 +746,7 @@ export function LogsSettings() {
                         list="codeg-log-targets"
                         disabled={envLocked}
                         className={`h-8 flex-1 text-xs ${
-                          invalid ? "border-red-500/60" : ""
+                          invalid ? "border-tone-danger/60" : ""
                         }`}
                       />
                       <Select
@@ -794,7 +795,7 @@ export function LogsSettings() {
         </section>
 
         {/* Viewer */}
-        <section className="space-y-3 rounded-xl border bg-card p-4">
+        <section className="space-y-3 surface-glass rounded-2xl p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="space-y-1">
               <h2 className="text-sm font-semibold">{t("viewerTitle")}</h2>
@@ -910,7 +911,7 @@ export function LogsSettings() {
 
         {/* On-disk files (web mode: download for history beyond the buffer) */}
         {!desktop && (
-          <section className="space-y-3 rounded-xl border bg-card p-4">
+          <section className="space-y-3 surface-glass rounded-2xl p-5">
             <div className="space-y-1">
               <h2 className="text-sm font-semibold">{t("filesTitle")}</h2>
               <p className="text-xs leading-5 text-muted-foreground">

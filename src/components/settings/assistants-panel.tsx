@@ -370,7 +370,10 @@ export function AssistantsPanel({
           tone="muted"
           // The same amber dot the tab strip marks those tabs with.
           icon={
-            <span className="size-1.5 rounded-full bg-amber-500" aria-hidden />
+            <span
+              className="size-1.5 rounded-full bg-tone-warning"
+              aria-hidden
+            />
           }
           action={
             onShowUnsaved ? (
@@ -669,7 +672,7 @@ function AssistantRow({
             {agentProblem ? (
               <Badge
                 variant="outline"
-                className="h-4 gap-0.5 border-amber-500/40 bg-amber-500/10 px-1.5 text-[0.625rem] text-amber-700 dark:text-amber-400"
+                className="h-4 gap-0.5 border-tone-warning/40 bg-tone-warning/10 px-1.5 text-[0.625rem] text-tone-warning"
               >
                 <AlertTriangle aria-hidden />
                 {agentProblem}

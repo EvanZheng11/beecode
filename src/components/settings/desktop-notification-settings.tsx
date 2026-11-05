@@ -302,7 +302,7 @@ export function DesktopNotificationSettingsSection() {
                   className={cn(
                     "block max-w-[11rem] truncate rounded-md border px-2 py-0.5 font-mono text-xs",
                     identity.degraded
-                      ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                      ? "border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
                       : "border-border/70 bg-background text-muted-foreground"
                   )}
                 >

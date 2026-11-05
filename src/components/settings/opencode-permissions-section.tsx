@@ -57,7 +57,7 @@ const FINE_GRAINED = new Map(
 
 function actionTone(action: OpenCodePermissionAction | null): string {
   if (action === "deny") return "text-destructive"
-  if (action === "ask") return "text-amber-500"
+  if (action === "ask") return "text-tone-warning"
   return ""
 }
 
@@ -285,18 +285,18 @@ export function OpenCodePermissionsSection({
       </div>
 
       {!editable && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+        <p className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
           {t("openCode.permissions.unparsableConfig")}
         </p>
       )}
       {editable && view.invalid && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+        <p className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
           {t("openCode.permissions.invalidBlock")}
         </p>
       )}
       {editable && !view.invalid && view.orderingUnsafe && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-2xs text-amber-500">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5">
+          <p className="min-w-0 flex-1 text-2xs text-tone-warning">
             {view.orderingFixable
               ? t("openCode.permissions.orderingUnsafe")
               : t("openCode.permissions.orderingUnsafeManual")}{" "}
@@ -318,7 +318,7 @@ export function OpenCodePermissionsSection({
         </div>
       )}
       {editable && view.agentOverrides.length > 0 && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+        <p className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
           {t("openCode.permissions.agentOverrides", {
             agents: view.agentOverrides.join(", "),
           })}

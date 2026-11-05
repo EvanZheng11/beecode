@@ -158,7 +158,7 @@ export function GenerativeUiBody({
   return (
     <div className="flex flex-col h-full min-h-0">
       {loadError && (
-        <div className="mb-3 shrink-0 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+        <div className="mb-3 shrink-0 rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
           {loadError}
         </div>
       )}
@@ -166,7 +166,7 @@ export function GenerativeUiBody({
       {skill?.conflict && (
         <SettingNote
           icon={TriangleAlert}
-          className="mb-3 shrink-0 border-amber-500/40 bg-amber-500/5"
+          className="mb-3 shrink-0 border-tone-warning/40 bg-tone-warning/5"
         >
           {t("conflict")}
         </SettingNote>

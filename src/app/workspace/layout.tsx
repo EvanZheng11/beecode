@@ -1401,7 +1401,7 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   const fillStyle = FILL_MODE_STYLE[workspaceBgFillMode]
 
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
+    <div className="app-backdrop fixed inset-0 flex flex-col overflow-hidden text-foreground pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
       {/* 用户背景图片：铺在整个工作区底层。根 div 是 fixed，已建立层叠上下文，故
           -z-10 绘于自身 bg-background 之上、所有流内容之下。遮罩是朝 --background 的
           面纱（明暗自适配），保证内容可读；结构性面板的半透明由 globals.css 的

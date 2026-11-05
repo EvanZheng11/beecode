@@ -140,9 +140,9 @@ function Trend({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
+    <div className="surface-glass min-w-0 rounded-2xl p-4">
       <dt className="truncate text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate text-lg font-semibold tabular-nums">
+      <dd className="mt-1 truncate text-2xl font-semibold tabular-nums">
         {value}
       </dd>
     </div>
@@ -167,7 +167,7 @@ export function ResourceMonitorView({
   const showData = enabled && snapshot !== null
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-[80rem] flex-col gap-4">
       <SettingsSection
         icon={Activity}
         title={t("title")}
@@ -260,7 +260,7 @@ export function ResourceMonitorView({
           {snapshot.warnings.length > 0 ? (
             <div
               role="status"
-              className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+              className="rounded-xl border border-tone-warning/40 bg-tone-warning/10 p-3 text-sm"
             >
               <p className="font-medium">{t("warnings")}</p>
               <ul className="mt-1 list-disc space-y-0.5 pl-5 break-words">
@@ -277,14 +277,14 @@ export function ResourceMonitorView({
               values={history.map((p) => p.cpuPercent)}
               current={pct(snapshot.totalCpuPercent)}
               min={100}
-              tone="text-sky-500"
+              tone="text-tone-info"
             />
             <Trend
               title={t("memoryTrend")}
               values={history.map((p) => p.memoryBytes)}
               current={formatBytes(snapshot.totalMemoryBytes)}
               min={1}
-              tone="text-emerald-500"
+              tone="text-tone-success"
             />
           </div>
 

@@ -527,7 +527,7 @@ function HeadlessSignIn({
       ) : (
         <div className="space-y-1.5">
           {needsSave ? (
-            <p className="text-3xs text-amber-600 dark:text-amber-400">
+            <p className="text-3xs text-tone-warning">
               {t("antigravity.headless.saveFirst")}
             </p>
           ) : null}
@@ -549,15 +549,15 @@ function HeadlessSignIn({
         <div
           className={
             outcome.signedIn
-              ? "space-y-1 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2"
-              : "space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
+              ? "space-y-1 rounded-md border border-tone-success/40 bg-tone-success/5 p-2"
+              : "space-y-1 rounded-md border border-tone-warning/40 bg-tone-warning/5 p-2"
           }
         >
           <p
             className={
               outcome.signedIn
-                ? "text-2xs text-emerald-600 dark:text-emerald-400"
-                : "text-2xs text-amber-600 dark:text-amber-400"
+                ? "text-2xs text-tone-success"
+                : "text-2xs text-tone-warning"
             }
           >
             {outcome.signedIn
@@ -1262,7 +1262,7 @@ export function AntigravityConfigPanel({
         ) : null}
 
         {incomplete ? (
-          <p className="text-2xs text-amber-600 dark:text-amber-400">
+          <p className="text-2xs text-tone-warning">
             {t(`antigravity.${incomplete}`)}
           </p>
         ) : null}
@@ -1294,8 +1294,8 @@ export function AntigravityConfigPanel({
             authenticate with. Names the file and the reason, because the fix
             is to edit that file by hand — codeg will not touch it again. */}
         {syncSkip ? (
-          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
-            <p className="text-2xs text-amber-600 dark:text-amber-400">
+          <div className="space-y-1 rounded-md border border-tone-warning/40 bg-tone-warning/5 p-2">
+            <p className="text-2xs text-tone-warning">
               {t("antigravity.syncSkipped")}
             </p>
             {syncSkip.reason ? (

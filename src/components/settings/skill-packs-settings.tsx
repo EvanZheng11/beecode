@@ -7,6 +7,7 @@ import { FolderOpen, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ExpertsBody } from "@/components/settings/experts-settings"
 import { ScienceBody } from "@/components/settings/science-settings"
@@ -98,11 +99,12 @@ export function SkillPacksSettings() {
   }, [t])
 
   return (
-    <div className="h-full flex flex-col p-3 md:p-4">
-      <div className="shrink-0 pb-4">
-        <h2 className="text-base font-semibold">{t("title")}</h2>
-        <p className="text-xs text-muted-foreground mt-1">{t("description")}</p>
-      </div>
+    <div className="mx-auto flex h-full w-full max-w-[80rem] flex-col p-4 md:p-6">
+      <PageHeader
+        title={t("title")}
+        description={t("description")}
+        className="mb-4 shrink-0"
+      />
 
       <Tabs
         value={tab}

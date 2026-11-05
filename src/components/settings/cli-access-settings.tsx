@@ -79,7 +79,7 @@ export function CliAccessSettings() {
       }
     >
       {status.enabled && status.error && (
-        <p className="text-2xs text-amber-500">
+        <p className="text-2xs text-tone-warning">
           {t("cliAccessUnavailable", { message: status.error })}
         </p>
       )}
@@ -169,7 +169,7 @@ export function CliToolInstall() {
         </div>
       )}
       {tool.conflict && (
-        <p className="text-2xs text-amber-500">
+        <p className="text-2xs text-tone-warning">
           {t("cliToolConflict", { message: tool.conflict })}
         </p>
       )}

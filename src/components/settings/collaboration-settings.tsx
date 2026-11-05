@@ -22,6 +22,7 @@
 
 import { useTranslations } from "next-intl"
 
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
@@ -31,13 +32,11 @@ export function CollaborationSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+        />
 
         <DelegationSettingsSection />
 

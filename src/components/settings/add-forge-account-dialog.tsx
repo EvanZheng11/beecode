@@ -288,7 +288,7 @@ export function AddForgeAccountDialog({
           </div>
 
           {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
               {error}
             </div>
           )}

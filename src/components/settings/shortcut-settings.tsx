@@ -18,10 +18,13 @@ import {
   shortcutsConflict,
 } from "@/lib/keyboard-shortcuts"
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 export function ShortcutSettings() {
   const t = useTranslations("ShortcutSettings")
+  // 页头复用设置壳已有的导航文案，避免新增 i18n 键
+  const tNav = useTranslations("SettingsShell")
   const { shortcuts, updateShortcut, resetShortcuts } = useShortcutSettings()
   const isMac = useIsMac()
   const [recordingAction, setRecordingAction] =
@@ -99,8 +102,9 @@ export function ShortcutSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="rounded-xl border bg-card p-4 space-y-4">
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader title={tNav("nav.shortcuts")} />
+        <section className="surface-glass rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Keyboard className="h-4 w-4 text-muted-foreground" />

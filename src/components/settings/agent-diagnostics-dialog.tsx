@@ -37,23 +37,23 @@ export interface AgentDiagnosticsDialogProps {
 }
 
 const LEVEL_DOT: Record<DiagLevel, string> = {
-  ok: "bg-emerald-500",
-  warn: "bg-amber-500",
-  fail: "bg-red-500",
+  ok: "bg-tone-success",
+  warn: "bg-tone-warning",
+  fail: "bg-tone-danger",
   info: "bg-muted-foreground/40",
 }
 
 const LEVEL_TEXT: Record<DiagLevel, string> = {
-  ok: "text-emerald-500",
-  warn: "text-amber-500",
-  fail: "text-red-500",
+  ok: "text-tone-success",
+  warn: "text-tone-warning",
+  fail: "text-tone-danger",
   info: "text-muted-foreground",
 }
 
 const VERDICT_BANNER: Record<DiagLevel, string> = {
-  ok: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  warn: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  fail: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+  ok: "border-tone-success/30 bg-tone-success/10 text-tone-success",
+  warn: "border-tone-warning/30 bg-tone-warning/10 text-tone-warning",
+  fail: "border-tone-danger/30 bg-tone-danger/10 text-tone-danger",
   info: "border-border bg-muted/40 text-foreground",
 }
 
@@ -171,7 +171,7 @@ export function AgentDiagnosticsDialog({
           )}
 
           {!loading && error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/10 p-3 text-sm text-tone-danger">
               {t("error")}: {error}
             </div>
           )}

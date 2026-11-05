@@ -27,7 +27,7 @@ export function WorkspaceDegradedBanner({
 
   return (
     <div
-      className="flex items-start gap-2 px-2 py-1.5 text-2xs text-amber-700 dark:text-amber-400 bg-amber-100/60 dark:bg-amber-900/20 border-b border-amber-300/50 dark:border-amber-800/50"
+      className="flex items-start gap-2 px-2 py-1.5 text-2xs text-tone-warning bg-tone-warning/10 border-b border-tone-warning/30"
       role="status"
       aria-live="polite"
       title={t("degradedHint")}
@@ -41,7 +41,7 @@ export function WorkspaceDegradedBanner({
         <Button
           variant="ghost"
           size="xs"
-          className="h-5 px-1.5 -my-0.5 shrink-0 text-amber-700 dark:text-amber-400 hover:bg-amber-200/60 dark:hover:bg-amber-900/40"
+          className="h-5 px-1.5 -my-0.5 shrink-0 text-tone-warning hover:bg-tone-warning/20"
           onClick={() => {
             void handleRetry()
           }}

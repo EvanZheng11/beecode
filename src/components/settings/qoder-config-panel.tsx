@@ -288,8 +288,8 @@ export function QoderConfigPanel({
             <span
               className={cn(
                 "inline-flex h-2 w-2 rounded-full",
-                authState === "ok" && "bg-emerald-500",
-                authState === "loggedOut" && "bg-amber-500",
+                authState === "ok" && "bg-tone-success",
+                authState === "loggedOut" && "bg-tone-warning",
                 authState === "error" && "bg-destructive",
                 authState === "missing" && "bg-muted-foreground/40",
                 authState === "loading" &&
@@ -310,7 +310,7 @@ export function QoderConfigPanel({
                       : t("qoder.authNotLoggedIn")}
             </span>
             {authState === "ok" && auth?.user_type ? (
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-3xs text-emerald-600 dark:text-emerald-400">
+              <span className="rounded bg-tone-success/10 px-1.5 py-0.5 text-3xs text-tone-success">
                 {auth.user_type}
               </span>
             ) : null}
@@ -355,7 +355,7 @@ export function QoderConfigPanel({
                 variant="ghost"
               >
                 {copied ? (
-                  <Check className="h-3 w-3 text-emerald-500" />
+                  <Check className="h-3 w-3 text-tone-success" />
                 ) : (
                   <Copy className="h-3 w-3" />
                 )}

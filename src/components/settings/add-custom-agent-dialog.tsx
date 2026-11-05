@@ -536,7 +536,7 @@ export function AddCustomAgentDialog({
             )}
 
             {catalogError && !loadingCatalog && (
-              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+              <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                   <span className="min-w-0 break-all">{catalogError}</span>
@@ -597,7 +597,7 @@ export function AddCustomAgentDialog({
                           {entry.description}
                         </p>
                         {!entry.supportedOnPlatform && (
-                          <p className="text-2xs text-amber-500 mt-1">
+                          <p className="text-2xs text-tone-warning mt-1">
                             {t("customAgentUnsupportedPlatform")}
                           </p>
                         )}

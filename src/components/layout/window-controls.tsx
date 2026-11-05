@@ -103,6 +103,8 @@ export function WindowControls() {
       >
         {isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
       </button>
+      {/* 例外（P6 清理清单）：Windows 原生关闭按钮红 #e81123 / #c50f1f 是系统规范色，
+          不随主题预设变化，保留字面量。 */}
       <button
         type="button"
         className={cn(

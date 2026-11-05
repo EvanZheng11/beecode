@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { QRCodeSVG } from "qrcode.react"
 import { useTranslations } from "next-intl"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -111,7 +112,7 @@ function AddressBar({
             </SelectContent>
           </Select>
         ) : (
-          <div className="flex h-9 min-w-0 flex-1 items-center rounded-4xl border border-input bg-input/30 px-3">
+          <div className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-input bg-input/30 px-3">
             <code className="truncate text-sm select-all">{address}</code>
           </div>
         )}
@@ -123,7 +124,7 @@ function AddressBar({
           title={t("copy")}
         >
           {copied ? (
-            <Check className="h-4 w-4 text-green-500" />
+            <Check className="h-4 w-4 text-tone-success" />
           ) : (
             <Copy className="h-4 w-4" />
           )}
@@ -173,6 +174,7 @@ function AddressQrcodeDialog({
           <DialogTitle>{t("qrcodeTitle")}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col items-center gap-4 py-2">
+          {/* 例外：二维码必须白底深码才能被扫描，明暗主题下都不能换成主题令牌。 */}
           <div className="rounded-lg bg-white p-3">
             <QRCodeSVG value={address} size={208} marginSize={0} />
           </div>
@@ -266,7 +268,7 @@ function TokenEditor({
             title={t("copy")}
           >
             {copied ? (
-              <Check className="h-3.5 w-3.5 text-green-500" />
+              <Check className="h-3.5 w-3.5 text-tone-success" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
@@ -478,20 +480,19 @@ export function WebServiceSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="space-y-6 p-3 md:p-4">
-        <div>
-          <h3 className="text-lg font-medium">{t("sectionTitle")}</h3>
-          <p className="text-sm text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </div>
+      <div className="mx-auto w-full max-w-[80rem] space-y-6 p-4 md:p-6">
+        <PageHeader
+          title={t("sectionTitle")}
+          description={t("sectionDescription")}
+          className="mb-0"
+        />
 
         <div className="space-y-4">
           {showStaleBanner && (
-            <div className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="flex items-start gap-3 rounded-md border border-tone-warning/40 bg-tone-warning/10 p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-tone-warning" />
               <div className="space-y-1 text-sm">
-                <div className="font-medium text-amber-700 dark:text-amber-300">
+                <div className="font-medium text-tone-warning">
                   {portProbe?.state === "occupied"
                     ? t("stalePortOccupiedTitle", { port: portProbe.port })
                     : t("stalePortUnknownTitle", {
@@ -555,7 +556,7 @@ export function WebServiceSettings() {
             <div className="flex items-center gap-3">
               <span
                 className={`inline-block h-2 w-2 rounded-full ${
-                  isRunning ? "bg-green-500" : "bg-muted-foreground/30"
+                  isRunning ? "bg-tone-success" : "bg-muted-foreground/30"
                 }`}
               />
               <span className="text-sm">

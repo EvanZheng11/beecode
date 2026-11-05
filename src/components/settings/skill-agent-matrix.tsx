@@ -687,7 +687,7 @@ export function SkillAgentMatrix({
                                 className={cn(
                                   "h-5 px-1.5 text-3xs shrink-0",
                                   skill.badge.tone === "amber"
-                                    ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                    ? "border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
                                     : "text-muted-foreground"
                                 )}
                               >
@@ -1056,11 +1056,11 @@ function MatrixCell({
             enabled
               ? "border-primary bg-primary text-primary-foreground"
               : broken
-                ? "border-amber-500/50 text-amber-600 dark:text-amber-400"
+                ? "border-tone-warning/50 text-tone-warning"
                 : blocked || !ready
                   ? "border-dashed border-border/70 text-muted-foreground/60"
                   : "border-border hover:bg-muted/60",
-            status?.copyMode && enabled && "ring-1 ring-amber-400",
+            status?.copyMode && enabled && "ring-1 ring-tone-warning",
             notInteractive && !enabled && "cursor-not-allowed opacity-60"
           )}
         >

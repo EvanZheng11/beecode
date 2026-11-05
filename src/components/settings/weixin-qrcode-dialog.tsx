@@ -156,7 +156,7 @@ function WeixinQrcodeContent({
             {t("weixinWaitingScan")}
           </p>
           {pollErrors >= POLL_ERROR_WARN_THRESHOLD && (
-            <div className="flex items-center gap-1.5 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-1.5 text-xs text-yellow-500">
+            <div className="flex items-center gap-1.5 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-1.5 text-xs text-tone-warning">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
               {t("weixinPollError")}
             </div>
@@ -179,7 +179,7 @@ function WeixinQrcodeContent({
       )}
 
       {error && (
-        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+        <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
           {error}
         </div>
       )}

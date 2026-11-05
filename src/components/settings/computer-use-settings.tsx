@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
+import { PageHeader } from "@/components/ui/page-header"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import { useIsMac } from "@/hooks/use-is-mac"
@@ -94,13 +95,8 @@ export function ComputerUseSettings() {
 
   return (
     <ScrollArea className="h-full">
-      <div className="w-full space-y-4 p-3 md:p-4">
-        <section className="space-y-1">
-          <h1 className="text-sm font-semibold">{t("pageTitle")}</h1>
-          <p className="text-xs text-muted-foreground">
-            {t("pageDescription")}
-          </p>
-        </section>
+      <div className="mx-auto w-full max-w-[80rem] space-y-5 p-4 md:p-6">
+        <PageHeader title={t("pageTitle")} description={t("pageDescription")} />
 
         <SettingsSection
           icon={Monitor}
@@ -388,7 +384,7 @@ function MacPermissions({ enabled }: { enabled: boolean }) {
         </>
       )}
       {codegHoldsPermission(status) && (
-        <div className="flex gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-5 text-amber-600 dark:text-amber-400">
+        <div className="flex gap-2 rounded-xl border border-tone-warning/30 bg-tone-warning/5 p-3 text-xs leading-5 text-tone-warning">
           <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
           <span>{t("codegGranted")}</span>
         </div>

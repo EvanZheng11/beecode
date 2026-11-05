@@ -249,7 +249,7 @@ export function OpenCodeConnectDialog({
 
         <div className="space-y-3">
           {integrationsError && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+            <div className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
               {integrationsError}
             </div>
           )}
@@ -336,7 +336,7 @@ export function OpenCodeConnectDialog({
               </div>
 
               {integration && !keyMethod && (
-                <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+                <p className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
                   {t("openCode.connect.noKeyMethod")}
                 </p>
               )}
@@ -385,7 +385,7 @@ export function OpenCodeConnectDialog({
           )}
 
           {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
+            <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2.5 py-1.5 text-2xs text-tone-danger">
               {error}
             </div>
           )}
@@ -606,10 +606,10 @@ export function OpenCodeCustomProviderDialog({
               value={customId}
               onChange={(e) => setCustomId(e.target.value)}
               placeholder="my-provider"
-              className={cn(customIdError && "border-red-500/60")}
+              className={cn(customIdError && "border-tone-danger/60")}
             />
             {customIdError && (
-              <p className="text-3xs text-red-400">{customIdError}</p>
+              <p className="text-3xs text-tone-danger">{customIdError}</p>
             )}
           </div>
           <div className="space-y-1.5">
@@ -687,7 +687,7 @@ export function OpenCodeCustomProviderDialog({
         </div>
 
         {error && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
+          <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2.5 py-1.5 text-2xs text-tone-danger">
             {error}
           </div>
         )}

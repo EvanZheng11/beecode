@@ -27,6 +27,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import { PageHeader } from "@/components/ui/page-header"
 import { Button } from "@/components/ui/button"
 import {
   ContextMenu,
@@ -740,18 +741,15 @@ export function SkillsSettings() {
   }
 
   return (
-    <div className="h-full flex flex-col p-3 md:p-4">
-      <div className="flex items-center justify-between gap-3 pb-4">
-        <div>
-          <h2 className="text-base font-semibold">{t("title")}</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            {t("description")}
-          </p>
-        </div>
-      </div>
+    <div className="mx-auto flex h-full w-full max-w-[80rem] flex-col p-4 md:p-6">
+      <PageHeader
+        title={t("title")}
+        description={t("description")}
+        className="mb-4 shrink-0"
+      />
 
       {loadingError && (
-        <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+        <div className="mb-3 rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
           {loadingError}
         </div>
       )}
@@ -898,7 +896,7 @@ export function SkillsSettings() {
                   )}
 
                   {!skillsLoading && skillsError && (
-                    <div className="text-xs text-red-400 rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-2">
+                    <div className="text-xs text-tone-danger rounded-md border border-tone-danger/30 bg-tone-danger/5 px-2.5 py-2">
                       {skillsError}
                     </div>
                   )}
@@ -951,7 +949,7 @@ export function SkillsSettings() {
                                 </span>
                                 <Badge
                                   variant="outline"
-                                  className="h-6 px-2 inline-flex items-center gap-1 text-xs leading-none shrink-0 border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                                  className="h-6 px-2 inline-flex items-center gap-1 text-xs leading-none shrink-0 border-tone-info/40 bg-tone-info/10 text-tone-info"
                                 >
                                   {skill.scope}
                                 </Badge>
@@ -959,7 +957,7 @@ export function SkillsSettings() {
                                   <Badge
                                     variant="outline"
                                     title={t("systemHint")}
-                                    className="h-6 px-2 inline-flex items-center gap-1 text-xs leading-none shrink-0 border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                    className="h-6 px-2 inline-flex items-center gap-1 text-xs leading-none shrink-0 border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
                                   >
                                     {t("systemBadge")}
                                   </Badge>
@@ -1085,7 +1083,7 @@ export function SkillsSettings() {
                             <Badge
                               variant="outline"
                               title={t("systemHint")}
-                              className="h-5 px-1.5 text-3xs leading-none shrink-0 border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              className="h-5 px-1.5 text-3xs leading-none shrink-0 border-tone-warning/40 bg-tone-warning/10 text-tone-warning"
                             >
                               {t("systemBadge")}
                             </Badge>

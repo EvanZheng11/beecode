@@ -172,14 +172,14 @@ export function OpenCodeBehaviorSection({
       </div>
 
       {!editable && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+        <p className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5 text-2xs text-tone-warning">
           {t("openCode.permissions.unparsableConfig")}
         </p>
       )}
 
       {editable && view.ignoredLegacyKeys.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-2xs text-amber-500">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-2.5 py-1.5">
+          <p className="min-w-0 flex-1 text-2xs text-tone-warning">
             {t("openCode.behavior.ignoredLegacyKeys", {
               keys: view.ignoredLegacyKeys.join(", "),
             })}

@@ -1026,7 +1026,7 @@ export function McpSettings() {
                         <div className="text-xs font-medium">
                           {field.label}
                           {field.required ? (
-                            <span className="text-red-500 ml-1">*</span>
+                            <span className="text-tone-danger ml-1">*</span>
                           ) : null}
                           {field.location ? (
                             <span className="text-muted-foreground ml-2">
@@ -1139,7 +1139,7 @@ export function McpSettings() {
                 </label>
               ))}
               {installOpencodeSse ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("errors.opencodeSseUnsupported")}
                 </div>
               ) : null}
@@ -1175,8 +1175,8 @@ export function McpSettings() {
         </DialogContent>
       </Dialog>
 
-      <div className="h-full min-h-0 grid grid-cols-1 gap-4 p-3 md:p-4 lg:grid-cols-[22.5rem_1fr]">
-        <section className="min-h-0 rounded-xl border bg-card p-3">
+      <div className="mx-auto grid h-full min-h-0 w-full max-w-[80rem] grid-cols-1 gap-4 p-4 md:p-6 lg:grid-cols-[22.5rem_1fr]">
+        <section className="min-h-0 surface-glass rounded-2xl p-3">
           <Tabs
             value={leftTab}
             onValueChange={(value) => setLeftTab(value as LeftTab)}
@@ -1204,7 +1204,7 @@ export function McpSettings() {
               </div>
 
               {loadingError ? (
-                <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+                <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
                   {t("local.loadFailed", { message: loadingError })}
                 </div>
               ) : null}
@@ -1215,7 +1215,7 @@ export function McpSettings() {
               {sourceWarnings.map((warning) => (
                 <div
                   key={warning.app}
-                  className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500 break-all"
+                  className="rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-xs text-tone-warning break-all"
                 >
                   {t("local.sourceUnreadable", {
                     app: appLabel(warning.app),
@@ -1371,7 +1371,7 @@ export function McpSettings() {
               </div>
 
               {searchError ? (
-                <div className="shrink-0 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+                <div className="shrink-0 rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
                   {t("market.searchFailed", { message: searchError })}
                 </div>
               ) : null}
@@ -1484,7 +1484,7 @@ export function McpSettings() {
           </Tabs>
         </section>
 
-        <section className="min-h-0 rounded-xl border bg-card p-4 overflow-auto">
+        <section className="min-h-0 surface-glass rounded-2xl p-5 overflow-auto">
           {selection?.kind === "draft" ? (
             <div className="space-y-4">
               <div>
@@ -1580,13 +1580,13 @@ export function McpSettings() {
               </div>
 
               {draftEnvOnRemote ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("local.envOnRemoteWarning")}
                 </div>
               ) : null}
 
               {draftOpencodeSse ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("errors.opencodeSseUnsupported")}
                 </div>
               ) : null}
@@ -1595,7 +1595,7 @@ export function McpSettings() {
                   any agent's config is unreadable — an id that already exists
                   in the unread one would be assigned away from it. */}
               {scanDegraded ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("local.saveBlockedByUnreadableSource")}
                 </div>
               ) : null}
@@ -1704,13 +1704,13 @@ export function McpSettings() {
               </div>
 
               {localEnvOnRemote ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("local.envOnRemoteWarning")}
                 </div>
               ) : null}
 
               {localOpencodeSse ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("errors.opencodeSseUnsupported")}
                 </div>
               ) : null}
@@ -1722,7 +1722,7 @@ export function McpSettings() {
                   keeps the user from composing one whose stale draft would
                   still be accepted once they repair the file out of band. */}
               {scanDegraded ? (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="rounded-md border border-tone-warning/30 bg-tone-warning/10 px-3 py-2 text-xs text-tone-warning">
                   {t("local.saveBlockedByUnreadableSource")}
                 </div>
               ) : null}
@@ -1759,7 +1759,7 @@ export function McpSettings() {
                   {t("market.loadingDetail")}
                 </div>
               ) : marketDetailError ? (
-                <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+                <div className="rounded-md border border-tone-danger/30 bg-tone-danger/5 px-3 py-2 text-xs text-tone-danger">
                   {t("market.detailLoadFailed", { message: marketDetailError })}
                 </div>
               ) : marketDetail ? (

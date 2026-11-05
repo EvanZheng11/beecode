@@ -291,7 +291,7 @@ export function CustomStyleSection() {
     <Collapsible
       open={expanded}
       onOpenChange={setExpanded}
-      className="overflow-hidden rounded-xl border bg-card"
+      className="overflow-hidden surface-glass rounded-2xl"
       asChild
     >
       <section>

@@ -121,7 +121,7 @@ export function SettingsSection({
       // would lose keyboard focus the moment it was used.
       <Collapsible open={expanded} onOpenChange={onOpenChange} asChild>
         <section
-          className={cn("overflow-hidden rounded-xl border bg-card", className)}
+          className={cn("overflow-hidden surface-glass rounded-2xl", className)}
         >
           {/* `relative` is the anchor the trigger stretches its hit area to,
               and `has-…:hover` paints the hover state from the trigger rather
@@ -129,7 +129,7 @@ export function SettingsSection({
               plain, because clicking there does not fold anything. */}
           <div
             className={cn(
-              "relative flex justify-between gap-3 border-b border-transparent p-4 transition-colors has-[[data-slot=collapsible-trigger]:hover]:bg-muted/50",
+              "relative flex justify-between gap-3 border-b border-transparent p-5 transition-colors has-[[data-slot=collapsible-trigger]:hover]:bg-muted/50",
               description ? "items-start" : "items-center",
               expanded && "border-border"
             )}
@@ -142,7 +142,7 @@ export function SettingsSection({
                   its hit area (and its focus ring) over the whole row, which is
                   how the description and the empty space beside it fold the
                   section too. */}
-              <h2 className="text-sm font-semibold">
+              <h2 className="text-heading-sm font-semibold tracking-tight">
                 {foldable ? (
                   <CollapsibleTrigger asChild>
                     <button
@@ -158,7 +158,7 @@ export function SettingsSection({
                   // control — the same one-line section it was before.
                   <Label
                     htmlFor={htmlFor}
-                    className="gap-2 text-sm leading-normal font-semibold"
+                    className="gap-2 text-heading-sm leading-normal font-semibold tracking-tight"
                   >
                     {heading}
                   </Label>
@@ -174,7 +174,7 @@ export function SettingsSection({
               <div className="relative shrink-0">{control}</div>
             ) : null}
           </div>
-          <CollapsibleContent className="space-y-3 p-4">
+          <CollapsibleContent className="space-y-3 p-5">
             {children}
           </CollapsibleContent>
         </section>
@@ -184,7 +184,7 @@ export function SettingsSection({
 
   return (
     <section
-      className={cn("space-y-3 rounded-xl border bg-card p-4", className)}
+      className={cn("space-y-3 surface-glass rounded-2xl p-5", className)}
     >
       {/* Same alignment rule as `SettingRow`: with an explanation the control
           sits on the heading's line, without one the two center on each other. */}
@@ -195,13 +195,13 @@ export function SettingsSection({
         )}
       >
         <div className="min-w-0 space-y-1">
-          <h2 className="text-sm font-semibold">
+          <h2 className="text-heading-sm font-semibold tracking-tight">
             {htmlFor ? (
               // A `<label>` inside the heading, so clicking the title works the
               // control and the heading is still a heading to both roles.
               <Label
                 htmlFor={htmlFor}
-                className="gap-2 text-sm leading-normal font-semibold"
+                className="gap-2 text-heading-sm leading-normal font-semibold tracking-tight"
               >
                 {heading}
               </Label>

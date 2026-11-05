@@ -121,7 +121,7 @@ import { cn } from "@/lib/utils"
 const SHORTCUT_BADGE_CLASS = cn(
   "ml-auto inline-flex h-[0.9375rem] shrink-0 items-center justify-center",
   "rounded-[0.3125rem] bg-primary/10 px-[0.25rem]",
-  "font-mono text-[0.625rem] font-medium leading-none text-primary",
+  "font-mono text-3xs font-medium leading-none text-primary-text",
   "opacity-0 transition-opacity duration-150",
   "group-hover:opacity-100 group-focus-visible:opacity-100"
 )
@@ -192,8 +192,8 @@ function SidebarNavButton({
       onClick={onClick}
       title={label}
       className={cn(
-        "group flex h-8 w-full items-center gap-[0.4375rem] rounded-full pl-[0.4375rem] pr-1.5",
-        "text-[0.875rem] text-sidebar-foreground outline-none",
+        "group flex h-8 w-full items-center gap-[0.4375rem] rounded-lg pl-[0.4375rem] pr-1.5",
+        "text-ui text-sidebar-foreground outline-none",
         "transition-colors duration-150 hover:bg-sidebar-accent",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       )}
@@ -233,7 +233,14 @@ function SidebarRailButton({
       aria-current={active ? "page" : undefined}
       className={cn(
         RAIL_BUTTON_CLASS,
-        active && "bg-sidebar-primary/15 text-sidebar-foreground"
+        active &&
+          cn(
+            "bg-sidebar-primary/15 text-sidebar-foreground",
+            // apple 预设：主导航激活项实心主色 + 白字（规范 §9）；其余预设的
+            // sidebar-primary 前景对比度不保证，沿用半透明底。
+            "in-data-[theme=apple]:bg-sidebar-primary in-data-[theme=apple]:text-sidebar-primary-foreground",
+            "in-data-[theme=apple]:shadow-[0_2px_8px_color-mix(in_oklab,var(--sidebar-primary)_28%,transparent)]"
+          )
       )}
     >
       <Icon aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
@@ -459,7 +466,7 @@ export function Sidebar() {
       >
         {isMobile ? (
           <div className="flex min-w-0 items-center gap-4">
-            <h2 className="truncate text-[0.875rem] font-bold tracking-[-0.00625rem] text-sidebar-foreground">
+            <h2 className="truncate text-ui font-semibold tracking-tight text-sidebar-foreground">
               {t("title")}
             </h2>
           </div>
@@ -835,7 +842,7 @@ export function Sidebar() {
               }}
               placeholder={t("searchPlaceholder")}
               aria-label={t("search")}
-              className="h-8 rounded-full pr-2.5 pl-7"
+              className="h-8 rounded-lg pr-2.5 pl-7"
             />
           </div>
 

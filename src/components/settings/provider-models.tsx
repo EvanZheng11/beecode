@@ -570,12 +570,12 @@ export function ModelPickerDialog({
                   </span>
                 )}
                 {item.badge === "gone" && (
-                  <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 text-2xs text-amber-600 dark:text-amber-400">
+                  <span className="shrink-0 rounded-full bg-tone-warning/10 px-1.5 text-2xs text-tone-warning">
                     {t("badgeGone")}
                   </span>
                 )}
                 {item.badge === "unlisted" && (
-                  <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 text-2xs text-amber-600 dark:text-amber-400">
+                  <span className="shrink-0 rounded-full bg-tone-warning/10 px-1.5 text-2xs text-tone-warning">
                     {t("badgeUnlisted")}
                   </span>
                 )}
@@ -593,8 +593,8 @@ export function ModelPickerDialog({
             ) : null}
           </div>
           {removals.length > 0 && (
-            <div className="space-y-1 rounded-xl border border-amber-500/30 bg-amber-500/5 p-2.5">
-              <p className="text-2xs text-amber-600 dark:text-amber-400">
+            <div className="space-y-1 rounded-xl border border-tone-warning/30 bg-tone-warning/5 p-2.5">
+              <p className="text-2xs text-tone-warning">
                 {t("removalsTitle", { count: removals.length })}
               </p>
               {removals.map((id) => (
