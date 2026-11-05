@@ -113,7 +113,9 @@ import { presentSessionNotice, splitHeadline } from "@/lib/session-notices"
 import { presentPluginLoadFailures } from "@/lib/plugin-load-failures"
 import {
   acpErrorNotifiesDesktop,
+  connectErrorMessage,
   isFailedTurnVerdict,
+  isOutdatedConnectError,
   isTurnFailureCode,
   rejectedPromptText,
   routeAcpError,
@@ -3864,8 +3866,7 @@ function getAffectedKey(action: Action): string | null {
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  return connectErrorMessage(error)
 }
 
 type AlertedError = Error & { alerted: true }
@@ -7773,7 +7774,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // identifier, since `AcpError::Serialize` flattens to a bare
           // message string and does not expose the error `code` for
           // synchronous Tauri command rejections.
-          if (message.includes("is not installed")) {
+          if (isOutdatedConnectError(err, agentType)) {
+            publishConnectError({
+              agentType,
+              title: localizeBackendError(
+                "agent_runtime_outdated",
+                message,
+                agentLabel
+              ),
+              detail: message || null,
+              opensAgentSettings: true,
+            })
+          } else if (message.includes("is not installed")) {
             publishConnectError({
               agentType,
               title: configuredAgent?.is_acp_adapter
@@ -7786,7 +7798,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             publishConnectError({
               agentType,
               title: t("connectFailedTitle", { agent: agentLabel }),
-              detail: message,
+              detail: message || null,
               opensAgentSettings: false,
             })
           }
@@ -7842,6 +7854,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       flushStreamingQueue,
       isConnectionLiveOnBackend,
       isConnectionReferencedLocally,
+      localizeBackendError,
       localOwnerKeyOf,
       markConnectionGone,
       notifyConnectError,

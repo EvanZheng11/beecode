@@ -24,6 +24,43 @@
  * a failure the table does not know about is never demoted.
  */
 
+import { extractAppCommandError } from "@/lib/app-error"
+
+export function connectErrorMessage(error: unknown): string {
+  const appError = extractAppCommandError(error)
+  if (appError) return appError.detail || appError.message
+  if (typeof error === "string") {
+    const message = error.trim()
+    if (message.startsWith("{")) {
+      try {
+        const parsed: unknown = JSON.parse(message)
+        if (parsed && typeof parsed === "object")
+          return connectErrorMessage(parsed)
+      } catch {
+        return ""
+      }
+    }
+    return message
+  }
+  if (error && typeof error === "object" && "message" in error) {
+    const message = error.message
+    if (typeof message === "string") return connectErrorMessage(message)
+  }
+  return ""
+}
+
+export function isOutdatedConnectError(error: unknown, agent: string): boolean {
+  if (extractAppCommandError(error)?.code === "agent_runtime_outdated")
+    return true
+  const message = connectErrorMessage(error)
+  return (
+    agent === "open_code" &&
+    (message.startsWith("The OpenCode found on PATH (") ||
+      /^OpenCode \S+ is no longer supported:/.test(message)) &&
+    message.includes("runs OpenCode 2")
+  )
+}
+
 export type AcpErrorKind = "session" | "action" | "transcript"
 export type AcpErrorLevel = "error" | "warning"
 
