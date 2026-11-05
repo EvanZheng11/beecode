@@ -91,6 +91,7 @@
       "sectionDescription": "选择按钮、强调色和高亮使用的色调。",
       "current": "当前颜色：{color}",
       "options": {
+        "apple": "苹果蓝",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

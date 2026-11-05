@@ -224,3 +224,18 @@ describe("EDITOR_CANVAS_BG", () => {
     expect(monacoThemeName("blue", true)).toBe("codeg-dark-blue")
   })
 })
+
+describe("apple preset", () => {
+  it("is registered with its own canvas / line-highlight colours", () => {
+    expect(THEME_COLORS).toContain("apple")
+    expect(EDITOR_CANVAS_BG.apple).toEqual({
+      light: "#ffffff",
+      dark: "#161618",
+    })
+    expect(EDITOR_LINE_HIGHLIGHT.apple).toEqual({
+      light: "#f5f5f7",
+      dark: "#2c2c2e",
+    })
+    expect(monacoThemeName("apple", true)).toBe("codeg-dark-apple")
+  })
+})

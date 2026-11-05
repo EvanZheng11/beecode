@@ -91,6 +91,7 @@
       "sectionDescription": "Choisissez une palette pour les accents, les boutons et les surlignages.",
       "current": "Couleur actuelle : {color}",
       "options": {
+        "apple": "Bleu Apple",
         "neutral": "Neutre",
         "zinc": "Zinc",
         "slate": "Ardoise",

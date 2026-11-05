@@ -20,6 +20,8 @@ export const EDITOR_CANVAS_BG: Record<
   ThemeColor,
   { light: string; dark: string }
 > = {
+  // apple 取规范 §11：浅色纯白、深色取 --background（#161618），与 --card 略有差异。
+  apple: { light: "#ffffff", dark: "#161618" },
   neutral: { light: "#ffffff", dark: "#171717" },
   zinc: { light: "#ffffff", dark: "#18181b" },
   slate: { light: "#ffffff", dark: "#0f172b" },
@@ -44,6 +46,7 @@ export const EDITOR_LINE_HIGHLIGHT: Record<
   ThemeColor,
   { light: string; dark: string }
 > = {
+  apple: { light: "#f5f5f7", dark: "#2c2c2e" },
   neutral: { light: "#f5f5f5", dark: "#262626" },
   zinc: { light: "#f4f4f5", dark: "#27272a" },
   slate: { light: "#f1f5f9", dark: "#1d293d" },

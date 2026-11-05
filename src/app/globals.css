@@ -15,13 +15,13 @@
 @source "../../node_modules/@json-render/shadcn/dist";
 
 :root {
-  /* 默认界面字体 = Inter（与 DEFAULT_UI_FONT_ID = "inter" 一致，须等于
-     font-presets.ts 的 resolveFontStack("inter", "", "sans")，否则首屏到水合会闪字），
+  /* 默认界面字体 = 系统字体（与 DEFAULT_UI_FONT_ID = "system-ui" 一致，须等于
+     font-presets.ts 的 resolveFontStack("system-ui", "", "sans")，否则首屏到水合会闪字），
      运行时由 AppearanceProvider 覆盖 --font-sans。会话消息区等普通文本均跟随 --font-sans；
      --font-mono 不在此自定义，由 Tailwind 默认等宽栈兜底（与代码编辑器字体相互独立）。 */
   --font-sans:
-    "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
 
   font-family: var(--font-sans);
   font-size: 16px;
@@ -954,6 +954,74 @@
   --sidebar-ring: oklch(0.541 0.281 293.009);
 }
 
+/* ---------- apple (新用户默认；规范 docs/design/ui-style-guide.md §2.1) ---------- */
+[data-theme="apple"] {
+  --background: oklch(0.989 0.003 286.4);
+  --foreground: oklch(0.232 0.004 286.1);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.232 0.004 286.1);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.232 0.004 286.1);
+  --primary: oklch(0.563 0.193 256.2);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.955 0.003 286.3);
+  --secondary-foreground: oklch(0.232 0.004 286.1);
+  --muted: oklch(0.955 0.003 286.3);
+  --muted-foreground: oklch(0.52 0.008 286.1);
+  --accent: oklch(0.945 0.004 286.3);
+  --accent-foreground: oklch(0.232 0.004 286.1);
+  --destructive: oklch(0.553 0.225 27.3);
+  --border: oklch(0.925 0.004 286.3);
+  --input: oklch(0.905 0.004 286.3);
+  --ring: oklch(0.563 0.193 256.2);
+  --chart-1: oklch(0.563 0.193 256.2);
+  --chart-2: oklch(0.602 0.101 197.4);
+  --chart-3: oklch(0.695 0.125 231.2);
+  --chart-4: oklch(0.64 0.175 146.7);
+  --chart-5: oklch(0.669 0.181 251.8);
+  --sidebar: oklch(0.971 0.003 286.4);
+  --sidebar-foreground: oklch(0.232 0.004 286.1);
+  --sidebar-primary: oklch(0.563 0.193 256.2);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.935 0.004 286.3);
+  --sidebar-accent-foreground: oklch(0.232 0.004 286.1);
+  --sidebar-border: oklch(0.92 0.004 286.3);
+  --sidebar-ring: oklch(0.563 0.193 256.2);
+}
+[data-theme="apple"].dark {
+  --background: oklch(0.201 0.004 286);
+  --foreground: oklch(0.971 0.003 286.4);
+  --card: oklch(0.241 0.006 286);
+  --card-foreground: oklch(0.971 0.003 286.4);
+  --popover: oklch(0.241 0.006 286);
+  --popover-foreground: oklch(0.971 0.003 286.4);
+  --primary: oklch(0.56 0.18 256);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.294 0.004 286.2);
+  --secondary-foreground: oklch(0.971 0.003 286.4);
+  --muted: oklch(0.294 0.004 286.2);
+  --muted-foreground: oklch(0.72 0.007 286.2);
+  --accent: oklch(0.32 0.005 286.2);
+  --accent-foreground: oklch(0.971 0.003 286.4);
+  --destructive: oklch(0.707 0.185 25.9);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.62 0.2 255.5);
+  --chart-1: oklch(0.669 0.181 251.8);
+  --chart-2: oklch(0.771 0.118 212);
+  --chart-3: oklch(0.817 0.119 227.7);
+  --chart-4: oklch(0.756 0.208 147);
+  --chart-5: oklch(0.705 0.159 252.4);
+  --sidebar: oklch(0.227 0.004 286.1);
+  --sidebar-foreground: oklch(0.971 0.003 286.4);
+  --sidebar-primary: oklch(0.56 0.18 256);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.28 0.004 286.2);
+  --sidebar-accent-foreground: oklch(0.971 0.003 286.4);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.62 0.2 255.5);
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]):not(.light) {
     --background: oklch(0.145 0 0);
@@ -1085,6 +1153,12 @@
    globals-activity-accent.test.ts 逐值对账。实测在底上 ≥ 5.5:1，MCP 徽标自己 10%
    的底色上 ≥ 4.8:1。自定义样式里设了主色时，appearance-provider 按同一规则
    （readable-accent.ts）算出它的那份写到 <html> 行内，盖过这里。 */
+[data-theme="apple"] {
+  --activity-accent: oklch(0.5 0.172 256.2);
+}
+[data-theme="apple"].dark {
+  --activity-accent: oklch(0.8 0.102 255.5);
+}
 [data-theme="neutral"] {
   --activity-accent: oklch(0.205 0 0);
 }
@@ -1158,8 +1232,49 @@
   --activity-accent: oklch(0.8 0.111 293.009);
 }
 
+/* ===========================================================================
+   Apple UI 全局令牌（规范 §2.2，所有预设共用）
+   靠 var(--primary) 等派生，因此任何预设下都成立。单独一个 :root 块，不并入文件
+   开头那块（globals-root-units.test.ts 只检查第一块的单位）。
+   ========================================================================= */
+:root {
+  --ease-apple: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --primary-soft: color-mix(in oklab, var(--primary) 10%, var(--background));
+  /* 主色文字（链接、编号、ghost 按钮）：沿用按预设压过明度的 --activity-accent。 */
+  --primary-text: var(--activity-accent);
+  --shadow-tint: 0 0 0;
+  --shadow-glass:
+    0 1px 1px rgb(0 0 0 / 0.02), 0 8px 28px rgb(var(--shadow-tint) / 0.06);
+  --shadow-pop:
+    0 12px 48px rgb(var(--shadow-tint) / 0.16), 0 2px 6px rgb(0 0 0 / 0.05);
+  --switch-on: var(--primary);
+  --glass-alpha: 0.72;
+  --glass-strong-alpha: 0.95;
+  --glass-border: rgb(255 255 255 / 0.7);
+}
+.dark {
+  --primary-soft: color-mix(in oklab, var(--primary) 18%, var(--background));
+  --shadow-glass:
+    0 1px 1px rgb(0 0 0 / 0.2), 0 8px 28px rgb(var(--shadow-tint) / 0.35);
+  --shadow-pop:
+    0 12px 48px rgb(0 0 0 / 0.5), 0 2px 6px rgb(var(--shadow-tint) / 0.3);
+  --glass-alpha: 0.68;
+  --glass-strong-alpha: 0.92;
+  --glass-border: var(--border);
+}
+/* apple 独有：阴影带一点蓝，开关打开为绿色（iOS 习惯）。放在通用 :root 之后，同优先级靠顺序取胜。 */
+[data-theme="apple"] {
+  --shadow-tint: 0 32 96;
+  --switch-on: var(--tone-success);
+}
+
 @theme inline {
   --font-sans: var(--font-sans);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-text: var(--primary-text);
+  --color-switch-on: var(--switch-on);
+  --shadow-glass: var(--shadow-glass);
+  --shadow-pop: var(--shadow-pop);
   --color-activity-rail: var(--activity-rail);
   --color-activity-ring: var(--activity-ring);
   --color-activity-ring-done: var(--activity-ring-done);
@@ -1239,6 +1354,145 @@
 }
 @utility text-3xs {
   font-size: 0.625rem; /* 10px @100% */
+}
+
+/* Apple 字号阶梯（规范 §4）。同上只声明 font-size，rem 随缩放。 */
+@utility text-ui {
+  font-size: 0.8125rem; /* 13px @100% */
+}
+@utility text-heading-sm {
+  font-size: 0.9375rem; /* 15px @100% */
+}
+@utility text-heading {
+  font-size: 1.0625rem; /* 17px @100% */
+}
+@utility text-page-title {
+  font-size: 1.75rem; /* 28px @100% */
+}
+@utility text-display {
+  font-size: 2.75rem; /* 44px @100% */
+}
+
+/* ---------- 玻璃层（规范 §2.4） ----------
+   只给浮层、侧栏、标题栏和页面卡片；会话消息流、虚拟列表、编辑器、终端内部不要加
+   backdrop-filter。不覆盖 ws-surface* / ws-msg-* 的开图规则（它们是各自独立的类）。
+   先写不透明的 var(--card) 作为底：var() 在计算期才失效的声明不会回落到上一条，
+   所以不支持 color-mix 的引擎靠下面的 @supports not 兜底。 */
+@utility surface-glass {
+  background-color: var(--card);
+  background-color: color-mix(
+    in oklab,
+    var(--card) calc(var(--glass-alpha) * 100%),
+    transparent
+  );
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-glass);
+  @supports not (background-color: color-mix(in oklab, red 50%, transparent)) {
+    background-color: var(--card);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--card);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@utility surface-glass-strong {
+  background-color: var(--popover);
+  background-color: color-mix(
+    in oklab,
+    var(--popover) calc(var(--glass-strong-alpha) * 100%),
+    transparent
+  );
+  -webkit-backdrop-filter: saturate(180%) blur(40px);
+  backdrop-filter: saturate(180%) blur(40px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-pop);
+  @supports not (background-color: color-mix(in oklab, red 50%, transparent)) {
+    background-color: var(--popover);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--popover);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* 应用背景（规范 §2.4）：两团主色柔光 + 竖向渐变，只用于全屏页面底层。
+   开图（data-workspace-bg="on"）时不画，让背景图接管。 */
+@utility app-backdrop {
+  background-color: var(--background);
+  /* 不支持 color-mix 的引擎只留纯色底，不画柔光。 */
+  @supports (background-color: color-mix(in oklab, red 50%, transparent)) {
+    background-image:
+      radial-gradient(
+        40rem 28rem at 12% -8%,
+        color-mix(in oklab, var(--primary) 12%, transparent),
+        transparent 70%
+      ),
+      radial-gradient(
+        36rem 26rem at 100% 0%,
+        color-mix(in oklab, var(--primary) 8%, transparent),
+        transparent 70%
+      ),
+      linear-gradient(
+        180deg,
+        var(--background),
+        color-mix(in oklab, var(--background) 96%, var(--foreground))
+      );
+  }
+  [data-workspace-bg="on"] & {
+    background-color: transparent;
+    background-image: none;
+  }
+}
+
+/* ---------- 动效（规范 §7） ----------
+   anim-pop 的位移按「以 translate(-50%, -50%) 居中的对话框」写（-48% → -50%），
+   只用于对话框；anim-slide 的起点距离可用 --anim-slide-x 改（RTL 传负值）；
+   anim-fade-up 的错峰序号用 --anim-i（最多 12 项，每项延迟 30ms）。
+   虚拟列表行、会话消息行不要加进入动画。 */
+@keyframes apple-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes apple-pop {
+  from {
+    opacity: 0;
+    scale: 0.97;
+    translate: -50% -48%;
+  }
+}
+@keyframes apple-slide {
+  from {
+    opacity: 0;
+    translate: var(--anim-slide-x, 1.5rem) 0;
+  }
+}
+@keyframes apple-fade-up {
+  from {
+    opacity: 0;
+    translate: 0 0.75rem;
+  }
+}
+@utility anim-fade {
+  animation: apple-fade 200ms ease both;
+}
+@utility anim-pop {
+  animation: apple-pop 220ms var(--ease-apple) both;
+}
+@utility anim-slide {
+  animation: apple-slide 250ms var(--ease-apple) both;
+}
+@utility anim-fade-up {
+  animation: apple-fade-up 350ms var(--ease-apple) both;
+  animation-delay: calc(min(var(--anim-i, 0), 11) * 30ms);
 }
 
 /* The chat column's max width: the user's dragged width (see
@@ -2843,6 +3097,15 @@
 [data-chat-animations="off"] .chat-motion-scope *:not(.animate-spin)::after {
   animation: none !important;
   transition: none !important;
+}
+
+/* 减弱动态效果：去掉位移与缩放，只保留透明度变化。 */
+@media (prefers-reduced-motion: reduce) {
+  .anim-pop,
+  .anim-slide,
+  .anim-fade-up {
+    animation-name: apple-fade;
+  }
 }
 
 /* Welcome-page quick actions: the skill rail (see quick-actions.tsx). A plain

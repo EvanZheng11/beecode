@@ -91,6 +91,7 @@
       "sectionDescription": "ボタンやアクセント、ハイライトに使用する色を選択します。",
       "current": "現在のカラー：{color}",
       "options": {
+        "apple": "アップルブルー",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

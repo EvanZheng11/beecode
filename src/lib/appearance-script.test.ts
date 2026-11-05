@@ -12,6 +12,7 @@ import {
   STORAGE_KEY_ZOOM_LEVEL,
 } from "./appearance-script"
 import { CUSTOM_CSS_ELEMENT_ID } from "./custom-style"
+import { DEFAULT_THEME_COLOR, THEME_COLORS } from "./theme-presets"
 import {
   THEME_COLOR_DARK,
   THEME_COLOR_LIGHT,
@@ -334,4 +335,36 @@ describe("APPEARANCE_INIT_SCRIPT — chat area", () => {
       expect(chatWidth()).toBe("")
     }
   )
+})
+
+describe("APPEARANCE_INIT_SCRIPT — theme whitelist & default", () => {
+  it("whitelists exactly THEME_COLORS (apple first) and falls back to the default", () => {
+    // 白名单由 THEME_COLORS 插值生成；这里从脚本文本里反解出来对账，防止被改回手抄。
+    const match = APPEARANCE_INIT_SCRIPT.match(
+      /var VALID_COLORS = (\[[^\]]*\]);/
+    )
+    expect(JSON.parse(match![1]!)).toEqual([...THEME_COLORS])
+    expect(THEME_COLORS[0]).toBe("apple")
+    expect(DEFAULT_THEME_COLOR).toBe("apple")
+  })
+
+  it("gives a user without a stored theme apple", () => {
+    runInitScript()
+    expect(document.documentElement.getAttribute("data-theme")).toBe("apple")
+  })
+
+  it("falls back to apple for a tampered stored value", () => {
+    localStorage.setItem(STORAGE_KEY_THEME_COLOR, "nope")
+    runInitScript()
+    expect(document.documentElement.getAttribute("data-theme")).toBe("apple")
+  })
+
+  it("keeps a stored non-default theme untouched (neutral included)", () => {
+    for (const stored of ["violet", "neutral"]) {
+      resetDocument()
+      localStorage.setItem(STORAGE_KEY_THEME_COLOR, stored)
+      runInitScript()
+      expect(document.documentElement.getAttribute("data-theme")).toBe(stored)
+    }
+  })
 })

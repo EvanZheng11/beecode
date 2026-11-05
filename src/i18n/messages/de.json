@@ -91,6 +91,7 @@
       "sectionDescription": "Wähle eine Farbpalette für Akzente, Schaltflächen und Hervorhebungen.",
       "current": "Aktuelle Farbe: {color}",
       "options": {
+        "apple": "Apple-Blau",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

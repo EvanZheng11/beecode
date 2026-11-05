@@ -3,10 +3,11 @@
 import type { CSSProperties } from "react"
 
 /**
- * 12 个 shadcn 官方主题预设的标识符。
+ * 12 个 shadcn 官方主题预设 + apple（Apple 风格，新用户默认，放第一位推荐）的标识符。
  * 实际 CSS 变量值定义在 src/app/globals.css 的 [data-theme="..."] 选择器中。
  */
 export const THEME_COLORS = [
+  "apple",
   "neutral",
   "zinc",
   "slate",
@@ -62,10 +63,10 @@ export function normalizeFolderThemeColor(
 }
 
 /**
- * 默认主题色。选用 "neutral" 是因为它对应当前 globals.css 的现存 :root 值
- * （所有 chroma=0 的纯灰阶），可保证升级后视觉零差异。
+ * 默认主题色：apple。只影响 localStorage 里没有主题色的新用户；已保存主题的用户
+ * （含 neutral）不变。appearance-script.ts 的首屏脚本由本常量生成白名单与回退值。
  */
-export const DEFAULT_THEME_COLOR: ThemeColor = "neutral"
+export const DEFAULT_THEME_COLOR: ThemeColor = "apple"
 
 /**
  * UI 预览用的代表色（OKLch 字符串，对应各预设的 primary 色 light 版本）。
@@ -76,6 +77,7 @@ export const DEFAULT_THEME_COLOR: ThemeColor = "neutral"
  * 自己对应预设的代表色，不能跟随当前激活的主题色。
  */
 export const THEME_COLOR_PREVIEW: Record<ThemeColor, string> = {
+  apple: "oklch(0.563 0.193 256.2)",
   neutral: "oklch(0.205 0 0)",
   zinc: "oklch(0.21 0.006 285.885)",
   slate: "oklch(0.208 0.042 265.755)",
@@ -113,6 +115,7 @@ export const THEME_COLOR_TITLE: Record<
   ThemeColor,
   { light: string; dark: string }
 > = {
+  apple: { light: "oklch(0.5 0.172 256.2)", dark: "oklch(0.8 0.102 255.5)" },
   neutral: { light: "oklch(0.205 0 0)", dark: "oklch(0.87 0 0)" },
   zinc: {
     light: "oklch(0.21 0.006 285.885)",
