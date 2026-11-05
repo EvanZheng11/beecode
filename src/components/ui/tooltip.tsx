@@ -6,7 +6,7 @@ import { Tooltip as TooltipPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 function TooltipProvider({
-  delayDuration = 0,
+  delayDuration = 300,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
   return (
@@ -32,7 +32,7 @@ function TooltipTrigger({
 
 function TooltipContent({
   className,
-  sideOffset = 0,
+  sideOffset = 6,
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
@@ -47,8 +47,8 @@ function TooltipContent({
         )}
         {...props}
       >
+        {/* 规范 §8.2：提示与触发器之间只留 sideOffset（6px），不再画箭头 */}
         {children}
-        <TooltipPrimitive.Arrow className="size-2.5 rotate-45 rounded-[2px] data-[side=left]:translate-x-[-1.5px] data-[side=right]:translate-x-[1.5px] bg-foreground fill-foreground z-50 translate-y-[calc(-50%_-_2px)]" />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

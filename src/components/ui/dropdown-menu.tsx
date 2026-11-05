@@ -36,7 +36,7 @@ function DropdownMenuTrigger({
 function DropdownMenuContent({
   className,
   align = "start",
-  sideOffset = 4,
+  sideOffset = 6,
   ref,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {

@@ -17,7 +17,7 @@ function Avatar({
       data-slot="avatar"
       data-size={size}
       className={cn(
-        "size-8 rounded-full after:rounded-full data-[size=lg]:size-10 data-[size=sm]:size-6 after:border-border group/avatar relative flex shrink-0 select-none after:absolute after:inset-0 after:border after:mix-blend-darken dark:after:mix-blend-lighten",
+        "size-8 [container-type:size] rounded-full after:rounded-full data-[size=lg]:size-10 data-[size=sm]:size-6 after:border-border group/avatar relative flex shrink-0 select-none after:absolute after:inset-0 after:border after:mix-blend-darken dark:after:mix-blend-lighten",
         className
       )}
       {...props}
@@ -49,7 +49,7 @@ function AvatarFallback({
     <AvatarPrimitive.Fallback
       data-slot="avatar-fallback"
       className={cn(
-        "bg-muted text-muted-foreground in-data-[theme=apple]:bg-primary in-data-[theme=apple]:text-primary-foreground font-medium rounded-full flex size-full items-center justify-center text-sm group-data-[size=sm]/avatar:text-xs",
+        "bg-muted text-muted-foreground in-data-[theme=apple]:bg-linear-to-br in-data-[theme=apple]:from-primary in-data-[theme=apple]:to-[color-mix(in_oklab,var(--primary)_80%,var(--foreground))] dark:in-data-[theme=apple]:to-[color-mix(in_oklab,var(--primary)_80%,var(--background))] in-data-[theme=apple]:text-primary-foreground font-medium rounded-full flex size-full items-center justify-center text-[length:42cqmin]",
         className
       )}
       {...props}
