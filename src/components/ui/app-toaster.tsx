@@ -79,7 +79,20 @@ export function AppToaster(props: ToasterProps) {
   // stacking context, above every overlay, wherever it is mounted from.
   return createPortal(
     <>
-      <Toaster {...props} theme={theme} />
+      <Toaster
+        {...props}
+        theme={theme}
+        toastOptions={{
+          ...props.toastOptions,
+          // 只换外观：sonner 内置样式特异性更高，故用 ! 覆盖背景、圆角与内边距
+          classNames: {
+            toast: "surface-glass-strong! rounded-2xl! px-4! py-3! text-ui!",
+            title: "font-semibold",
+            description: "text-xs! text-foreground/80!",
+            ...props.toastOptions?.classNames,
+          },
+        }}
+      />
       {/* Its own component so the toast list it watches re-renders nothing
           but itself. */}
       <ToastOcclusion />
