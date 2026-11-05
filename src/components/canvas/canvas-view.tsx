@@ -2275,7 +2275,7 @@ function CanvasFlow({
                   height: dropHint.rect.height,
                 }}
               >
-                <span className="mt-1 rounded-full bg-primary/90 px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
+                <span className="mt-1 rounded-full bg-primary/90 px-2 py-0.5 text-[0.6875em] font-medium text-primary-foreground">
                   {t("mergeIntoNewRegion")}
                 </span>
               </div>

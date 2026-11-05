@@ -119,7 +119,7 @@ export const TerminalNode = memo(function TerminalNode({
           <button
             type="button"
             onClick={restart}
-            className="absolute right-2 bottom-2 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:bg-primary/10"
+            className="absolute right-2 bottom-2 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[0.6875em] font-medium text-foreground shadow-sm transition-colors hover:bg-primary/10"
           >
             <RotateCcw className="size-3" />
             {t("restartTerminal")}

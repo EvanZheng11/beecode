@@ -174,6 +174,16 @@ describe("board units", () => {
     // Everything else — `p-3`, `size-3.5`, `text-xs`, `rounded-xl` — goes
     // through `--spacing` / `--text-*` / `--radius` and is converted for free.
     expect(code(readNode(name))).not.toMatch(/\[[\d.]+rem\]/)
+    expect(code(readNode(name))).not.toMatch(/text-\[[\d.]+px\]/)
+  })
+
+  it("keeps overlay and terminal text in board units", () => {
+    for (const path of [
+      "src/components/canvas/canvas-view.tsx",
+      "src/components/canvas/nodes/terminal-node.tsx",
+    ]) {
+      expect(code(readSource(path))).not.toMatch(/text-\[[\d.]+px\]/)
+    }
   })
 
   it("the scope actually redefines the variables Tailwind sizes through", () => {
@@ -213,7 +223,7 @@ describe("board units", () => {
     // through the middle of a line.
     const source = code(readNode("conversation-card-node.tsx"))
     expect(source).toContain("line-clamp-4")
-    expect(source).toContain("text-[13px]")
+    expect(source).toContain("text-[0.8125em]")
     expect(source).toContain("leading-snug")
     expect(CARD_CHROME + 4 * 17.875).toBeLessThanOrEqual(CARD_HEIGHT)
     expect(CARD_CHROME + 5 * 17.875).toBeGreaterThan(CARD_HEIGHT)

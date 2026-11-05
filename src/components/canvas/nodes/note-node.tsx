@@ -136,14 +136,14 @@ export const NoteNode = memo(function NoteNode({
             e.stopPropagation()
           }}
           placeholder={t("notePlaceholder")}
-          className="nodrag nowheel relative min-h-0 flex-1 resize-none rounded-2xl bg-transparent p-3 text-[13px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/50"
+          className="nodrag nowheel relative min-h-0 flex-1 resize-none rounded-2xl bg-transparent p-3 text-[0.8125em] leading-relaxed outline-none select-text placeholder:text-muted-foreground/50"
         />
       ) : (
         // `overflow-hidden` rather than a scrollbar: at rest the note is a card
         // to be moved, and a scroll region here would swallow the drag.
         <div
           className={cn(
-            "relative min-h-0 flex-1 overflow-hidden p-3 text-[13px] leading-relaxed whitespace-pre-wrap",
+            "relative min-h-0 flex-1 overflow-hidden p-3 text-[0.8125em] leading-relaxed whitespace-pre-wrap",
             !draft && "text-muted-foreground/50"
           )}
         >

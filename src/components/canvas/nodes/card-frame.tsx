@@ -102,7 +102,7 @@ export function CardFrame({
         )}
       >
         {icon}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+        <span className="min-w-0 flex-1 truncate text-[0.8125em] font-semibold">
           {title}
         </span>
         {actions}
