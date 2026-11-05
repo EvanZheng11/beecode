@@ -91,6 +91,7 @@
       "sectionDescription": "選擇按鈕、強調色和高亮使用的色調。",
       "current": "目前顏色：{color}",
       "options": {
+        "apple": "蘋果藍",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

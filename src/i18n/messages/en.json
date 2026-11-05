@@ -91,6 +91,7 @@
       "sectionDescription": "Pick a color palette for accents, buttons, and highlights.",
       "current": "Current color: {color}",
       "options": {
+        "apple": "Apple",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

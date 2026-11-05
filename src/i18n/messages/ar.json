@@ -91,6 +91,7 @@
       "sectionDescription": "اختر لوحة ألوان للتمييزات والأزرار والإبرازات.",
       "current": "اللون الحالي: {color}",
       "options": {
+        "apple": "أزرق Apple",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

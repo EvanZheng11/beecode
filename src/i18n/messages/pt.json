@@ -91,6 +91,7 @@
       "sectionDescription": "Escolha uma paleta de cores para acentos, botões e destaques.",
       "current": "Cor atual: {color}",
       "options": {
+        "apple": "Azul Apple",
         "neutral": "Neutral",
         "zinc": "Zinc",
         "slate": "Slate",

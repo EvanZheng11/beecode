@@ -7,6 +7,7 @@ import {
   TOKEN_VALUE_PATTERN_SOURCE,
 } from "./custom-style"
 import { THEME_COLOR_DARK, THEME_COLOR_LIGHT } from "./theme-color"
+import { DEFAULT_THEME_COLOR, THEME_COLORS } from "./theme-presets"
 
 /**
  * Storage keys for appearance preferences.
@@ -98,16 +99,17 @@ export const STORAGE_KEY_CUSTOM_STYLE_SUSPENDED = "codeg-custom-style-suspended"
  * 2. 白名单校验 —— localStorage 里的值若被篡改或残留旧版本，回退到默认
  * 3. try/catch 包裹 —— 隐私模式 / 嵌入 WebView 禁用 storage 时不抛错；自定义样式
  *    两段各自再包一层，任一段损坏都不影响其余外观偏好
- * 4. 数字常量与 theme-presets.ts 保持一致 —— 任何修改必须两边同步
+ * 4. 主题白名单与回退值直接由 theme-presets.ts 的 THEME_COLORS / DEFAULT_THEME_COLOR
+ *    插值生成，不再手抄；缩放档位等数字常量仍须与 theme-presets.ts 保持一致
  */
 const SCRIPT = `
 (function() {
   try {
-    var VALID_COLORS = ["neutral","zinc","slate","stone","gray","red","rose","orange","green","blue","yellow","violet"];
+    var VALID_COLORS = ${JSON.stringify(THEME_COLORS)};
     var VALID_ZOOMS = [80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 
     var storedColor = localStorage.getItem("${STORAGE_KEY_THEME_COLOR}");
-    var color = VALID_COLORS.indexOf(storedColor) >= 0 ? storedColor : "neutral";
+    var color = VALID_COLORS.indexOf(storedColor) >= 0 ? storedColor : "${DEFAULT_THEME_COLOR}";
     document.documentElement.setAttribute("data-theme", color);
 
     var storedZoom = parseInt(localStorage.getItem("${STORAGE_KEY_ZOOM_LEVEL}") || "", 10);
@@ -130,7 +132,7 @@ const SCRIPT = `
     // 界面字体：预水合写入 --font-sans（普通组件与会话消息区都跟随它）。
     // stack 只是「显式选择」的缓存，不是偏好本身：仅当存在显式 id（codeg-ui-font）
     // 时才应用它。无显式选择的用户（含从旧默认升级、Provider 仅缓存过 stack 的用户）
-    // 跳过，落到 :root 的 --font-sans 兜底（= 当前默认界面字体 Inter 栈），避免升级首屏闪字。
+    // 跳过，落到 :root 的 --font-sans 兜底（= 当前默认界面字体 system-ui 栈），避免升级首屏闪字。
     // 无需在脚本里复制字体目录；空/超长/含越界字符同样跳过走默认。
     var uiFontId = localStorage.getItem("${STORAGE_KEY_UI_FONT}");
     var uiFontStack = localStorage.getItem("${STORAGE_KEY_UI_FONT_STACK}");
