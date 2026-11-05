@@ -220,7 +220,7 @@ export function DiffViewer({
         <span className="font-medium">{modifiedLabel}</span>
         {diffChanges.length > 0 && (
           <>
-            <span className="ml-2 font-mono text-tone-success">
+            <span className="ms-2 font-mono text-tone-success">
               +{additions}
             </span>
             <span className="font-mono text-tone-danger">-{deletions}</span>

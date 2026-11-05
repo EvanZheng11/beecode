@@ -56,10 +56,7 @@ function highlightQuery(text: string, query: string | null | undefined) {
   while (at >= 0 && key < MAX_HIGHLIGHTS_PER_LINE) {
     if (at > from) out.push(text.slice(from, at))
     out.push(
-      <mark
-        key={key++}
-        className="rounded bg-yellow-400/30 text-foreground dark:bg-yellow-300/25"
-      >
+      <mark key={key++} className="rounded bg-primary-soft text-foreground">
         {text.slice(at, at + needle.length)}
       </mark>
     )

@@ -88,9 +88,9 @@ export function QuestionDialog({ question, onAnswer }: QuestionDialogProps) {
   }
 
   return (
-    <div className="mx-4 mb-3 rounded-xl border border-blue-500/30 bg-card/95 p-3 shadow-sm">
+    <div className="mx-4 mb-3 rounded-xl border border-primary/30 bg-card/95 p-3 shadow-sm">
       <div className="flex items-center gap-1.5 text-sm font-medium">
-        <MessageCircleQuestion className="h-4 w-4 shrink-0 text-blue-500" />
+        <MessageCircleQuestion className="h-4 w-4 shrink-0 text-primary-text" />
         <span>{t("title")}</span>
       </div>
 

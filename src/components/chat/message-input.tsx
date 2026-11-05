@@ -1919,7 +1919,7 @@ export function MessageInput({
         onClick={onCancelQueueEdit}
         variant="ghost"
         size="icon"
-        className="h-8 w-8"
+        className="h-7 w-7"
         title={tQueue("cancelEdit")}
       >
         <X className="size-4" />
@@ -1928,7 +1928,7 @@ export function MessageInput({
         onClick={handleSend}
         disabled={!hasSendableContent}
         size="icon"
-        className="h-8 w-8"
+        className="h-7 w-7"
         title={tQueue("saveEdit")}
       >
         <Check className="size-4" />
@@ -1949,7 +1949,7 @@ export function MessageInput({
           onClick={onCancel}
           variant="destructive"
           size="icon"
-          className="h-8 w-8"
+          className="h-7 w-7"
           title={t("cancel")}
         >
           <Square className="size-4" />
@@ -1959,7 +1959,7 @@ export function MessageInput({
             onClick={handleSend}
             disabled={steering}
             size="icon"
-            className="h-8 w-8 rounded-r-none"
+            className="h-7 w-7 rounded-e-none"
             title={t("queueMessage")}
           >
             <Send className="size-4" />
@@ -1969,7 +1969,7 @@ export function MessageInput({
               <Button
                 disabled={steering}
                 size="icon"
-                className="h-8 w-5 rounded-l-none border-l border-primary-foreground/20"
+                className="h-7 w-5 rounded-s-none border-s border-primary-foreground/20"
                 aria-label={t(
                   steerChannel === "pull" ? "steerAsNote" : "steerIntoTurn"
                 )}
@@ -2001,7 +2001,7 @@ export function MessageInput({
         onClick={onCancel}
         variant="destructive"
         size="icon"
-        className="h-8 w-8"
+        className="h-7 w-7"
         title={t("cancel")}
       >
         <Square className="size-4" />
@@ -2012,7 +2012,7 @@ export function MessageInput({
       onClick={handleSend}
       disabled={disabled || !hasSendableContent}
       size="icon"
-      className="h-8 w-8"
+      className="h-7 w-7"
       title={t("send")}
     >
       <Send className="size-4" />

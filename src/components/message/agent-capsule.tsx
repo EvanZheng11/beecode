@@ -100,7 +100,7 @@ export function AgentCapsule({
   }
 
   const pillClass = cn(
-    "group inline-flex max-w-full items-center gap-1.5 rounded-full bg-primary/10 px-3.5 py-2 text-xs font-medium text-foreground transition-colors ws-msg-chip",
+    "group inline-flex max-w-full items-center gap-1.5 rounded-full bg-primary-soft px-3.5 py-2 text-xs font-medium text-foreground transition-colors ws-msg-chip",
     hasBody && "hover:bg-primary/15",
     isError && "text-destructive"
   )
@@ -180,7 +180,7 @@ export function AgentCapsule({
           "data-[state=closed]:slide-out-to-top-1 data-[state=open]:slide-in-from-top-1"
         )}
       >
-        <div className="mt-3 w-full overflow-hidden rounded-md border border-border/60">
+        <div className="mt-3 w-full overflow-hidden rounded-xl border border-border/60">
           {/* Native scrolling, like the transcript around it — not ScrollArea:
               while the sub-agent runs, this body streams its live transcript
               and a shimmer that rewrites its style every frame, and

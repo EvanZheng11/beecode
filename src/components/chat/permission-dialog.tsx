@@ -129,7 +129,7 @@ export function PermissionDialog({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-1.5 text-sm font-medium">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
+            <ShieldAlert className="h-4 w-4 shrink-0 text-tone-warning" />
             {/* Prefer the human-readable description (claude-agent-acp
                 0.63–0.72 `_meta.claudeCode.title`, else `_meta.permission.title`
                 — codex ≥1.7.0 and claude ≥0.73.0, whose permission tool calls

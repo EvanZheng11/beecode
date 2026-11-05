@@ -84,40 +84,23 @@ const CODING_FEATURED_IDS = new Set(CODING_FEATURED.map((f) => f.id))
 // Static accent class fragments — full literals so Tailwind's JIT keeps them
 // (never compose color classes from template strings, those get purged). Only
 // the prominent fixed cards are colored; rail bars are neutral.
+const PRIMARY_ACCENT = {
+  icon: "text-primary-text",
+  surface: "border-primary/20 hover:border-primary/40 hover:bg-primary-soft",
+}
+// 分类标识沿用数据契约，外观只消费语义色，不把紫/橙装饰色带入 apple。
 const ACCENTS: Record<string, { icon: string; surface: string }> = {
   green: {
-    icon: "text-green-600 dark:text-green-400",
+    icon: "text-tone-success",
     surface:
-      "border-green-500/20 hover:border-green-500/40 hover:bg-green-500/5",
+      "border-tone-success/20 hover:border-tone-success/40 hover:bg-tone-success/5",
   },
-  blue: {
-    icon: "text-blue-600 dark:text-blue-400",
-    surface: "border-blue-500/20 hover:border-blue-500/40 hover:bg-blue-500/5",
-  },
-  orange: {
-    icon: "text-orange-600 dark:text-orange-400",
-    surface:
-      "border-orange-500/20 hover:border-orange-500/40 hover:bg-orange-500/5",
-  },
-  amber: {
-    icon: "text-amber-600 dark:text-amber-400",
-    surface:
-      "border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/5",
-  },
-  pink: {
-    icon: "text-pink-600 dark:text-pink-400",
-    surface: "border-pink-500/20 hover:border-pink-500/40 hover:bg-pink-500/5",
-  },
-  purple: {
-    icon: "text-purple-600 dark:text-purple-400",
-    surface:
-      "border-purple-500/20 hover:border-purple-500/40 hover:bg-purple-500/5",
-  },
-  violet: {
-    icon: "text-violet-600 dark:text-violet-400",
-    surface:
-      "border-violet-500/20 hover:border-violet-500/40 hover:bg-violet-500/5",
-  },
+  blue: PRIMARY_ACCENT,
+  orange: PRIMARY_ACCENT,
+  amber: PRIMARY_ACCENT,
+  pink: PRIMARY_ACCENT,
+  purple: PRIMARY_ACCENT,
+  violet: PRIMARY_ACCENT,
 }
 
 /** A prominent fixed category card (icon + title + one-line description). */

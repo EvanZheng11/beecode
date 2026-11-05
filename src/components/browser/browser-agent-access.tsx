@@ -74,7 +74,7 @@ const LIST_SCROLL_STEP_PX = 48
  * around it. A mark that says a page is exposed should not be something the
  * theme picker can tune down.
  */
-export const AGENT_MARK = "text-violet-600 dark:text-violet-400"
+export const AGENT_MARK = "text-primary-text"
 
 /** The pinned program's file name — what the person would have typed —
  *  rather than the path they never look at. Null when this grant has no pin,
@@ -164,7 +164,7 @@ export function BrowserAgentShareControl({
               <span>{t(level === "read" ? "shareRead" : "shareControl")}</span>
               {/* `ms-auto`, not `ml-auto`: Arabic is a live locale here. */}
               {level === defaultLevel ? (
-                <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                <span className="ms-auto shrink-0 text-2xs text-muted-foreground">
                   {t("levelDefault")}
                 </span>
               ) : null}
@@ -186,7 +186,7 @@ export function BrowserAgentShareControl({
           type="button"
           className={cn(
             FIELD_PILL,
-            "bg-violet-500/12 hover:bg-violet-500/20",
+            "bg-primary-soft hover:bg-primary/20",
             AGENT_MARK
           )}
           title={sharedWith}

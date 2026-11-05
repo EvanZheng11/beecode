@@ -1245,6 +1245,8 @@
   /* 危险按钮的实心悬停态不借用主色前景：黄色预设的主色前景是深棕色。 */
   --destructive-foreground: oklch(1 0 0);
   --switch-thumb: oklch(1 0 0);
+  --solid-foreground: oklch(1 0 0);
+  --qr-surface: oklch(1 0 0);
   --scrim: oklch(0 0 0 / 20%);
   --drawer-scrim: oklch(0 0 0 / 10%);
   --image-scrim: oklch(0 0 0 / 80%);
@@ -1282,6 +1284,8 @@
   --color-primary-text: var(--primary-text);
   --color-switch-on: var(--switch-on);
   --color-switch-thumb: var(--switch-thumb);
+  --color-solid-foreground: var(--solid-foreground);
+  --color-qr-surface: var(--qr-surface);
   --color-scrim: var(--scrim);
   --color-drawer-scrim: var(--drawer-scrim);
   --color-image-scrim: var(--image-scrim);
@@ -2158,6 +2162,12 @@
 [data-streamdown="code-block-body"] {
   border: 0;
   border-radius: 0;
+  font-size: 0.8125rem;
+  font-family: var(--font-mono, monospace);
+}
+[data-streamdown="code-block-body"] :is(pre, code) {
+  font-size: inherit;
+  font-family: inherit;
 }
 
 /* Token colours. Shiki sets each token's colours as separate properties, so

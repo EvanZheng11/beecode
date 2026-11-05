@@ -694,10 +694,10 @@ function DiffFileList({
             </span>
           )}
           <span>{t("fileCount", { count: diffOutline.files.length })}</span>
-          <span className="font-mono text-green-600 dark:text-green-400">
+          <span className="font-mono text-tone-success">
             +{diffOutline.totalAdditions}
           </span>
-          <span className="font-mono text-red-600 dark:text-red-400">
+          <span className="font-mono text-tone-danger">
             -{diffOutline.totalDeletions}
           </span>
         </div>
@@ -726,12 +726,12 @@ function DiffFileList({
                   </span>
                   <span className="shrink-0 flex items-center gap-2 text-3xs font-mono">
                     {file.additions > 0 && (
-                      <span className="text-green-600 dark:text-green-400">
+                      <span className="text-tone-success">
                         +{file.additions}
                       </span>
                     )}
                     {file.deletions > 0 && (
-                      <span className="text-red-600 dark:text-red-400">
+                      <span className="text-tone-danger">
                         -{file.deletions}
                       </span>
                     )}
@@ -1961,10 +1961,10 @@ function FileWorkspacePanelBody() {
           <div className="border-b border-border bg-muted/25">
             <div className="px-3 py-1.5 text-2xs text-muted-foreground flex items-center gap-3">
               <span>{t("fileCount", { count: diffOutline.files.length })}</span>
-              <span className="font-mono text-green-600 dark:text-green-400">
+              <span className="font-mono text-tone-success">
                 +{diffOutline.totalAdditions}
               </span>
-              <span className="font-mono text-red-600 dark:text-red-400">
+              <span className="font-mono text-tone-danger">
                 -{diffOutline.totalDeletions}
               </span>
               {diffOutline.totalHunks > 0 && (
@@ -2027,10 +2027,10 @@ function FileWorkspacePanelBody() {
                         {file.path}
                       </span>
                       <span className="ml-auto shrink-0 flex items-center gap-2 text-3xs">
-                        <span className="font-mono text-green-600 dark:text-green-400">
+                        <span className="font-mono text-tone-success">
                           +{file.additions}
                         </span>
-                        <span className="font-mono text-red-600 dark:text-red-400">
+                        <span className="font-mono text-tone-danger">
                           -{file.deletions}
                         </span>
                         <span>{file.hunks.length}h</span>
@@ -2051,7 +2051,7 @@ function FileWorkspacePanelBody() {
                               key={hunk.key}
                               className={`flex items-center gap-1 rounded border px-1.5 py-1 text-3xs ${
                                 isActive
-                                  ? "border-primary/50 bg-primary/10"
+                                  ? "border-primary/50 bg-primary-soft"
                                   : "border-border/70 bg-muted/30"
                               }`}
                             >

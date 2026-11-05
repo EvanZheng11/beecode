@@ -224,7 +224,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
     // 锚点取底栏容器本身（其 class 在 hasFolderBranchPicker 条件之前），
     // 否则切片会漏掉容器的 padding/圆角 class。
     const pickerStart = messageInputSource.indexOf(
-      "justify-between gap-x-2 gap-y-1 rounded-b-xl px-2 pt-1"
+      "justify-between gap-x-2 gap-y-1 rounded-b-2xl px-2 pt-1"
     )
     // The picker row is the last thing inside the composer wrapper; the
     // server-file dialog that follows it sits outside, so it anchors the slice.
@@ -237,7 +237,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
 
     const pickerWrapper = messageInputSource.slice(pickerStart, pickerEnd)
     expect(messageInputSource).toContain(
-      '"overflow-hidden rounded-xl transition-colors"'
+      '"overflow-hidden rounded-2xl transition-colors"'
     )
     expect(messageInputSource).not.toContain("bg-muted/60")
     // The rounded border lives in the always-on base (so the active-session flow
@@ -248,17 +248,17 @@ describe("ConversationDetailPanel new conversation layout", () => {
     // The resting border is `border-foreground/20` (a touch darker than the
     // near-invisible default `border-input`, and legible over a background image).
     expect(messageInputSource).toContain(
-      "rounded-xl border border-foreground/20 bg-transparent transition-colors"
+      "rounded-2xl border border-foreground/20 transition-colors"
     )
     expect(messageInputSource).toContain(
-      '"bg-background ws-transparent-bg focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"'
+      '"bg-background ws-transparent-bg focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/20"'
     )
     expect(pickerWrapper).not.toContain("border-t border-input")
     expect(pickerWrapper).not.toContain("bg-muted/30")
     expect(pickerWrapper).toContain("pt-1")
     // 容器本身不能用 py-1；快捷消息开关 label 的 py-1 是点击热区，属有意保留。
     expect(pickerWrapper).not.toContain("px-2 py-1")
-    expect(pickerWrapper).toContain("rounded-b-xl")
+    expect(pickerWrapper).toContain("rounded-b-2xl")
     // The row only renders while attached below the composer, so the detached
     // `mt-1.5` else-branch is gone; it always takes the rounded-bottom box.
     expect(pickerWrapper).not.toContain("mt-1.5")

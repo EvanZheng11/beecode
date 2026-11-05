@@ -184,7 +184,7 @@ export function BrowserDeviceStage({
         <div
           dir="ltr"
           data-browser-device-label=""
-          className="flex h-[20px] max-w-full shrink-0 select-none items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums"
+          className="flex h-[20px] max-w-full shrink-0 select-none items-center gap-1.5 text-2xs text-muted-foreground tabular-nums"
         >
           <BrowserDeviceSize device={emulated} onCustomSize={onCustomSize} />
           {frame && percent < 100 ? (

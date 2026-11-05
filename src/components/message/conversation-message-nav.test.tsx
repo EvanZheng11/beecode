@@ -244,7 +244,7 @@ describe("MessageNavList", () => {
       "location"
     )
     expect(messageButton("first message").parentElement).toHaveClass(
-      "bg-blue-500/[0.08]"
+      "bg-primary-soft"
     )
   })
 
@@ -254,8 +254,8 @@ describe("MessageNavList", () => {
     fireEvent.click(button)
     expect(button).toHaveClass("h-8")
     expect(screen.getByText("edit something")).toHaveClass("truncate")
-    expect(button.parentElement).toHaveClass("bg-blue-500/[0.08]")
-    expect(within(button).getByText("2")).toHaveClass("bg-blue-500/10")
+    expect(button.parentElement).toHaveClass("bg-primary-soft")
+    expect(within(button).getByText("2")).toHaveClass("bg-primary-soft")
     expect(screen.getAllByTestId("nav-sub-agent")).toHaveLength(1)
     expect(button.parentElement?.nextElementSibling).toContainElement(
       screen.getByTestId("nav-sub-agent")

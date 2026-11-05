@@ -84,7 +84,7 @@ function DataTableCell({
     <td
       data-slot="data-table-cell"
       title={label}
-      className={cn("max-w-0 truncate px-3.5 py-2 text-start", className)}
+      className={cn("truncate px-3.5 py-2 text-start", className)}
       {...props}
     >
       {children}

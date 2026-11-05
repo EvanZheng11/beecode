@@ -247,10 +247,7 @@ function Panel({
     // flex-col so a child marked flex-1 (the heatmap) can absorb the extra
     // height a side-by-side grid row hands the card.
     <section
-      className={cn(
-        "surface-glass flex flex-col rounded-2xl border border-border p-4",
-        className
-      )}
+      className={cn("surface-glass flex flex-col rounded-2xl p-5", className)}
     >
       <header className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">

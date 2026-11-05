@@ -26,7 +26,7 @@ export function SettingCard({
   return (
     <div
       className={cn(
-        "divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-muted/40",
+        "surface-glass divide-y divide-border/60 overflow-hidden rounded-2xl",
         className
       )}
       {...props}

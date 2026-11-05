@@ -256,7 +256,7 @@ function NativeBrowserTabView({
                 <div
                   dir="ltr"
                   data-browser-device-size=""
-                  className="flex h-[20px] items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums"
+                  className="flex h-[20px] items-center gap-1.5 text-2xs text-muted-foreground tabular-nums"
                 >
                   <BrowserDeviceSize
                     device={device}

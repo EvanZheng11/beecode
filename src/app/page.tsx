@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { isDesktop } from "@/lib/platform"
+import { AppBootLoading } from "@/components/layout/app-boot-loading"
 import {
   codegAuthHeaders,
   probeProxyAuthentication,
@@ -63,5 +64,5 @@ export default function Page() {
         router.replace("/workspace")
       })
   }, [router])
-  return null
+  return <AppBootLoading />
 }

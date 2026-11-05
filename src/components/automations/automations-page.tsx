@@ -640,7 +640,7 @@ export function pickCreateFolder(
  *  draws one. `overflow-hidden` is what makes the rounded corners actually clip
  *  the columns and their scrolling content. */
 const SHELL_CLASS =
-  "flex h-full overflow-hidden rounded-2xl border border-border ws-chrome-border"
+  "surface-glass flex h-full overflow-hidden rounded-2xl ws-chrome-border"
 
 /** Inside the shell the list sits on muted and the detail on card — a quiet
  *  tonal step that backs up the divider rather than replacing it. Both are

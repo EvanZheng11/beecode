@@ -63,7 +63,33 @@ export function overlayScrollportRef(node: HTMLElement | null) {
 /** Streamdown puts the table straight inside its scroll container. */
 function tableScrollportRef(table: HTMLTableElement | null) {
   const port = table?.parentElement
-  return port ? attachOverlayScrollport(port) : undefined
+  if (!table || !port) return undefined
+  const added = new Map<HTMLElement, string>()
+  const syncTitles = () => {
+    for (const cell of table.querySelectorAll<HTMLElement>("th, td")) {
+      if (cell.hasAttribute("title") && !added.has(cell)) continue
+      const text = cell.textContent?.trim() ?? ""
+      if (text && cell.title !== text) {
+        cell.title = text
+        added.set(cell, text)
+      }
+    }
+  }
+  syncTitles()
+  const observer = new MutationObserver(syncTitles)
+  observer.observe(table, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  })
+  const release = attachOverlayScrollport(port)
+  return () => {
+    observer.disconnect()
+    for (const [cell, value] of added) {
+      if (cell.title === value) cell.removeAttribute("title")
+    }
+    release()
+  }
 }
 
 /** Streamdown's own table — copy, download and full-screen controls and all —

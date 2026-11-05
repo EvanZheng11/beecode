@@ -142,7 +142,7 @@ function Thumbnail({ targetId }: { targetId: string }) {
         <img
           src={src}
           alt=""
-          className="absolute inset-0 m-auto max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-[3px] shadow-sm ring-1 ring-black/5 dark:ring-white/10"
+          className="absolute inset-0 m-auto max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] rounded-sm shadow-sm ring-1 ring-foreground/10"
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">

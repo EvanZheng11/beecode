@@ -84,8 +84,8 @@ import {
 import { useComputerStopKey } from "@/lib/computer/use-stop-key"
 import { cn } from "@/lib/utils"
 
-// 例外（P6 清理清单）：紫色是浏览器面板「智能体可读」标记的跨面板语义色，保持一致不换令牌。
-const AGENT_MARK = "text-violet-600 dark:text-violet-400"
+// 与浏览器面板的共享状态一致，使用可读主色文字令牌。
+const AGENT_MARK = "text-primary-text"
 
 /** What the entire screen goes by among targets (Rust
  *  `targets::SCREEN_TARGET_ID`). */

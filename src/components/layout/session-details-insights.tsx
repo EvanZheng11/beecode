@@ -154,7 +154,7 @@ function PlanStepIcon({
 }) {
   if (status === "completed") {
     return (
-      <span className="flex size-3.5 items-center justify-center rounded-full bg-emerald-500 text-white">
+      <span className="flex size-3.5 items-center justify-center rounded-full bg-tone-success text-solid-foreground">
         <Check className="size-2.5" strokeWidth={3} />
       </span>
     )

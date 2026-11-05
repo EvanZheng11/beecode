@@ -360,6 +360,6 @@ export function TranscriptTextHighlights({
     }
   }, [containerRef, name, query])
   return query ? (
-    <style>{`::highlight(${name}) { background-color: #fde047; color: #171717; }`}</style>
+    <style>{`::highlight(${name}) { background-color: var(--primary-soft); color: var(--foreground); }`}</style>
   ) : null
 }

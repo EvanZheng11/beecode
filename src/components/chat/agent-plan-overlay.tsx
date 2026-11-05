@@ -57,11 +57,13 @@ function StatusIcon({
   isStreaming: boolean
 }) {
   if (status === "completed") {
-    return <CheckCircle2Icon className="h-3.5 w-3.5 text-emerald-500" />
+    return <CheckCircle2Icon className="h-3.5 w-3.5 text-tone-success" />
   }
 
   if (status === "in_progress" && isStreaming) {
-    return <Loader2Icon className="h-3.5 w-3.5 text-blue-500 animate-spin" />
+    return (
+      <Loader2Icon className="h-3.5 w-3.5 text-primary-text animate-spin" />
+    )
   }
 
   return <CircleDashedIcon className="h-3.5 w-3.5 text-muted-foreground" />

@@ -23,13 +23,13 @@ export type DockStripTone = "warning" | "muted"
 
 const TONE_CLASSES: Record<DockStripTone, string> = {
   warning:
-    "border-amber-500/30 bg-amber-500/10 py-2 text-xs text-amber-700 dark:text-amber-300",
+    "border-tone-warning/30 bg-tone-warning/10 py-2 text-xs text-tone-warning",
   muted: "border-border/50 bg-muted/30 py-1.5 text-2xs text-muted-foreground",
 }
 
 const DISMISS_CLASSES: Record<DockStripTone, string> = {
   warning:
-    "h-6 w-6 text-amber-700/70 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300/70 dark:hover:text-amber-200",
+    "h-6 w-6 text-tone-warning/70 hover:bg-tone-warning/20 hover:text-tone-warning",
   muted: "h-5 w-5 text-muted-foreground/70 hover:text-foreground",
 }
 

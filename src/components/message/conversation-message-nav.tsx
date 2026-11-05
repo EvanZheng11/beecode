@@ -442,7 +442,7 @@ function NumberPill({
       <span
         className={cn(
           "flex h-5 min-w-7 items-center justify-center rounded-md px-0.5 text-2xs tabular-nums",
-          "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+          "bg-primary-soft text-primary-text",
           current && "font-semibold"
         )}
       >
@@ -557,7 +557,7 @@ const MessageNavRow = memo(function MessageNavRow({
       <div
         className={cn(
           "-mx-1.5 flex h-8 min-w-0 items-center rounded-md px-1.5",
-          open || current ? "bg-blue-500/[0.08]" : "hover:bg-muted/60"
+          open || current ? "bg-primary-soft" : "hover:bg-muted/60"
         )}
       >
         <button

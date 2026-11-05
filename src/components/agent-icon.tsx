@@ -776,7 +776,7 @@ function CustomAgentIcon({ agentType, className }: AgentIconProps) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full text-white",
+        "inline-flex shrink-0 items-center justify-center rounded-full text-solid-foreground",
         getAgentColor(agentType),
         className
       )}

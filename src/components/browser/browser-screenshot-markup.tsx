@@ -300,7 +300,7 @@ export function ScreenshotMarkupDialog({
           <div
             role="group"
             aria-label={t("markupTools")}
-            className="inline-flex h-9 items-center rounded-4xl bg-muted p-[3px]"
+            className="inline-flex h-9 items-center rounded-lg bg-muted p-[0.1875rem]"
           >
             <button
               type="button"

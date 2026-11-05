@@ -916,7 +916,8 @@ const ConversationTabView = memo(function ConversationTabView({
     // lifecycle reconnects — which, for a not-installed target, never happens.
     if (!connectionReady) return
     // MCP 提问可跨越前台回合：connected 不代表已经收到用户答案。
-    if (waitingForAnswer || questionTimedOut) return
+    if (waitingForAnswer) return
+    if (questionTimedOut) return
     if (runtimeSyncState === "awaiting_persist") return
     // 追加为实时反馈进行中：暂停自动 flush，等追加结束（成功清理或失败回队
     // 首后状态复位）再重新进入本 effect，恢复正常 FIFO 与 TurnBusyError 回退。
@@ -927,7 +928,8 @@ const ConversationTabView = memo(function ConversationTabView({
     // a just-bounced retry waits out the backoff window before re-sending.
     const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
     const timer = setTimeout(() => {
-      if (!connectionReadyRef.current || queueBlockedRef.current) return
+      if (!connectionReadyRef.current) return
+      if (queueBlockedRef.current) return
       if (appendingQueuedIdRef.current !== null) return
       const next = autoSendQueueRef.current()
       if (next) {
@@ -952,8 +954,8 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [
     connectionReady,
     waitingForAnswer,
-    questionTimedOut,
     runtimeSyncState,
+    questionTimedOut,
     msgQueue.length,
     appendingQueuedId,
   ])

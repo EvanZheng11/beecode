@@ -36,10 +36,10 @@ describe("P1 视觉默认值", () => {
     const content = screen.getByRole("dialog")
     expect(content).toHaveClass("max-w-[35rem]")
     expect(content.className).toContain("86dvh")
-    expect(content).toHaveAttribute("data-padded")
+    expect(content).toHaveClass("dialog-default-padding")
     expect(
       content.querySelector("[data-slot=dialog-footer]")?.className
-    ).toContain("group-data-padded/dialog-content:border-t")
+    ).toContain("group-[.dialog-default-padding]/dialog-content:border-t")
   })
 
   it("调用方自带内边距或宽度时保留旧布局并覆盖默认宽度", () => {
@@ -51,7 +51,7 @@ describe("P1 视觉默认值", () => {
       </Dialog>
     )
     const content = screen.getByRole("dialog")
-    expect(content).not.toHaveAttribute("data-padded")
+    expect(content).not.toHaveClass("dialog-default-padding")
     expect(content).toHaveClass("p-0", "sm:max-w-md")
   })
 

@@ -97,7 +97,7 @@ type FolderSelectVariant = "pill" | "field" | "ghost"
 const TRIGGER_CLASS: Record<FolderSelectVariant, string> = {
   pill: "h-8 w-auto min-w-0 max-w-[14rem] gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted",
   field:
-    "h-7 w-auto min-w-0 max-w-[16rem] gap-1.5 rounded-4xl border-input bg-input/30 px-3 text-xs font-normal hover:bg-input/50 dark:hover:bg-input/50",
+    "h-7 w-auto min-w-0 max-w-[16rem] gap-1.5 rounded-lg border-input bg-card/80 px-3 text-xs font-normal hover:bg-accent",
   ghost:
     "h-7 w-auto min-w-0 max-w-[14rem] gap-1.5 rounded-full border-transparent px-2.5 text-[0.8125rem] font-medium shadow-none hover:bg-muted dark:hover:bg-muted",
 }

@@ -800,7 +800,7 @@ export function TasksPage() {
                 <div
                   key={col}
                   ref={col === "inProgress" ? inProgressColRef : undefined}
-                  className="surface-glass flex min-h-0 flex-col gap-2 rounded-2xl p-2"
+                  className="surface-glass flex min-h-0 flex-col gap-2 rounded-2xl p-3"
                 >
                   <div className="flex h-6 shrink-0 items-center gap-2 px-0.5">
                     {/* A short upright bar rather than a dot: it echoes the

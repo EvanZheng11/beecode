@@ -237,8 +237,7 @@ export function BrowserSendToChatControl({
         type="button"
         className={cn(
           FIELD_PILL,
-          "bg-violet-500/12 text-violet-600 hover:bg-violet-500/20",
-          "dark:text-violet-400"
+          "bg-primary-soft text-primary-text hover:bg-primary/20"
         )}
         title={t("pickingHint")}
         aria-label={t("pickingCancel")}

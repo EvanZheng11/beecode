@@ -72,6 +72,24 @@ describe("attachOverlayScrollport", () => {
 })
 
 describe("MessageResponse scrollports", () => {
+  it("截断单元格保留全文提示，流式内容变化后更新", async () => {
+    const { container, rerender } = render(
+      <MessageResponse>{"| Name |\n| --- |\n| Long value |"}</MessageResponse>
+    )
+    expect(container.querySelector("td")).toHaveAttribute("title", "Long value")
+    rerender(
+      <MessageResponse>
+        {"| Name |\n| --- |\n| Updated long value |"}
+      </MessageResponse>
+    )
+    await waitFor(() =>
+      expect(container.querySelector("td")).toHaveAttribute(
+        "title",
+        "Updated long value"
+      )
+    )
+  })
+
   it("puts the table's own scroll container on the app's scrollbars", () => {
     const { container, unmount } = render(
       <MessageResponse>{REPLY}</MessageResponse>

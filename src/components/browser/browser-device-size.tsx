@@ -179,7 +179,7 @@ function SizeField({
       }}
       // Pixels, as everything on the line above a frame: the stage fits the
       // frame under a line of exactly this height.
-      className="h-[20px] w-[44px] rounded-md border border-border bg-background px-1 text-center text-[11px] text-foreground tabular-nums outline-none select-text focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+      className="h-[20px] w-[44px] rounded-md border border-border bg-background px-1 text-center text-2xs text-foreground tabular-nums outline-none select-text focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
     />
   )
 }

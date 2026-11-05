@@ -81,7 +81,7 @@ describe("ComposerStatusStrips", () => {
       renderStrips({ claudeApiRetry: retry() })
       const line = screen.getByRole("status")
       expect(line).toHaveTextContent(RETRY_LINE)
-      expect(line.className).toContain("bg-amber-500/10")
+      expect(line.className).toContain("bg-tone-warning/10")
       expect(line.className).not.toContain("destructive")
     })
 

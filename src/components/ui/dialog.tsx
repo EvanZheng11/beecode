@@ -93,7 +93,6 @@ function DialogContent({
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-4">
         <DialogPrimitive.Content
           data-slot="dialog-content"
-          data-padded={padded ? "" : undefined}
           ref={contentRef}
           onPointerDownOutside={(event) => {
             onPointerDownOutside?.(event)
@@ -102,7 +101,7 @@ function DialogContent({
           className={cn(
             "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong group/dialog-content pointer-events-auto relative grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full max-w-[35rem] overflow-y-auto rounded-3xl duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
             padded
-              ? "gap-4 px-6 pt-5 pb-4 has-[[data-slot=dialog-footer]:last-child]:pb-0"
+              ? "dialog-default-padding gap-4 px-6 pt-5 pb-4 has-[[data-slot=dialog-footer]:last-child]:pb-0"
               : "gap-6 p-6",
             showCloseButton && "[&_[data-slot=dialog-header]]:pe-10",
             className
@@ -152,7 +151,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
       className={cn(
         "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
         // 规范 §8.8：默认内边距的对话框里，底部栏通栏、上分隔线、py-3.5
-        "group-data-padded/dialog-content:-mx-6 group-data-padded/dialog-content:border-t group-data-padded/dialog-content:px-6 group-data-padded/dialog-content:py-3.5",
+        "group-[.dialog-default-padding]/dialog-content:-mx-6 group-[.dialog-default-padding]/dialog-content:border-t group-[.dialog-default-padding]/dialog-content:px-6 group-[.dialog-default-padding]/dialog-content:py-3.5",
         className
       )}
       {...props}

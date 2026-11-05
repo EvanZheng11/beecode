@@ -2,16 +2,16 @@ import type { ConnectionStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  connected: { color: "bg-green-500", label: "Agent connected" },
+  connected: { color: "bg-tone-success", label: "Agent connected" },
   connecting: {
-    color: "bg-blue-500 animate-pulse",
+    color: "bg-tone-info animate-pulse",
     label: "Connecting...",
   },
   prompting: {
-    color: "bg-yellow-500 animate-pulse",
+    color: "bg-tone-warning animate-pulse",
     label: "Agent responding...",
   },
-  error: { color: "bg-red-500", label: "Connection error" },
+  error: { color: "bg-tone-danger", label: "Connection error" },
 }
 
 interface ConnectionStatusIndicatorProps {

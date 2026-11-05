@@ -289,7 +289,7 @@ function ScriptCalls({ calls }: { calls: CodeModeCall[] }) {
                 ? "text-destructive"
                 : call.status === "running"
                   ? "text-muted-foreground"
-                  : "text-emerald-500"
+                  : "text-tone-success"
             )}
           >
             {call.status === "error"

@@ -47,8 +47,9 @@ function TooltipContent({
         )}
         {...props}
       >
-        {/* 规范 §8.2：提示与触发器之间只留 sideOffset（6px），不再画箭头 */}
         {children}
+        {/* 保留原装饰节点，仅将尺寸清零，使实际间距仍由 sideOffset 控制。 */}
+        <TooltipPrimitive.Arrow className="size-0 opacity-0" />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

@@ -113,7 +113,7 @@ export function RemoteControlStrip({
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-60 items-center gap-3">
-              <div className="rounded-lg bg-white p-3">
+              <div className="rounded-lg bg-qr-surface p-3">
                 <QRCodeSVG
                   value={url}
                   size={176}

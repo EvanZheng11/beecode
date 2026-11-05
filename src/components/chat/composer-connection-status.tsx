@@ -41,7 +41,10 @@ const STATUS_ICON: Record<
   { Icon: LucideIcon; className: string }
 > = {
   connected: { Icon: HeartHandshake, className: "" },
-  connecting: { Icon: HeartPulse, className: "text-amber-500 animate-pulse" },
+  connecting: {
+    Icon: HeartPulse,
+    className: "text-tone-warning animate-pulse",
+  },
   error: { Icon: HeartCrack, className: "text-red-500" },
   disconnected: { Icon: HeartOff, className: "text-muted-foreground/60" },
 }

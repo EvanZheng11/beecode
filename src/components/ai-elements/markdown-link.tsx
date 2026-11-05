@@ -96,7 +96,7 @@ export function MarkdownLink({
     return (
       <a
         className={cn(
-          "wrap-anywhere font-medium text-primary underline",
+          "wrap-anywhere font-medium text-primary-text underline",
           className
         )}
         {...rest}
@@ -197,14 +197,14 @@ export function MarkdownLink({
       title={href}
       onClick={handleClick}
       className={cn(
-        "wrap-anywhere appearance-none text-left font-medium text-primary underline",
+        "wrap-anywhere appearance-none text-start font-medium text-primary-text underline",
         className
       )}
     >
       {Icon ? (
         <Icon
           aria-hidden="true"
-          className="mr-0.5 inline size-[1em] align-[-0.15em] opacity-80"
+          className="me-0.5 inline size-[1em] align-[-0.15em] opacity-80"
         />
       ) : null}
       {children}

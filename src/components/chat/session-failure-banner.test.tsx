@@ -47,7 +47,7 @@ describe("SessionFailureBanner", () => {
     renderBanner([record({ actions: ["retry", "new_session"] })])
     const strip = screen.getByRole("status")
     expect(strip).toHaveTextContent("Reconnecting... 1/5")
-    expect(strip.className).toContain("bg-amber-500/10")
+    expect(strip.className).toContain("bg-tone-warning/10")
     // The adapter is recovering on its own — nothing for the user to press.
     expect(screen.queryByText("Retry")).not.toBeInTheDocument()
     expect(screen.queryByText("New session")).not.toBeInTheDocument()

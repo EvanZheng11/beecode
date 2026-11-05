@@ -68,7 +68,7 @@ export function FeedbackNotesDisplay({
               className={cn(
                 "flex items-center gap-1 rounded-md border px-1.5 py-1 text-3xs leading-none select-none [text-box-trim:both] [text-box-edge:cap_alphabetic]",
                 expired
-                  ? "border-amber-500/40 bg-amber-500/5"
+                  ? "border-tone-warning/40 bg-tone-warning/5"
                   : "bg-muted/40 border-border/70"
               )}
               title={note.text}
