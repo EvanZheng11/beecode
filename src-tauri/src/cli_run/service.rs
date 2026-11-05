@@ -1249,7 +1249,16 @@ impl CliRunService {
             return Ok((0, requested, None));
         };
         let tag = match self.manager.get_state(caller).await {
-            Some(state) => state.read().await.cli_run.clone(),
+            Some(state) => {
+                // CLI 继承的调用方连接同样受待答题门禁约束，不扩大到整个工作目录。
+                if self.manager.question_blocks_task_start(caller).await {
+                    return Err(CliError::execution(
+                        "question_pending",
+                        "caller has an unanswered or stopped question; wait for an explicit user response",
+                    ));
+                }
+                state.read().await.cli_run.clone()
+            }
             // Gone, or a connection of another codeg: an ordinary depth 1.
             None => None,
         };
@@ -4590,6 +4599,31 @@ mod tests {
         let result = result_of(&h.drain(&run_id).await);
         assert!(result.launch.unconfirmed.effort);
         assert_eq!(result.launch.requested.effort.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn a_question_blocks_nested_cli_start_before_spawn() {
+        for stopped in [false, true] {
+            let h = Harness::new().await;
+            h.manager.insert_test_connection("caller", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+            let pending = if stopped {
+                h.state("caller").await.write().await.question_timed_out = true;
+                None
+            } else {
+                let specs = crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+                    "question": "继续？", "header": "确认", "options": [{"label": "甲"}, {"label": "乙"}]
+                }]})).unwrap();
+                h.manager.register_question("caller", specs).await
+            };
+            let run_id = h.svc.reserve().unwrap().run_id;
+            let mut req = h.request(&run_id, PermissionPolicy::Deny);
+            req.caller = Some("caller".into());
+            let result = h.svc.start(req).await;
+            assert!(result.is_err(), "有未答或耗尽提问时不能启动 CLI 工作");
+            assert_eq!(result.unwrap_err().body.error.code, "question_pending");
+            assert!(h.launcher.spawned.lock().unwrap().is_empty());
+            drop(pending);
+        }
     }
 
     #[tokio::test]

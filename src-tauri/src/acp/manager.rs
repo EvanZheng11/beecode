@@ -1319,7 +1319,7 @@ impl ConnectionManager {
         self.send_prompt_with_resume(conn_id, blocks, false).await
     }
 
-    async fn send_prompt_with_resume(
+    pub(crate) async fn send_prompt_with_resume(
         &self,
         conn_id: &str,
         blocks: Vec<PromptInputBlock>,
@@ -3908,6 +3908,19 @@ impl ConnectionManager {
         }
     }
 
+    /// 仅按父连接阻止新工作，不影响同目录其他连接或已运行子任务。
+    pub(crate) async fn question_blocks_task_start(&self, conn_id: &str) -> bool {
+        let pending = self.pending_questions.lock().await;
+        if pending.values().any(|entry| entry.parent_connection_id == conn_id) {
+            return true;
+        }
+        let Some((state, _)) = self.get_state_and_emitter(conn_id).await else {
+            return true;
+        };
+        let state = state.read().await;
+        state.pending_question.is_some() || state.question_timed_out
+    }
+
     /// Register a blocking `ask_user_question` on a connection: park a one-shot
     /// in `pending_questions` keyed by a fresh `question_id`, broadcast the
     /// `QuestionRequest` (so every attached client renders the interactive card
@@ -4585,6 +4598,10 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, crate::acp::delegation::spawner::SpawnerError> {
         use crate::acp::delegation::spawner::SpawnerError;
+        // 在实际新建子连接前再次按父连接验门禁，不取消已运行子任务。
+        if self.manager.question_blocks_task_start(parent_connection_id).await {
+            return Err(SpawnerError::Spawn("parent has an unanswered or stopped question".into()));
+        }
         // Resolve the parent connection so we can inherit its emitter and
         // owner_window. Falling back is not safe: a child whose emitter is
         // wired to a different broadcaster would emit events the frontend
@@ -4715,6 +4732,9 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
     ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
     {
         use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        if self.manager.question_blocks_task_start(parent_connection_id).await {
+            return Err(SpawnerError::Spawn("parent has an unanswered or stopped question".into()));
+        }
         // Same parent inheritance as `spawn` — a resumed child whose emitter is
         // wired to a different broadcaster would stream to nobody.
         let (emitter, owner_window, parent_working_dir) = {
@@ -4959,6 +4979,10 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
                 Some(question_id),
             )
             .await
+    }
+
+    async fn task_start_blocked(&self, parent_connection_id: &str) -> bool {
+        self.manager.question_blocks_task_start(parent_connection_id).await
     }
 
     async fn stop_question_task(&self, parent_connection_id: &str) {
@@ -11101,6 +11125,7 @@ mod tests {
         let reg = access.register_question_with_timeout(
             "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
         ).await.unwrap();
+        assert!(manager.question_blocks_task_start("timeout-stop").await);
         let state = manager.get_state("timeout-stop").await.unwrap();
         state.write().await.apply_event(&AcpEvent::TurnComplete {
             session_id: "session".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
@@ -11108,6 +11133,7 @@ mod tests {
         assert!(access.stop_timed_out_question("timeout-stop", &reg.question_id).await);
         assert!(reg.answer_rx.await.is_err());
         assert!(state.read().await.question_timed_out);
+        assert!(manager.question_blocks_task_start("timeout-stop").await);
         let wire = serde_json::to_value(state.read().await.to_snapshot()).unwrap();
         assert_eq!(wire["question_timed_out"], true);
         assert!(state.read().await.pending_question.is_none());
@@ -11120,9 +11146,13 @@ mod tests {
         assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Cancel)));
         assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
         assert!(!state.read().await.question_timed_out);
+        assert!(!manager.question_blocks_task_start("timeout-stop").await);
         let next = access.register_question_with_timeout(
             "timeout-stop", q_spec(), Some(Duration::from_secs(600)),
         ).await.expect("新指令恢复提问");
+        assert!(!access.stop_timed_out_question("timeout-stop", &reg.question_id).await);
+        assert!(commands.try_recv().is_err(), "旧题撤回不得停止新 generation");
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, next.question_id);
         manager.answer_question("timeout-stop", &next.question_id, QuestionAnswer {
             answers: vec![], declined: true,
         }).await.unwrap();

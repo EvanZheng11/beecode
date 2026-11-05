@@ -354,6 +354,24 @@ describe("a send the running turn turns away", () => {
     })
   }
 
+  it.each([false, true])(
+    "真人新输入显式恢复耗尽任务（草稿 %s）",
+    async (isDraft) => {
+      lifecycle.conn = {
+        ...connection("codex", "connected"),
+        questionTimedOut: true,
+      }
+      lifecycle.handleSend.mockResolvedValue(true)
+      api.createConversation.mockResolvedValue(42)
+      if (isDraft) renderDraftCard()
+      else renderPinnedCard()
+      await send(draft)
+      expect(lifecycle.handleSend.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ explicitUserResume: true })
+      )
+    }
+  )
+
   it("hands the message back to the composer and says why", async () => {
     sendEndsIn("turn-in-progress")
     renderPinnedCard()

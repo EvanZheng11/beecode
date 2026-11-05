@@ -11244,17 +11244,27 @@ async fn handle_elicitation_request(
             // write through the session state from the spawned task.
             let card_state = Arc::clone(state);
             let card_emitter = emitter.clone();
-            // codex may take the question back before anyone answers: it races a
-            // `request_user_input` against `_meta.codex.autoResolutionMs` and
-            // answers `{answers: {}}` itself on expiry, and a closed session or a
-            // cancelled `session/prompt` request aborts it too. Every one of
-            // those arrives as `$/cancel_request` for this request, so the card
-            // is retired the moment codex stops waiting for it, rather than
-            // lingering as a question whose answer would reach nobody.
+            // 上游撤回后不能再完成原 RPC；等待器会按题号抢占注册表并停止宿主。
+            // 仅记录已知元数据，不记录题目或用户内容；此日志不是现场五分钟复现结论。
+            let agent_type = state.read().await.agent_type;
+            let request_id = questions.tool_call_id.clone();
+            let upstream_auto_resolution_ms = raw
+                .pointer("/_meta/codex/autoResolutionMs")
+                .and_then(serde_json::Value::as_u64);
+            let started = tokio::time::Instant::now();
             let cancellation = responder.cancellation();
             tokio::spawn(async move {
                 let answer = registered
-                    .wait(async { cancellation.cancelled().await })
+                    .wait(async {
+                        cancellation.cancelled().await;
+                        tracing::warn!(
+                            ?agent_type,
+                            ?request_id,
+                            ?upstream_auto_resolution_ms,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "elicitation 上游撤回，停止等待并检查宿主任务"
+                        );
+                    })
                     .await;
                 let response = match answer {
                     None => crate::acp::question::elicitation_cancel_response(),
@@ -28087,6 +28097,7 @@ mod tests {
             HashMap<(String, String), oneshot::Sender<crate::acp::question::QuestionOutcome>>,
         >,
         canceled: std::sync::Mutex<Vec<String>>,
+        stopped: std::sync::Mutex<Vec<String>>,
     }
 
     #[async_trait::async_trait]
@@ -28116,6 +28127,10 @@ mod tests {
                 .await
                 .remove(&(parent_connection_id.to_string(), question_id.to_string()))
                 .is_some()
+        }
+
+        async fn stop_question_task(&self, parent_connection_id: &str) {
+            self.stopped.lock().unwrap().push(parent_connection_id.to_string());
         }
 
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
@@ -28218,6 +28233,7 @@ mod tests {
             .expect("a response, not an error");
         client.abort();
         assert_eq!(response["action"], "cancel", "{response}");
+        assert_eq!(questions.stopped.lock().unwrap().as_slice(), &["conn-test"]);
         assert_eq!(
             questions.canceled.lock().unwrap().clone(),
             vec!["q-1".to_string()],

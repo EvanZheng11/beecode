@@ -42,6 +42,7 @@ impl NativeQuestion {
         cancellation: impl Future<Output = ()>,
     ) -> Option<QuestionOutcome> {
         tokio::pin!(cancellation);
+        let started = tokio::time::Instant::now();
         for round in 0..=self.config.retry_count {
             // 测试桩可不提供期限，生产注册入口始终提供共享句柄。
             let deadline = self.registered.deadline.clone().unwrap_or_else(|| {
@@ -55,8 +56,19 @@ impl NativeQuestion {
                 tokio::select! {
                     biased;
                     () = &mut cancellation => {
-                        tracing::debug!(connection_id = %self.connection_id, question_id = %self.registered.question_id, "原生提问被对端或权限队列撤回");
-                        self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        // RPC 已撤回，无法继续原请求；仅本题仍在注册表时停任务。
+                        let stopped = self.access.stop_timed_out_question(&self.connection_id, &self.registered.question_id).await;
+                        tracing::warn!(
+                            connection_id = %self.connection_id,
+                            question_id = %self.registered.question_id,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            configured_wait_minutes = self.config.wait_timeout_minutes,
+                            configured_deadline = ?deadline.expires_at(),
+                            round,
+                            retry_count = self.config.retry_count,
+                            stopped,
+                            "原生提问上游撤回，配置轮次被中断；未收到用户答案"
+                        );
                         return None;
                     }
                     answer = &mut self.registered.answer_rx => {
@@ -273,9 +285,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn withdrawal_and_stop_never_default_or_retry() {
-        for peer_withdrawal in [true, false] {
+        for (peer_withdrawal, auto) in [(true, true), (true, false), (false, true), (false, false)] {
             let access = Arc::new(Access::default());
-            let ask = question(&access, true).await;
+            let ask = question(&access, auto).await;
             let (tx, rx) = oneshot::channel();
             if peer_withdrawal {
                 tx.send(()).unwrap();
@@ -289,9 +301,20 @@ mod tests {
                 .await
                 .is_none());
             assert_eq!(*access.rounds.lock().unwrap(), 1);
-            assert_eq!(*access.stops.lock().unwrap(), 0);
+            assert_eq!(*access.stops.lock().unwrap(), u32::from(peer_withdrawal));
             assert!(access.pending.lock().unwrap().is_none());
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn late_withdrawal_must_not_stop_a_new_question_generation() {
+        let access = Arc::new(Access::default());
+        let old = question(&access, false).await;
+        access.cancel_questions_by_parent("parent").await;
+        let next = question(&access, false).await;
+        assert!(old.wait(std::future::ready(())).await.is_none());
+        assert_eq!(*access.stops.lock().unwrap(), 0);
+        assert_eq!(access.pending.lock().unwrap().as_ref().unwrap().0, next.registered.question_id);
     }
 
     #[tokio::test(start_paused = true)]

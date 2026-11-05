@@ -3440,14 +3440,15 @@ export type AcpEvent =
       /** 后端等待截止时间（RFC3339 UTC）。没有期限的原生提问省略此字段。 */
       expires_at?: string | null
     }
-  /**
-   * A pending question was answered (from any client) or canceled (tool call
-   * aborted / connection drained). Clients clear the matching card.
-   */
+  /** 提问耗尽或上游撤回后停止任务，等待用户显式新输入。 */
   | {
       type: "question_task_stopped"
       stopped: boolean
     }
+  /**
+   * A pending question was answered (from any client) or canceled (tool call
+   * aborted / connection drained). Clients clear the matching card.
+   */
   | {
       type: "question_resolved"
       question_id: string
