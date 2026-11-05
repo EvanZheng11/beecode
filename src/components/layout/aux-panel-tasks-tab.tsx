@@ -330,7 +330,8 @@ export function TasksAuxTab() {
       ) : !hasAnyTask ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <ListTodo
-            className="size-8 text-muted-foreground/40"
+            className="size-7 text-muted-foreground/60"
+            strokeWidth={1.4}
             aria-hidden="true"
           />
           <div className="flex flex-col gap-1">

@@ -229,7 +229,11 @@ export function AutomationsAuxTab() {
 
       {projectAutomations.length === 0 ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <Zap className="size-8 text-muted-foreground/40" aria-hidden="true" />
+          <Zap
+            className="size-7 text-muted-foreground/60"
+            strokeWidth={1.4}
+            aria-hidden="true"
+          />
           <div className="flex flex-col gap-1">
             <p className="text-sm font-medium">{tAux("noAutomations")}</p>
             <p className="text-xs text-muted-foreground">{t("onboardHint")}</p>

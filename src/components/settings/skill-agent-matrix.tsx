@@ -558,7 +558,7 @@ export function SkillAgentMatrix({
         </div>
 
         {/* Matrix. */}
-        <div className="relative flex-1 min-h-0 rounded-lg border bg-card overflow-auto">
+        <div className="relative flex-1 min-h-0 rounded-2xl border bg-card overflow-auto">
           {applying && (
             <div className="absolute inset-0 z-30 bg-background/40 flex items-center justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -573,11 +573,11 @@ export function SkillAgentMatrix({
             // (header border, category bars, row borders) span the full card
             // width — no hard cliff — while real columns stay compact. When the
             // columns exceed the card the wrapper scrolls horizontally.
-            <table className="w-full border-collapse text-sm">
+            <table className="w-full border-collapse text-ui">
               <thead className="sticky top-0 z-20 bg-card">
                 <tr>
                   {/* Corner: select-all + everything menu. */}
-                  <th className="sticky left-0 z-10 bg-card border-b border-r px-2 py-2 text-left align-middle min-w-[16.25rem]">
+                  <th className="sticky start-0 z-10 bg-card border-b border-e px-2 py-2 text-start align-middle min-w-[16.25rem]">
                     <div className="flex items-center gap-2">
                       <Checkbox
                         checked={
@@ -656,11 +656,14 @@ export function SkillAgentMatrix({
                     colSpan={agents.length + 2}
                   >
                     {items.map((skill) => (
-                      <tr key={skill.id} className="border-b last:border-b-0">
+                      <tr
+                        key={skill.id}
+                        className="h-11 border-b border-foreground/5 transition-colors duration-150 hover:bg-primary/4 last:border-b-0"
+                      >
                         {/* Sticky row header. */}
                         <th
                           scope="row"
-                          className="sticky left-0 z-10 bg-card border-r px-2 py-1.5 text-left font-normal min-w-[16.25rem]"
+                          className="sticky start-0 z-10 bg-card border-e px-2 py-1.5 text-start font-normal min-w-[16.25rem]"
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <Checkbox
@@ -675,7 +678,7 @@ export function SkillAgentMatrix({
                             <button
                               type="button"
                               onClick={() => openDetail(skill.id)}
-                              className="min-w-0 flex-1 text-left"
+                              className="min-w-0 flex-1 text-start"
                             >
                               <span className="block truncate text-sm font-medium hover:underline">
                                 {skill.displayName}
@@ -986,7 +989,7 @@ function CategoryGroup({
       <tr>
         <td
           colSpan={colSpan}
-          className="sticky left-0 bg-muted/30 border-y px-2 py-1 text-2xs uppercase tracking-wide font-semibold text-muted-foreground"
+          className="sticky start-0 bg-muted/30 border-y px-2 py-1 text-2xs uppercase tracking-wide font-semibold text-muted-foreground"
         >
           {label}
         </td>

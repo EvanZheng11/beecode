@@ -2542,8 +2542,8 @@ function EmptyHint({
   action?: ReactNode
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
-      <GitPullRequestArrow className="h-6 w-6 opacity-40" />
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center text-ui text-muted-foreground">
+      <GitPullRequestArrow className="size-7 opacity-60" strokeWidth={1.4} />
       <span className="max-w-md text-balance">{text}</span>
       {action != null ? <div className="mt-1">{action}</div> : null}
     </div>
