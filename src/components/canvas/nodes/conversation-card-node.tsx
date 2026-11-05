@@ -51,7 +51,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
   // member simply drops out of the grid.
   if (!conversation) {
     return (
-      <div className="canvas-board-units flex h-full w-full flex-col items-start justify-between overflow-hidden rounded-xl border border-dashed border-foreground/20 bg-card/60 p-3 opacity-70">
+      <div className="canvas-board-units flex h-full w-full flex-col items-start justify-between overflow-hidden rounded-2xl border border-dashed border-foreground/20 bg-card/60 p-3 shadow-glass opacity-70">
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Unlink className="size-3.5" aria-hidden="true" />
           <span className="text-xs">{t("unresolvedConversation")}</span>
@@ -90,7 +90,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
         // selected — ReactFlow selects before it moves anything — so the ring
         // says so, and a card that also tilts is a sticker effect on an element
         // whose whole job is to land on an exact grid slot.
-        "canvas-board-units flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card px-2.5 py-2 transition-colors",
+        "canvas-board-units flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card px-2.5 py-2 shadow-glass transition-colors",
         "border-foreground/15 hover:border-foreground/30",
         running &&
           "ring-1 ring-primary/30 motion-safe:[animation:canvas-breathe_2.6s_ease-in-out_infinite]",
@@ -103,7 +103,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
           wash — this sits on the card's OPAQUE surface where the region's sits
           on a translucent frame, so the same opacity would read as a slab and
           drown the title. */}
-      <ColorWash color={data.color} className="rounded-xl" opacity={0.08} />
+      <ColorWash color={data.color} className="rounded-2xl" opacity={0.08} />
       {/* One row, one height, one line box. `h-3.5` states the height rather
           than letting the tallest child discover it — with `items-center` that
           is what actually centres four things of four different sizes (a 14px
@@ -141,7 +141,7 @@ export const ConversationCardNode = memo(function ConversationCardNode({
             // the same line box or their baselines disagree by the difference.
             // It used to say `leading-none py-px` to keep from setting the
             // row's height — the row states its own height now, so it can't.
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 font-mono text-[10px] font-medium text-primary"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary-soft px-1.5 font-mono text-[10px] font-medium text-primary-text"
             title={t("childCount", {
               count: conversation.child_count,
             })}

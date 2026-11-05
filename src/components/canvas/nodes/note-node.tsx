@@ -96,7 +96,7 @@ export const NoteNode = memo(function NoteNode({
         // live NodeResizer dimensions), and written in those same units —
         // `canvas-board-units` keeps the text from outgrowing a box the board
         // measures in flow units (see globals.css).
-        "canvas-board-units relative flex h-full w-full flex-col rounded-xl border bg-card transition-colors",
+        "canvas-board-units relative flex h-full w-full flex-col rounded-2xl border bg-card shadow-glass transition-colors",
         "border-foreground/15 hover:border-foreground/30",
         selected && "border-primary ring-2 ring-primary/25"
       )}
@@ -117,7 +117,7 @@ export const NoteNode = memo(function NoteNode({
           })
         }
       />
-      <ColorWash color={dbNode.color} className="rounded-xl" />
+      <ColorWash color={dbNode.color} className="rounded-2xl" />
       {editing ? (
         <textarea
           autoFocus
@@ -136,7 +136,7 @@ export const NoteNode = memo(function NoteNode({
             e.stopPropagation()
           }}
           placeholder={t("notePlaceholder")}
-          className="nodrag nowheel relative min-h-0 flex-1 resize-none rounded-xl bg-transparent p-3 text-[13px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/50"
+          className="nodrag nowheel relative min-h-0 flex-1 resize-none rounded-2xl bg-transparent p-3 text-[13px] leading-relaxed outline-none select-text placeholder:text-muted-foreground/50"
         />
       ) : (
         // `overflow-hidden` rather than a scrollbar: at rest the note is a card

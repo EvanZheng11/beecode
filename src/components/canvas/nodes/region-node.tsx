@@ -121,7 +121,7 @@ export const RegionNode = memo(function RegionNode({
         // band and the "+N" footer are fixed flow-unit heights the grid math
         // reserves, so type that grew with the appearance zoom would spill out
         // of them.
-        "canvas-board-units relative flex h-full w-full flex-col rounded-2xl border bg-card/50 transition-colors",
+        "canvas-board-units relative flex h-full w-full flex-col rounded-2xl border bg-card/50 shadow-glass transition-colors",
         collapsed && "rounded-full",
         unresolved
           ? "border-dashed border-foreground/20"
@@ -193,7 +193,7 @@ export const RegionNode = memo(function RegionNode({
         )}
         {runningCount > 0 && (
           <span
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px font-mono text-[10px] font-medium leading-4 text-primary"
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary-soft px-1.5 py-px font-mono text-[10px] font-medium leading-4 text-primary-text"
             title={t("runningCount", { count: runningCount })}
           >
             <span className="size-1.5 rounded-full bg-primary motion-safe:animate-pulse" />
