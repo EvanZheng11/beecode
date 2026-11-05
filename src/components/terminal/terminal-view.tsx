@@ -386,15 +386,13 @@ export function TerminalView({
         return true
       })
 
-      // Watch <html> for theme (class) and workspace-background (data-workspace-bg)
-      // switching — both change what getTerminalTheme returns (dark/light palette,
-      // and transparent-vs-opaque background), so re-push the theme on either.
+      // 明暗、预设、自定义主色与背景图都改变终端主题；只更新现有实例的配色，不重启 PTY。
       const themeObserver = new MutationObserver(() => {
         term.options.theme = getTerminalTheme(containerRef.current)
       })
       themeObserver.observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ["class", "data-workspace-bg"],
+        attributeFilter: ["class", "data-theme", "style", "data-workspace-bg"],
       })
 
       // Send input to PTY

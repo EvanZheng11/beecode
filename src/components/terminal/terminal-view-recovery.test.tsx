@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   fits: 0,
   emulators: 0,
   disposed: 0,
+  theme: vi.fn(() => ({}) as { cursor?: string }),
+  themeOptions: null as { theme: { cursor?: string } } | null,
   snapshot: vi.fn(),
   spawn: vi.fn(),
   kill: vi.fn(async () => {}),
@@ -67,7 +69,7 @@ vi.mock("@/hooks/use-open-url-target", () => ({
   isPrimaryModifier: () => false,
 }))
 vi.mock("@/hooks/use-platform", () => ({ detectPlatform: () => "linux" }))
-vi.mock("@/lib/terminal/theme", () => ({ getTerminalTheme: () => ({}) }))
+vi.mock("@/lib/terminal/theme", () => ({ getTerminalTheme: h.theme }))
 vi.mock("@/lib/browser/browser-prefs", () => ({ getBrowserPrefs: () => ({}) }))
 vi.mock("@/components/terminal/terminal-link-menu", () => ({
   TerminalLinkMenu: () => null,
@@ -76,10 +78,16 @@ vi.mock("@/components/terminal/terminal-link-menu", () => ({
 vi.mock("@/components/terminal/term-keybar", () => ({ TermKeybar: () => null }))
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    constructor() {
+    constructor(options: { theme: { cursor?: string } }) {
       h.emulators++
+      this.options.theme = options.theme
+      h.themeOptions = this.options
     }
-    options = { fontFamily: "", fontSize: 12, theme: {} }
+    options: {
+      fontFamily: string
+      fontSize: number
+      theme: { cursor?: string }
+    } = { fontFamily: "", fontSize: 12, theme: {} }
     modes = { applicationCursorKeysMode: false }
     loadAddon(addon: { activate?: (term: unknown) => void }) {
       addon.activate?.(this)
@@ -167,6 +175,8 @@ describe("TerminalView recovery", () => {
     h.fits = 0
     h.emulators = 0
     h.disposed = 0
+    h.theme.mockReset().mockReturnValue({})
+    h.themeOptions = null
     h.snapshot.mockReset()
     h.snapshot.mockResolvedValue({
       exists: false,
@@ -189,6 +199,33 @@ describe("TerminalView recovery", () => {
     h.fontSize = 12
     h.handlers.clear()
     h.ready = null
+  })
+
+  it("已挂载终端跟随预设与自定义主色更新，不重建或重启 PTY", async () => {
+    h.theme.mockReturnValue({ cursor: "#112233" })
+    const view = render(<TerminalView {...props} />)
+    await waitFor(() => expect(h.themeOptions?.theme.cursor).toBe("#112233"))
+    await waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(1))
+    const root = document.documentElement
+    const previousTheme = root.getAttribute("data-theme")
+    const previousPrimary = root.style.getPropertyValue("--primary")
+    try {
+      h.theme.mockReturnValue({ cursor: "#445566" })
+      root.setAttribute("data-theme", "red")
+      await waitFor(() => expect(h.themeOptions?.theme.cursor).toBe("#445566"))
+      h.theme.mockReturnValue({ cursor: "#778899" })
+      root.style.setProperty("--primary", "#778899")
+      await waitFor(() => expect(h.themeOptions?.theme.cursor).toBe("#778899"))
+      expect(h.emulators).toBe(1)
+      expect(h.spawn).toHaveBeenCalledTimes(1)
+      expect(h.kill).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+      if (previousTheme === null) root.removeAttribute("data-theme")
+      else root.setAttribute("data-theme", previousTheme)
+      if (previousPrimary) root.style.setProperty("--primary", previousPrimary)
+      else root.style.removeProperty("--primary")
+    }
   })
 
   it("restores a live PTY, filters old-generation events, and fills WS gaps from a snapshot", async () => {

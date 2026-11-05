@@ -84,51 +84,91 @@ function sourceFiles(directory: string): string[] {
   })
 }
 
-it("界面源码禁止新增硬编码颜色和固定像素字号", () => {
+function violations(text: string, name: string): string[] {
   const failures: string[] = []
-  const files = [
-    ...sourceFiles(join(root, "components")),
-    ...sourceFiles(join(root, "app")),
-  ]
-  for (const file of files) {
-    const name = relative(root, file).split("\\").join("/")
-    const text = readFileSync(file, "utf8")
-    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
-    const check = (node: ts.Node) => {
-      // AST 字符串避免把任务 ID（#abcdef12）、注释与模板文档误认成颜色。
-      if (
-        ts.isStringLiteralLike(node) ||
-        (ts.isJsxAttribute(node) &&
-          node.initializer &&
-          ts.isStringLiteral(node.initializer))
-      ) {
-        const value = ts.isStringLiteralLike(node)
-          ? node.text
-          : (node as ts.JsxAttribute).initializer!.getText(source)
-        const line =
-          source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
-        if (/text-\[\d+(?:\.\d+)?px\]/.test(value)) {
-          failures.push(`${name}:${line} 固定像素字号`)
-        }
+  const source = ts.createSourceFile(
+    name,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  )
+  const check = (node: ts.Node) => {
+    if (
+      ts.isStringLiteralLike(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node)
+    ) {
+      const value = node.text
+      const line =
+        source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
+      if (/text-\[\d+(?:\.\d+)?px\]/.test(value)) {
+        failures.push(`${name}:${line} 固定像素字号`)
+      }
+      let parent: ts.Node | undefined = node.parent
+      while (parent && !ts.isJsxAttribute(parent) && !ts.isSourceFile(parent))
+        parent = parent.parent
+      // URL 片段和 SVG 引用不是颜色；className、style 中的相同值仍须拦截。
+      const fragment =
+        parent &&
+        ts.isJsxAttribute(parent) &&
+        /^(?:href|xlinkHref|to)$/.test(parent.name.getText(source)) &&
+        value.startsWith("#")
+      if (!fragment) {
         for (const match of value.matchAll(
           /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi
         )) {
           const color = match[0].toLowerCase()
-          // 只检查颜色语法位置；字符串里的提交哈希/片段标识不是 CSS 颜色。
           const before = value.slice(0, match.index)
           const after = value.slice(match.index! + color.length)
           const looksLikeColor =
             /^#[\da-f]+$/i.test(value) ||
             /(?:\[|\(|,|:|\s)$/.test(before) ||
             /^[\])\s,;]/.test(after)
-          if (looksLikeColor && !exceptions[name]?.has(color)) {
+          if (looksLikeColor && !exceptions[name]?.has(color))
             failures.push(`${name}:${line} 未登记颜色 ${color}`)
-          }
         }
       }
-      ts.forEachChild(node, check)
     }
-    check(source)
+    ts.forEachChild(node, check)
   }
-  expect([...new Set(failures)]).toEqual([])
+  check(source)
+  return [...new Set(failures)]
+}
+
+it("界面源码禁止新增硬编码颜色和固定像素字号", () => {
+  const files = [
+    ...sourceFiles(join(root, "components")),
+    ...sourceFiles(join(root, "app")),
+  ]
+  expect(
+    files.flatMap((file) =>
+      violations(
+        readFileSync(file, "utf8"),
+        relative(root, file).split("\\").join("/")
+      )
+    )
+  ).toEqual([])
+})
+
+it.each([
+  'const classes = "text-[17px] bg-[#123456]"',
+  "const classes = `text-[17px] ${value} bg-[#123456]`",
+  "const classes = `${value} text-[17px] bg-[#123456] ${tail}`",
+])("普通字符串与插值模板都不能绕过守卫：%s", (source) => {
+  expect(violations(source, "fixture.tsx")).toEqual([
+    expect.stringContaining("固定像素字号"),
+    expect.stringContaining("未登记颜色 #123456"),
+  ])
+})
+
+it("忽略链接片段，但不忽略样式属性里的相同十六进制值", () => {
+  expect(violations('<a href="#abc">anchor</a>', "fixture.tsx")).toEqual([])
+  expect(
+    violations('<svg><use href="#abcdef" /></svg>', "fixture.tsx")
+  ).toEqual([])
+  expect(
+    violations('<div style={{ color: "#abc" }} />', "fixture.tsx")
+  ).toEqual([expect.stringContaining("未登记颜色 #abc")])
 })

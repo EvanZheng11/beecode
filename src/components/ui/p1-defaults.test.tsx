@@ -37,6 +37,14 @@ describe("P1 视觉默认值", () => {
     expect(content).toHaveClass("max-w-[35rem]")
     expect(content.className).toContain("86dvh")
     expect(content).toHaveClass("dialog-default-padding")
+    const footer = content.querySelector("[data-slot=dialog-footer]")!
+    expect(footer.nextElementSibling).toHaveAttribute(
+      "data-slot",
+      "dialog-close"
+    )
+    expect(content.className).toContain(
+      "[data-slot=dialog-footer]+[data-slot=dialog-close]:last-child"
+    )
     expect(
       content.querySelector("[data-slot=dialog-footer]")?.className
     ).toContain("group-[.dialog-default-padding]/dialog-content:border-t")
