@@ -248,7 +248,7 @@ function Panel({
     // height a side-by-side grid row hands the card.
     <section
       className={cn(
-        "flex flex-col rounded-xl border border-border bg-card p-4",
+        "surface-glass flex flex-col rounded-2xl border border-border p-4",
         className
       )}
     >

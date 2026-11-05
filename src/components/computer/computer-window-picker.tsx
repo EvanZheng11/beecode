@@ -326,12 +326,10 @@ function LevelControl({
               "flex h-6 min-w-0 items-center justify-center gap-1 rounded-full px-1.5 text-2xs font-medium text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60",
               !on && "hover:bg-background/60 hover:text-foreground",
               on && "bg-background text-foreground shadow-sm",
-              on &&
-                option === "read" &&
-                "bg-violet-600 text-white dark:bg-violet-500",
+              on && option === "read" && "bg-primary text-primary-foreground",
               on &&
                 option === "control" &&
-                "bg-red-600 text-white dark:bg-red-500"
+                "bg-destructive text-destructive-foreground"
             )}
           >
             {pending === option && (
@@ -611,7 +609,7 @@ export function ComputerWindowPicker({
           <p className="text-xs text-muted-foreground">
             {windows ? t("count", { count: shareable.length }) : t("loading")}
             {anyShared && (
-              <span className="text-violet-600 dark:text-violet-400">
+              <span className="text-primary-text">
                 {" · "}
                 {t("sharedCount", { count: sharedCount })}
               </span>
@@ -671,14 +669,14 @@ export function ComputerWindowPicker({
         {(screenRecording === false || error || notice) && (
           <div className="space-y-2 px-6 pb-3">
             {screenRecording === false && (
-              <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-                <TriangleAlert className="size-4 shrink-0 text-amber-500" />
+              <div className="flex items-center gap-2.5 rounded-xl border border-tone-warning/30 bg-tone-warning/5 px-3 py-2">
+                <TriangleAlert className="size-4 shrink-0 text-tone-warning" />
                 <div className="min-w-0 flex-1 space-y-1">
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                  <p className="text-xs text-tone-warning">
                     {t("noScreenRecording")}
                   </p>
                   {permissionError && (
-                    <p className="text-2xs break-words text-red-500">
+                    <p className="text-2xs break-words text-destructive">
                       {permissionError}
                     </p>
                   )}
@@ -696,7 +694,7 @@ export function ComputerWindowPicker({
             )}
 
             {error && (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs break-words text-red-500">
+              <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs break-words text-destructive">
                 {error}
               </div>
             )}
