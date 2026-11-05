@@ -1,9 +1,26 @@
 import type { MouseEvent } from "react"
 import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+// 自定义字号必须登记到字体大小组，否则 text-ui 会被误当成文字颜色并合并掉。
+const mergeClasses = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [
+        "text-2xs",
+        "text-3xs",
+        "text-ui",
+        "text-heading-sm",
+        "text-heading",
+        "text-page-title",
+        "text-display",
+      ],
+    },
+  },
+})
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return mergeClasses(clsx(inputs))
 }
 
 /**

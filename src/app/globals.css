@@ -1242,6 +1242,8 @@
   --primary-soft: color-mix(in oklab, var(--primary) 10%, var(--background));
   /* 主色文字（链接、编号、ghost 按钮）：沿用按预设压过明度的 --activity-accent。 */
   --primary-text: var(--activity-accent);
+  /* 危险按钮的实心悬停态不借用主色前景：黄色预设的主色前景是深棕色。 */
+  --destructive-foreground: oklch(1 0 0);
   --shadow-tint: 0 0 0;
   --shadow-glass:
     0 1px 1px rgb(0 0 0 / 0.02), 0 8px 28px rgb(var(--shadow-tint) / 0.06);
@@ -1254,6 +1256,7 @@
 }
 .dark {
   --primary-soft: color-mix(in oklab, var(--primary) 18%, var(--background));
+  --destructive-foreground: var(--background);
   --shadow-glass:
     0 1px 1px rgb(0 0 0 / 0.2), 0 8px 28px rgb(var(--shadow-tint) / 0.35);
   --shadow-pop:
@@ -1313,6 +1316,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);

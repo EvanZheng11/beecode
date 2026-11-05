@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { THEME_COLORS } from "@/lib/theme-presets"
 
 const globalsCss = readFileSync(
   resolve(process.cwd(), "src/app/globals.css"),
@@ -64,5 +65,26 @@ describe.each([
   const t = vars(selector)
   it.each(PAIRS)("%s on %s ≥ 4.5:1", (fg, bg) => {
     expect(contrast(t[fg]!, t[bg]!)).toBeGreaterThanOrEqual(4.5)
+  })
+})
+
+describe("危险操作实心态的共享前景", () => {
+  it.each(THEME_COLORS)("%s 明暗模式均达到 4.5:1", (preset) => {
+    const light = vars(`[data-theme="${preset}"]`)
+    const dark = vars(`[data-theme="${preset}"].dark`)
+    expect(
+      contrast("oklch(1 0 0)", light["--destructive"]!)
+    ).toBeGreaterThanOrEqual(4.5)
+    expect(
+      contrast(dark["--background"]!, dark["--destructive"]!)
+    ).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it("把专用前景注册为令牌，不依赖各预设的主色前景", () => {
+    expect(globalsCss).toContain("--destructive-foreground: oklch(1 0 0)")
+    expect(globalsCss).toContain("--destructive-foreground: var(--background)")
+    expect(globalsCss).toContain(
+      "--color-destructive-foreground: var(--destructive-foreground)"
+    )
   })
 })
