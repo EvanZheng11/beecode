@@ -538,7 +538,7 @@ export function ChannelEventsTab() {
       </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>
               {editingIndex === null ? t("addWebhook") : t("editWebhook")}

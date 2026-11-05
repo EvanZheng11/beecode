@@ -137,7 +137,7 @@ export function CronBuilderDialog({
   const t = useTranslations("Automations")
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("cronBuilderTitle")}</DialogTitle>
         </DialogHeader>

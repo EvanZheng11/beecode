@@ -62,7 +62,7 @@ export function ExternalConflictDialog() {
         dismissExternalConflict()
       }}
     >
-      <DialogContent>
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("externalConflictDialog.title")}</DialogTitle>
           <DialogDescription>

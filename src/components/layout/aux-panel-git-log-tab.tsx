@@ -2671,7 +2671,7 @@ export function GitLogTab() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("dialogs.newBranchTitle")}</DialogTitle>
             <DialogDescription>
@@ -2723,7 +2723,7 @@ export function GitLogTab() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("dialogs.reset.title")}</DialogTitle>
           </DialogHeader>

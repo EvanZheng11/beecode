@@ -1095,7 +1095,7 @@ export function SessionDirectoryDialog({
         </DialogContent>
       </Dialog>
       <Dialog open={newGroup} onOpenChange={setNewGroup}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("newGroupTitle")}</DialogTitle>
             <DialogDescription>{t("newGroupDescription")}</DialogDescription>
@@ -1134,7 +1134,7 @@ export function SessionDirectoryDialog({
         open={groupTargets !== null}
         onOpenChange={(value) => !value && !busy && setGroupTargets(null)}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("groupTitle")}</DialogTitle>
             <DialogDescription>
@@ -1182,7 +1182,7 @@ export function SessionDirectoryDialog({
         open={removeIds !== null}
         onOpenChange={(value) => !value && setRemoveIds(null)}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("removeTitle")}</DialogTitle>
             <DialogDescription>

@@ -906,7 +906,7 @@ const FolderHeader = memo(function FolderHeader({
       </ContextMenu>
 
       <Dialog open={aliasDialogOpen} onOpenChange={setAliasDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("folderHeaderMenu.setAliasTitle")}</DialogTitle>
           </DialogHeader>

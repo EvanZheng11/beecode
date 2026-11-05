@@ -772,7 +772,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
       </AlertDialog>
 
       <Dialog open={newBranchOpen} onOpenChange={setNewBranchOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("dialogs.newBranchTitle")}</DialogTitle>
             <DialogDescription>

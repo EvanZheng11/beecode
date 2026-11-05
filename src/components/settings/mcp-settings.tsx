@@ -976,7 +976,7 @@ export function McpSettings() {
   return (
     <>
       <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("installDialog.title")}</DialogTitle>
             <DialogDescription>

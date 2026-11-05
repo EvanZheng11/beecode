@@ -2108,7 +2108,7 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
-  border-radius: calc(var(--radius) * 1.8);
+  border-radius: calc(var(--radius) * 1.4);
   border: 1px solid var(--border);
   background-color: transparent;
 }
@@ -2340,7 +2340,7 @@
    圆角；复制工具条是 table-wrapper 的兄弟、不在此容器内，故不被裁（无需搬动）。底色透明：
    2.7 给它加了不透明的 bg-background，会把开图时 thead/tbody 的半透明染色垫成实底。 */
 [data-streamdown="table-wrapper"] > div:has(> [data-streamdown="table"]) {
-  border-radius: calc(var(--radius) * 1.8);
+  border-radius: calc(var(--radius) * 1.4);
   border: 1px solid var(--border);
   background-color: transparent;
 }

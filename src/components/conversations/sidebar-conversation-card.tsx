@@ -784,7 +784,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
       </HoverCard>
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("renameConversation")}</DialogTitle>
           </DialogHeader>

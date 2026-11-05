@@ -374,7 +374,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           if (!o) setRenameTarget(null)
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("renameConversation")}</DialogTitle>
           </DialogHeader>

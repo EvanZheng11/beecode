@@ -3388,6 +3388,7 @@ export function FileTreeTab() {
         }}
       >
         <DialogContent
+          className="max-w-md"
           onOpenAutoFocus={(e) => {
             e.preventDefault()
             const input = (
@@ -3457,6 +3458,7 @@ export function FileTreeTab() {
         }}
       >
         <DialogContent
+          className="max-w-md"
           onOpenAutoFocus={(e) => {
             e.preventDefault()
             const input = (
@@ -3634,7 +3636,7 @@ export function FileTreeTab() {
           setCompareCurrentBranch(null)
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("compareDialog.title")}</DialogTitle>
             <DialogDescription>
