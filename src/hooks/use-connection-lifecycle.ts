@@ -253,7 +253,7 @@ export function useConnectionLifecycle({
           setLastAutoConnectError({
             contextKey: contextKeyRef.current,
             agentType,
-            message: connectErrorMessage(e) || t("errors.connectionFailed"),
+            message: connectErrorMessage(e),
           })
         }
         if (!isExpectedConnectError(e)) {
@@ -263,7 +263,7 @@ export function useConnectionLifecycle({
     return () => {
       cancelled = true
     }
-  }, [isActive, workingDir, agentType, t])
+  }, [isActive, workingDir, agentType])
 
   // Status-bar task for the two legs that precede a usable session:
   //   "preparing"  — the caller is resolving what to connect to (see `preparing`)
@@ -462,7 +462,8 @@ export function useConnectionLifecycle({
       ? null
       : lastAutoConnectError?.contextKey === contextKey &&
           lastAutoConnectError.agentType === agentType
-        ? lastAutoConnectError.message
+        ? // 翻译仅属于展示，不进入自动连接 effect 的依赖；切换语言不能重启失败的 ACP。
+          lastAutoConnectError.message || t("errors.connectionFailed")
         : publishedConnectError
           ? (publishedConnectError.detail ?? publishedConnectError.title)
           : null
