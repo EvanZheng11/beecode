@@ -7853,5 +7853,26 @@
       "service": "服务",
       "process": "进程"
     }
+  },
+  "ProjectTrust": {
+    "requestTitle": "项目信任请求",
+    "requestDescription": "请检查目录和资源后决定是否允许。",
+    "trustFile": "信任文件",
+    "executesCode": "可执行代码",
+    "deny": "拒绝",
+    "allow": "允许",
+    "batchTitle": "批量信任项目",
+    "inheritance": "仅提交明确勾选的目录。智能体的原生信任规则可能使子目录继承父目录的信任，请谨慎选择。",
+    "agent": "智能体",
+    "selectCurrent": "选择当前目录",
+    "confirmDescription": "确认以下所有目录和风险，一次允许全部目录。",
+    "back": "返回",
+    "cancel": "取消",
+    "review": "查看风险",
+    "allowAll": "全部允许",
+    "incompleteInspection": "风险检查未覆盖全部已选目录，未执行授权。",
+    "granted": "已授权",
+    "failed": "授权失败",
+    "done": "完成"
   }
 }

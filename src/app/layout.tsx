@@ -22,6 +22,7 @@ import { WebConnectionGuard } from "@/components/connection/web-connection-guard
 import { WebVersionNotice } from "@/components/connection/web-version-notice"
 import { WindowResizeGrips } from "@/components/layout/window-resize-grips"
 import { CloseRequestDialog } from "@/components/workspace/close-request-dialog"
+import { ProjectTrustDialog } from "@/components/shared/project-trust-dialog"
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -107,6 +108,7 @@ export default async function RootLayout({
                 <ClipboardFallbackInit />
                 <ServiceWorkerInit />
                 <WebConnectionGuard />
+                <ProjectTrustDialog />
                 <WebVersionNotice />
                 <WindowResizeGrips />
                 {/* Self-gated to the main window: every route it can show

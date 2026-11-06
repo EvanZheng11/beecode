@@ -63,7 +63,6 @@ import {
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
-import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
 import { FeedbackDialog } from "@/components/chat/feedback-dialog"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
@@ -2302,11 +2301,6 @@ const ConversationTabView = memo(function ConversationTabView({
       topBanner={
         <>
           <SessionConfigStaleBanner contextKey={tabId} />
-          <PiProjectTrustBanner
-            contextKey={tabId}
-            agentType={selectedAgent}
-            workingDir={workingDirForConnection}
-          />
         </>
       }
       status={connStatus}

@@ -223,6 +223,7 @@ import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
+import { ProjectTrustSettings } from "./project-trust-settings"
 import { QoderConfigPanel } from "./qoder-config-panel"
 
 interface AgentCheckState {
@@ -8527,15 +8528,18 @@ export function AcpAgentSettings() {
         description={t("description")}
         className="mb-4 shrink-0"
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs shrink-0"
-            onClick={() => setAddCustomOpen(true)}
-          >
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            {t("addCustomAgent")}
-          </Button>
+          <>
+            <ProjectTrustSettings />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs shrink-0"
+              onClick={() => setAddCustomOpen(true)}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              {t("addCustomAgent")}
+            </Button>
+          </>
         }
       />
 
