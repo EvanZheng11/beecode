@@ -518,8 +518,10 @@ async fn async_main(
         let listener = codeg_lib::acp::delegation::listener::DelegationListener::new(
             delegation_broker,
             delegation_tokens,
-            Arc::new(codeg_lib::acp::manager::ConnectionManagerParentLookup {
+            Arc::new(codeg_lib::acp::delegation::project_trust_access::ProjectTrustParentLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
+                db: codeg_lib::db::AppDatabase { conn: state.db.conn.clone() },
+                data_dir: state.data_dir.clone(),
             }),
             Arc::new(codeg_lib::acp::manager::ConnectionManagerFeedbackLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),

@@ -1295,8 +1295,10 @@ mod tauri_app {
                         listener_broker,
                         tokens,
                         std::sync::Arc::new(
-                            crate::acp::manager::ConnectionManagerParentLookup {
+                            crate::acp::delegation::project_trust_access::ProjectTrustParentLookup {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
+                                db: db::AppDatabase { conn: db_conn.clone() },
+                                data_dir: effective_data_dir.clone(),
                             },
                         ),
                         std::sync::Arc::new(

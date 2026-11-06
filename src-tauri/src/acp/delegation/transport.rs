@@ -473,6 +473,7 @@ pub enum BrokerMessage {
     /// empty list when the lookup fails, so a companion never mistakes a
     /// refusal for an old listener (see `Ping`).
     ListAssistants(BrokerListAssistantsRequest),
+    ProjectTrust(BrokerProjectTrustRequest),
     /// Liveness and capability probe, carrying no `token`: the answer reveals
     /// nothing beyond "the socket is being served" and what this listener
     /// understands. Sent by codeg's own service-status check
@@ -488,6 +489,20 @@ pub enum BrokerMessage {
     /// dropping the assistant's options and instructions. That is why the
     /// companion asks before it forwards one (`AssistantSupport`).
     Ping,
+}
+
+/// 运行中的智能体为自身申请另一个目录的项目信任，绝不直接授权。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerProjectTrustRequest {
+    pub token: String,
+    pub workspace: String,
+}
+
+pub async fn client_project_trust_round_trip(
+    socket_path: &str,
+    req: &BrokerProjectTrustRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ProjectTrust(req.clone())).await
 }
 
 /// See [`BrokerMessage::ListAssistants`].

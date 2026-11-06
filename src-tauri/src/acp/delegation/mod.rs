@@ -45,6 +45,7 @@ pub mod listener;
 pub mod live_reply;
 pub mod meta_writer;
 pub mod parent_watcher;
+pub mod project_trust_access;
 pub mod service;
 pub mod spawner;
 pub mod transport;

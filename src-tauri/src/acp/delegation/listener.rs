@@ -82,6 +82,11 @@ pub type BoundSocket = tokio::net::windows::named_pipe::NamedPipeServer;
 #[async_trait]
 pub trait ParentSessionLookup: Send + Sync {
     async fn current_conversation_id(&self, parent_connection_id: &str) -> Option<i32>;
+
+    /// 默认拒绝，未接入的运行时不能把请求误报为已授权。
+    async fn request_project_trust(&self, _connection_id: &str, _workspace: &str) -> Value {
+        serde_json::json!({"approved": false, "message": "当前运行时不支持目录信任申请"})
+    }
 }
 
 /// Per-launch token entry. Bound at MCP injection time and revoked on parent
@@ -459,6 +464,25 @@ impl DelegationListener {
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
+            },
+            BrokerMessage::ProjectTrust(req) => {
+                let Some(entry) = self.tokens.lookup(&req.token).await else {
+                    write_frame(conn, &BrokerResponse { outcome: serde_json::json!({
+                        "approved": false, "message": "目录信任申请不可用"
+                    }) }).await?;
+                    return Ok(());
+                };
+                // 工具取消关闭 socket：丢弃等待 future，由 broker 清理待批请求。
+                let wait = self.parent_lookup.request_project_trust(
+                    &entry.parent_connection_id, &req.workspace,
+                );
+                tokio::pin!(wait);
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    answer = &mut wait => answer,
+                    _ = conn.read(&mut probe) => return Ok(()),
+                };
+                BrokerResponse { outcome }
             },
             BrokerMessage::Call(req) => report_response(self.process(req).await)?,
             BrokerMessage::Status(req) => {
@@ -1999,6 +2023,21 @@ mod tests {
         async fn parent_of(&self, _id: i32) -> Result<Option<i32>, DelegationError> {
             Ok(None)
         }
+    }
+
+    #[tokio::test]
+    async fn project_trust_rejects_invalid_token_without_invoking_parent() {
+        let tokens = Arc::new(TokenRegistry::default());
+        let listener = make_feedback_listener(tokens, Arc::new(StubFeedback::default()));
+        let (mut client, mut server) = duplex(4096);
+        let handle = tokio::spawn(async move { listener.serve_one(&mut server).await });
+        write_frame(&mut client, &BrokerMessage::ProjectTrust(super::super::transport::BrokerProjectTrustRequest {
+            token: "invalid".into(), workspace: "/private-directory".into(),
+        })).await.unwrap();
+        let reply: BrokerResponse = read_frame(&mut client).await.unwrap();
+        assert_eq!(reply.outcome["approved"], false);
+        assert!(!reply.outcome.to_string().contains("private-directory"));
+        handle.await.unwrap().unwrap();
     }
 
     struct StaticParentLookup(Option<i32>);

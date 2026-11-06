@@ -280,7 +280,7 @@ impl CompanionFeatures {
     pub fn allows_tool(&self, name: &str) -> bool {
         match name {
             "check_user_feedback" => self.feedback,
-            "ask_user_question" => self.ask,
+            "ask_user_question" | "request_project_trust" => self.ask,
             "get_session_info" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
@@ -1050,6 +1050,17 @@ async fn build_tools_call_spawn(
                 render_task_report,
             )
             .await
+        }
+        "request_project_trust" => {
+            let workspace = match required_string(&arguments, "workspace", "request_project_trust") {
+                Ok(value) => value,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = super::transport::BrokerProjectTrustRequest { token: ctx.token.clone(), workspace };
+            let round_trip = Box::pin(async move {
+                super::transport::client_project_trust_round_trip(&socket, &req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_project_trust_result).await
         }
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
@@ -4244,6 +4255,14 @@ pub fn render_task_ack(outcome: &Value) -> Value {
     })
 }
 
+fn render_project_trust_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.get("message").and_then(Value::as_str).unwrap_or("目录信任申请未完成")}],
+        "structuredContent": outcome,
+        "isError": outcome.get("approved").and_then(Value::as_bool) != Some(true),
+    })
+}
+
 /// Map a `submit_result` round-trip outcome (a serialized
 /// [`crate::cli_run::output_schema::SubmitOutcome`]) into an MCP `tools/call`
 /// result. A refused result is not a tool error, as with
@@ -5327,6 +5346,18 @@ mod tests {
         assert!(e.message.contains("unknown tool"));
     }
 
+    #[tokio::test]
+    async fn project_trust_requires_workspace_and_uses_human_question_switch() {
+        let line = json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"request_project_trust","arguments":{}}}).to_string();
+        let invalid = unwrap_respond(dispatch_with_features(ASK_ONLY, &line).await);
+        assert!(invalid.error.unwrap().message.contains("workspace"));
+        let valid = json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"request_project_trust","arguments":{"workspace":"/another-directory"}}}).to_string();
+        assert!(matches!(dispatch_with_features(ASK_ONLY, &valid).await, LineAction::Spawn(_)));
+        let disabled = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &valid).await);
+        assert!(disabled.error.unwrap().message.contains("unknown tool"));
+        assert_eq!(render_project_trust_result(&json!({"approved":false,"message":"拒绝"}))["isError"], true);
+    }
+
     // -- ask_user_question feature gating + validation + rendering ----------
 
     #[tokio::test]
@@ -5342,7 +5373,7 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(on, vec!["ask_user_question".to_string()]);
+        assert_eq!(on, vec!["ask_user_question".to_string(), "request_project_trust".to_string()]);
     }
 
     /// Issue #861: after an answer, the description must say to execute and
