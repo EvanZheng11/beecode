@@ -133,7 +133,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
       'conversationFillsArea && "conversation-tab-hidden invisible"'
     )
     expect(workspaceLayoutSource).toMatch(
-      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
+      /conversationFillsArea &&\s*"absolute inset-0 z-30"/
     )
     expect(workspaceLayoutSource).toContain(
       "inert={conversationFillsArea || undefined}"
@@ -162,7 +162,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(conversationColumn).toContain('data-workspace-pane="conversation"')
     expect(conversationColumn).not.toContain('data-workspace-pane="files"')
     expect(conversationColumn).toMatch(
-      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
+      /conversationFillsArea &&\s*"absolute inset-0 z-30"/
     )
     expect(conversationColumn).toContain("<TabBar maximizeControl />")
 
@@ -177,6 +177,25 @@ describe("ConversationDetailPanel new conversation layout", () => {
     )
     expect(fileColumn).toContain("aria-hidden={conversationFillsArea}")
     expect(fileColumn).toContain("inert={conversationFillsArea || undefined}")
+  })
+
+  // 工作区画布就是应用背景（`.app-backdrop`，规范 §2.4），所以这些表面都不铺
+  // 自己的底色：纯会话模式（无文件标签）和 fusion 分栏（例如开着内置浏览器）
+  // 必须同一观感。曾经这里的 `bg-background` 让纯会话模式变成一块纯白，只在
+  // 有文件标签时才透出背景色。
+  it("leaves the workspace canvas to the app backdrop", () => {
+    // 会话列：会话模式 / 会话最大化的整块 overlay。
+    expect(workspaceLayoutSource).not.toMatch(
+      /conversationFillsArea &&\s*"[^"]*bg-(background|card|muted)/
+    )
+    // 文件列最大化时的整块 overlay。
+    expect(workspaceLayoutSource).not.toMatch(
+      /filesMaximized &&\s*"[^"]*bg-(background|card|muted)/
+    )
+    // 整页工作台路由（桌面 + 移动端两个壳）。
+    expect(workspaceLayoutSource).not.toMatch(
+      /absolute inset-0 z-40 flex flex-col[^"]*bg-(background|card|muted)/
+    )
   })
 
   /**

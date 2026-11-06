@@ -413,8 +413,13 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   // mode and for a maximized conversation, so maximizing
                   // resizes nothing in the file column underneath (its
                   // editors and pages keep their size and state).
-                  conversationFillsArea &&
-                    "absolute inset-0 z-30 bg-background ws-transparent-bg",
+                  //
+                  // 自身不铺底色：工作区画布就是应用背景（`.app-backdrop`，规范
+                  // §2.4），这样有无文件标签（fusion 分栏）时会话列观感一致。
+                  // 原先这里的 `bg-background` 让纯会话模式变成一块纯白，和开
+                  // 内置浏览器（有文件标签、走 fusion）时的背景色不一致。被盖住
+                  // 的文件列是 `invisible`，不会有内容透上来。
+                  conversationFillsArea && "absolute inset-0 z-30",
                   // Covered by the files-maximized overlay: stop painting so it
                   // can't show through the now-translucent overlay. `invisible`
                   // (visibility:hidden), not display:none, keeps mount + box size
@@ -542,8 +547,9 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               <section
                 className={cn(
                   "flex h-full min-h-0 flex-col overflow-hidden",
-                  filesMaximized &&
-                    "absolute inset-0 z-30 bg-background ws-transparent-bg",
+                  // 同样不铺底色：最大化文件列和普通分栏走同一块画布（应用
+                  // 背景），被盖住的会话列此时是 `invisible`。
+                  filesMaximized && "absolute inset-0 z-30",
                   // Covered by the conversation overlay (conversation mode, or a
                   // maximized conversation): hide from paint (keep mount +
                   // layout) so it can't show through the translucent overlay.
@@ -595,11 +601,9 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
         </ResizablePanelGroup>
       </KeptMountedSurface>
       {!isConversations ? (
-        // `bg-background ws-transparent-bg` matches the conversation surface
-        // exactly: opaque background normally, fully transparent (image shows
-        // through, no frost) with a workspace background image on — the
-        // conversation beneath is `invisible` so nothing else paints through.
-        <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
+        // 与会话表面同一块画布：自身不铺底色，露出应用背景（`.app-backdrop`）；
+        // 底下的会话表面是 `invisible`，不会有内容透上来。
+        <div className="absolute inset-0 z-40 flex flex-col">
           {/* Window-chrome strip: reserves the fixed corner overlays' h-10
               band, hosts the active route's title on the left, and keeps the
               empty middle as a window-drag region. With a title present it
@@ -662,9 +666,9 @@ function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
         </MobileWorkspacePanes>
       </KeptMountedSurface>
       {!isConversations ? (
-        // Same canvas as the desktop overlay: conversation-identical background
-        // (opaque normally, transparent under a workspace background image).
-        <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
+        // 与桌面端同款画布：自身不铺底色，露出应用背景；移动端会话面板本来
+        // 就没有底色，两者观感一致。
+        <div className="absolute inset-0 z-40 flex flex-col">
           {hasRouteStrip ? (
             <div className="flex h-10 shrink-0 items-stretch border-b border-border/50 ws-chrome-border">
               <WorkbenchRouteStrip />

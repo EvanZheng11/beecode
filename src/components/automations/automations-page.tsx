@@ -483,9 +483,9 @@ export function AutomationsPage() {
   )
 
   return (
-    // No background of its own: the route overlay already paints
-    // `bg-background ws-transparent-bg` (workspace/layout.tsx), so an opaque
-    // layer here would hide the workspace background image behind the page.
+    // No background of its own: the route overlay (workspace/layout.tsx) paints
+    // nothing and lets the app backdrop through, so an opaque layer here would
+    // hide the workspace background behind the page.
     <div className="flex h-full min-h-0 flex-col">
       {hasAutomations ? (
         <>
