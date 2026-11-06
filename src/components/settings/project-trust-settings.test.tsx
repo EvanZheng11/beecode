@@ -102,7 +102,9 @@ it("逐层展开勾选，一次确认批量提交明确选择的目录", async (
 
   fireEvent.click(screen.getByRole("button", { name: "全部允许" }))
   await waitFor(() => expect(mock.grant).toHaveBeenCalledOnce())
-  expect(mock.grant).toHaveBeenCalledWith("pi", ["/parent", "/parent/child"])
+  expect(mock.grant).toHaveBeenCalledWith(
+    targetsFor(["/parent", "/parent/child"])
+  )
   expect(
     await screen.findByText("/parent/child: 授权失败: denied")
   ).toBeInTheDocument()
@@ -157,7 +159,7 @@ it("检查期间禁用树，审查结果与快照一致，不跟随检查后的�
   // 提交的是检查时的工作区快照。
   fireEvent.click(screen.getByRole("button", { name: "全部允许" }))
   await waitFor(() =>
-    expect(mock.grant).toHaveBeenCalledWith("pi", ["/parent"])
+    expect(mock.grant).toHaveBeenCalledWith(targetsFor(["/parent"]))
   )
 })
 
@@ -187,7 +189,7 @@ it("展示并授权符号链接解析后的规范目录", async () => {
   expect(await screen.findByText("pi: /canonical/parent")).toBeInTheDocument()
   fireEvent.click(screen.getByRole("button", { name: "全部允许" }))
   await waitFor(() =>
-    expect(mock.grant).toHaveBeenCalledWith("pi", ["/canonical/parent"])
+    expect(mock.grant).toHaveBeenCalledWith(targetsFor(["/canonical/parent"]))
   )
 })
 

@@ -99,10 +99,8 @@ export function ProjectTrustSettings() {
     setBusy(true)
     setError("")
     try {
-      const response = await grantProjectTrust(
-        approvedAgent,
-        approvedWorkspaces
-      )
+      // 后端对照用户看到的资源与 profile 快照，变化的目录逐项拒绝写入。
+      const response = await grantProjectTrust(targets)
       // 后端按每个工作区返回一条结果；缺失的项不能当作授权成功显示。
       const byWorkspace = new Map(
         response.map((item) => [item.workspace, item])

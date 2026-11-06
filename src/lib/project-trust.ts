@@ -54,10 +54,9 @@ export const inspectProjectTrust = (agentType: string, workspaces: string[]) =>
     agentType,
     workspaces,
   })
-export const grantProjectTrust = (agentType: string, workspaces: string[]) =>
+export const grantProjectTrust = (targets: ProjectTrustTarget[]) =>
   getTransport().call<ProjectTrustBatchResult[]>("project_trust_grant_batch", {
-    agentType,
-    workspaces,
+    targets,
   })
 export const projectTrustAgents = () =>
   getTransport().call<ProjectTrustAgent[]>("project_trust_agents")
