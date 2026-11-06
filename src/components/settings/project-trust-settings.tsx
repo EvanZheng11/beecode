@@ -71,10 +71,11 @@ export function ProjectTrustSettings() {
     const snapshot = [...selected]
     try {
       const result = await inspectProjectTrust(agent, snapshot)
-      const covered = new Set(result.map((item) => item.workspace))
+      // 后端按请求顺序返回规范路径；符号链接、Windows 路径规范化后
+      // 可能不同于树中路径。审查页显示规范路径，不能误判为缺失目录。
       if (
         result.length !== snapshot.length ||
-        snapshot.some((workspace) => !covered.has(workspace))
+        result.some((item) => item.agentType !== agent || !item.workspace)
       ) {
         setError(t("incompleteInspection"))
         return

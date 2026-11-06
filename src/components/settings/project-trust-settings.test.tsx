@@ -179,6 +179,18 @@ it("授权以已审快照为准，缺失的批量结果不显示成功", async (
   ).toBeInTheDocument()
 })
 
+it("展示并授权符号链接解析后的规范目录", async () => {
+  mock.inspect.mockResolvedValue(targetsFor(["/canonical/parent"]))
+  renderSettings()
+  await openTreeAndSelectParent()
+  fireEvent.click(screen.getByRole("button", { name: "查看风险" }))
+  expect(await screen.findByText("pi: /canonical/parent")).toBeInTheDocument()
+  fireEvent.click(screen.getByRole("button", { name: "全部允许" }))
+  await waitFor(() =>
+    expect(mock.grant).toHaveBeenCalledWith("pi", ["/canonical/parent"])
+  )
+})
+
 it("同一 tick 连点不会重复发起授权", async () => {
   renderSettings()
   await openTreeAndSelectParent()
