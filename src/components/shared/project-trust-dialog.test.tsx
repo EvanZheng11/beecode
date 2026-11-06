@@ -100,3 +100,44 @@ it("补拉期间到达的事件不会被旧快照移除", async () => {
   await act(async () => finish([]))
   expect(screen.getByText("pi: /new")).toBeInTheDocument()
 })
+
+it("切换下个请求时清掉上一个请求的错误", async () => {
+  mock.pending.mockResolvedValue([request("a")])
+  mock.resolve.mockRejectedValueOnce(new Error("failed"))
+  render(
+    <NextIntlClientProvider locale="en" messages={messages}>
+      <ProjectTrustDialog />
+    </NextIntlClientProvider>
+  )
+  await screen.findByText("pi: /a")
+  fireEvent.click(screen.getByRole("button", { name: "允许" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("failed")
+  // 后端把 a 结掉并推出 b：新请求的对话框里不能再显示 a 的错误。
+  act(() =>
+    mock.handlers["project-trust-resolved"]({ requestId: "a" } as never)
+  )
+  act(() => mock.handlers["project-trust-requested"](request("b") as never))
+  expect(await screen.findByText("pi: /b")).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("同一 tick 连点只发一次授权决定", async () => {
+  let finish: () => void = () => {}
+  mock.pending.mockResolvedValue([request("a")])
+  mock.resolve.mockReturnValue(
+    new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  )
+  render(
+    <NextIntlClientProvider locale="en" messages={messages}>
+      <ProjectTrustDialog />
+    </NextIntlClientProvider>
+  )
+  await screen.findByText("pi: /a")
+  const allow = screen.getByRole("button", { name: "允许" })
+  fireEvent.click(allow)
+  fireEvent.click(allow)
+  await act(async () => finish())
+  expect(mock.resolve).toHaveBeenCalledOnce()
+})

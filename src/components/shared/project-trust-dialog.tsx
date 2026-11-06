@@ -25,6 +25,8 @@ export function ProjectTrustDialog() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const resolved = useRef(new Set<string>())
+  // 同步防抖：`busy` 是异步 state，同一 tick 内连点两次会在它更新前都通过检查。
+  const inFlight = useRef(false)
 
   useEffect(() => {
     let disposed = false
@@ -52,8 +54,10 @@ export function ProjectTrustDialog() {
     }
     const remove = (requestId: string) => {
       resolved.current.add(requestId)
-      if (!disposed)
-        setQueue((old) => old.filter((item) => item.requestId !== requestId))
+      if (disposed) return
+      setQueue((old) => old.filter((item) => item.requestId !== requestId))
+      // 上一个请求的失败提示不能残留到下一个请求的对话框里。
+      setError("")
     }
     const refresh = async () => {
       const startedAt = revision
@@ -108,7 +112,8 @@ export function ProjectTrustDialog() {
 
   const current = queue[0]
   const decide = async (approved: boolean) => {
-    if (!current || busy) return
+    if (!current || inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setError("")
     try {
@@ -120,6 +125,7 @@ export function ProjectTrustDialog() {
     } catch (err) {
       setError(String(err))
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }

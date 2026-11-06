@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import {
@@ -11,8 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { DirectoryBrowser } from "@/components/shared/directory-browser"
+import { ProjectTrustDirectoryTree } from "@/components/shared/project-trust-directory-tree"
 import { ProjectTrustTargets } from "@/components/shared/project-trust-targets"
+import { toErrorMessage } from "@/lib/app-error"
 import {
   grantProjectTrust,
   inspectProjectTrust,
@@ -27,12 +28,13 @@ export function ProjectTrustSettings() {
   const [open, setOpen] = useState(false)
   const [agents, setAgents] = useState<ProjectTrustAgent[]>([])
   const [agent, setAgent] = useState("")
-  const [path, setPath] = useState("")
   const [selected, setSelected] = useState<string[]>([])
   const [targets, setTargets] = useState<ProjectTrustTarget[] | null>(null)
   const [results, setResults] = useState<ProjectTrustBatchResult[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  // 同步防抖：`busy` 是异步 state，同一 tick 内连点两次会在它更新前都通过检查。
+  const inFlight = useRef(false)
 
   useEffect(() => {
     if (!open) return
@@ -41,10 +43,10 @@ export function ProjectTrustSettings() {
       .then((items) => {
         if (!live) return
         setAgents(items)
-        setAgent(items[0]?.agentType ?? "")
+        setAgent((current) => current || (items[0]?.agentType ?? ""))
       })
       .catch((err) => {
-        if (live) setError(String(err))
+        if (live) setError(toErrorMessage(err))
       })
     return () => {
       live = false
@@ -57,37 +59,71 @@ export function ProjectTrustSettings() {
     setTargets(null)
     setResults(null)
     setError("")
+    inFlight.current = false
   }
+
   const inspect = async () => {
-    if (!agent || !selected.length || busy) return
+    if (!agent || !selected.length || inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setError("")
+    // 快照当前选择：审查返回前用户仍可能改动勾选，授权必须以已审快照为准。
+    const snapshot = [...selected]
     try {
-      const result = await inspectProjectTrust(agent, selected)
-      if (result.length !== selected.length) {
+      const result = await inspectProjectTrust(agent, snapshot)
+      const covered = new Set(result.map((item) => item.workspace))
+      if (
+        result.length !== snapshot.length ||
+        snapshot.some((workspace) => !covered.has(workspace))
+      ) {
         setError(t("incompleteInspection"))
         return
       }
       setTargets(result)
     } catch (err) {
-      setError(String(err))
+      setError(toErrorMessage(err))
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
+
   const grant = async () => {
-    if (!targets || busy) return
+    // 以已审 targets 的智能体与工作区为准，而不是可变的 agent/selected。
+    if (!targets || inFlight.current) return
+    const approvedAgent = targets[0]?.agentType
+    const approvedWorkspaces = targets.map((item) => item.workspace)
+    if (!approvedAgent || !approvedWorkspaces.length) return
+    inFlight.current = true
     setBusy(true)
     setError("")
     try {
-      const response = await grantProjectTrust(agent, selected)
-      setResults(response)
+      const response = await grantProjectTrust(
+        approvedAgent,
+        approvedWorkspaces
+      )
+      // 后端按每个工作区返回一条结果；缺失的项不能当作授权成功显示。
+      const byWorkspace = new Map(
+        response.map((item) => [item.workspace, item])
+      )
+      setResults(
+        approvedWorkspaces.map(
+          (workspace) =>
+            byWorkspace.get(workspace) ?? {
+              workspace,
+              success: false,
+              error: t("missingResult"),
+            }
+        )
+      )
     } catch (err) {
-      setError(String(err))
+      setError(toErrorMessage(err))
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
+
   return (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
@@ -109,8 +145,9 @@ export function ProjectTrustSettings() {
               <label className="block text-sm">
                 {t("agent")}
                 <select
-                  className="mt-1 w-full rounded-md border bg-background p-2"
+                  className="mt-1 w-full rounded-lg border bg-background p-2 text-sm"
                   value={agent}
+                  disabled={busy}
                   onChange={(event) => setAgent(event.target.value)}
                 >
                   {agents.map((item) => (
@@ -123,11 +160,9 @@ export function ProjectTrustSettings() {
               <p className="text-xs text-muted-foreground">
                 {agents.find((item) => item.agentType === agent)?.description}
               </p>
-              <DirectoryBrowser
+              <ProjectTrustDirectoryTree
                 active={open}
-                value={path}
-                onValueChange={setPath}
-                multiple
+                disabled={busy}
                 selectedPaths={selected}
                 onToggleSelected={(item) =>
                   setSelected((old) =>
@@ -137,23 +172,6 @@ export function ProjectTrustSettings() {
                   )
                 }
               />
-              {path && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(path)}
-                    onChange={() =>
-                      setSelected((old) =>
-                        old.includes(path)
-                          ? old.filter((p) => p !== path)
-                          : [...old, path]
-                      )
-                    }
-                  />
-                  {t("selectCurrent")}:{" "}
-                  <span className="break-all">{path}</span>
-                </label>
-              )}
               <div className="max-h-24 overflow-auto text-xs">
                 {selected.map((item) => (
                   <p className="break-all" key={item}>
@@ -177,9 +195,9 @@ export function ProjectTrustSettings() {
             <>
               <p className="text-sm">{t("confirmDescription")}</p>
               <div className="max-h-24 overflow-auto text-sm">
-                {selected.map((item) => (
-                  <p className="break-all" key={item}>
-                    {item}
+                {targets.map((item) => (
+                  <p className="break-all" key={item.workspace}>
+                    {item.workspace}
                   </p>
                 ))}
               </div>

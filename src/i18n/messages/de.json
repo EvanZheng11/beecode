@@ -7864,7 +7864,6 @@
     "batchTitle": "批量信任项目",
     "inheritance": "仅提交明确勾选的目录。智能体的原生信任规则可能使子目录继承父目录的信任，请谨慎选择。",
     "agent": "智能体",
-    "selectCurrent": "选择当前目录",
     "confirmDescription": "确认以下所有目录和风险，一次允许全部目录。",
     "back": "返回",
     "cancel": "取消",
@@ -7873,6 +7872,13 @@
     "incompleteInspection": "风险检查未覆盖全部已选目录，未执行授权。",
     "granted": "已授权",
     "failed": "授权失败",
-    "done": "完成"
+    "done": "完成",
+    "collapse": "收起",
+    "expand": "展开",
+    "loadingTree": "正在读取目录…",
+    "treeError": "目录读取失败",
+    "retry": "重试",
+    "emptyTree": "没有子目录",
+    "missingResult": "后端未返回该目录的授权结果"
   }
 }
