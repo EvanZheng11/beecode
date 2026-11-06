@@ -67,6 +67,7 @@ pub mod open_in;
 pub mod notification;
 pub mod pet;
 pub mod project_boot;
+pub mod project_trust_directories;
 pub mod question;
 pub mod quick_messages;
 #[cfg(feature = "tauri-runtime")]

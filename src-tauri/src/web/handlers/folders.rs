@@ -363,6 +363,19 @@ pub async fn list_directory_entries(
 }
 
 #[derive(Deserialize)]
+pub struct ProjectTrustDirectoriesParams {
+    pub path: Option<String>,
+}
+
+pub async fn project_trust_directories(
+    Json(params): Json<ProjectTrustDirectoriesParams>,
+) -> Result<Json<Vec<folder_commands::DirectoryEntry>>, AppCommandError> {
+    crate::commands::project_trust_directories::project_trust_directories(params.path)
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryParams {
     pub parent_path: String,

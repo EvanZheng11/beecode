@@ -542,6 +542,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::folders::list_directory_entries),
         )
         .route(
+            "/project_trust_directories",
+            post(handlers::folders::project_trust_directories),
+        )
+        .route(
             "/create_directory",
             post(handlers::folders::create_directory),
         )
