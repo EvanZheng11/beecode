@@ -103,8 +103,17 @@ export function ProjectTrustDialog() {
       if (!disposed) void refresh()
     })()
     const offReady = onTransportReady(() => void refresh())
+    // 后台 one-shot 可能使用静默 emitter；补拉不依赖当前会话或事件送达。
+    // 聚焦立即检查，页面可见时每五秒兜底，确保用户有机会回答后台请求。
+    const onFocus = () => void refresh()
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh()
+    }, 5_000)
+    window.addEventListener("focus", onFocus)
     return () => {
       disposed = true
+      window.clearInterval(poll)
+      window.removeEventListener("focus", onFocus)
       unsubs.forEach((off) => off())
       offReady?.()
     }

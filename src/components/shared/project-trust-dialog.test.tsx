@@ -121,6 +121,19 @@ it("切换下个请求时清掉上一个请求的错误", async () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })
 
+it("后台静默请求没有事件时在窗口聚焦补拉", async () => {
+  render(
+    <NextIntlClientProvider locale="en" messages={messages}>
+      <ProjectTrustDialog />
+    </NextIntlClientProvider>
+  )
+  await waitFor(() => expect(mock.pending).toHaveBeenCalled())
+  mock.pending.mockResolvedValue([request("background")])
+  fireEvent.focus(window)
+  expect(await screen.findByText("pi: /background")).toBeInTheDocument()
+  expect(mock.resolve).not.toHaveBeenCalled()
+})
+
 it("同一 tick 连点只发一次授权决定", async () => {
   let finish: () => void = () => {}
   mock.pending.mockResolvedValue([request("a")])
