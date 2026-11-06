@@ -13,7 +13,7 @@ use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTrustTarget {
     pub agent_type: String,
@@ -176,6 +176,15 @@ fn inspect_target(
             let home = env_value(env, "GEMINI_CLI_HOME")
                 .map(PathBuf::from).unwrap_or_else(|| config::pi_child_home(env));
             let home = if home.is_absolute() { home } else { cwd.join(home) };
+            let trust_file = env_value(env, "GEMINI_CLI_TRUSTED_FOLDERS_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    if env_value(env, "SANDBOX").as_deref() == Some("sandbox-exec") {
+                        home.join(".cache/.gemini/trustedFolders.json")
+                    } else {
+                        home.join(".gemini/trustedFolders.json")
+                    }
+                });
             let mut resources = Vec::new();
             // Gemini 可读取目录链上的项目设置/指令，展示实际存在的资源。
             for parent in cwd.ancestors() {
@@ -189,7 +198,7 @@ fn inspect_target(
             Ok(ProjectTrustTarget {
                 agent_type: "gemini".into(), workspace, resources,
                 warning: "允许后写入 Gemini 原生 TRUST_FOLDER，包含子目录；项目设置、MCP、扩展和命令可能执行代码，不会授权父目录。".into(),
-                trust_file: home.join(".gemini/trustedFolders.json").to_string_lossy().into_owned(),
+                trust_file: trust_file.to_string_lossy().into_owned(),
             })
         }
         _ => Err(AcpError::protocol("该智能体不支持目录信任预检")),
@@ -285,10 +294,8 @@ impl ProjectTrustBroker {
             return Ok(false);
         }
         if verdict == Some(false) {
-            return Err(AcpError::PiProjectTrustRequired(format!(
-                "目录已被明确拒绝信任，请在设置中人工修改后重试：{}",
-                target.workspace
-            )));
+            // 原生显式拒绝：按原生语义受限启动（不加载项目资源），不再弹窗、也不封禁启动。
+            return Ok(false);
         }
         let ack = read_object(&self.ack_file)?;
         // 人工授权保留原生目录及子目录范围；不同 profile 的确认不互相继承。
@@ -492,25 +499,25 @@ impl ProjectTrustBroker {
 
     fn grant_targets(
         &self,
-        agent: AgentType,
-        workspaces: Vec<String>,
-        env: &BTreeMap<String, String>,
+        targets: Vec<ProjectTrustTarget>,
+        db_envs: &BTreeMap<String, BTreeMap<String, String>>,
     ) -> Vec<ProjectTrustBatchResult> {
-        workspaces
-            .into_iter()
-            .map(|workspace| {
-                let result = inspect_target(agent, Path::new(&workspace), env).and_then(|t| {
-                    self.write_decision(&t, true)?;
-                    self.finish_matching(&t);
-                    Ok(())
-                });
-                ProjectTrustBatchResult {
-                    workspace,
-                    success: result.is_ok(),
-                    error: result.err().map(|e| e.to_string()),
+        targets.into_iter().map(|original| {
+            let workspace = original.workspace.clone();
+            let result = (|| {
+                let agent = supported(&original.agent_type)?;
+                let env = db_envs.get(&original.agent_type)
+                    .ok_or_else(|| AcpError::protocol("当前智能体 profile 不可用"))?;
+                let current = inspect_target(agent, Path::new(&original.workspace), env)?;
+                if current != original {
+                    return Err(AcpError::protocol("审查后目录资源或 profile 已变化，请重新检查"));
                 }
-            })
-            .collect()
+                self.write_decision(&current, true)?;
+                self.finish_matching(&current);
+                Ok(())
+            })();
+            ProjectTrustBatchResult { workspace, success: result.is_ok(), error: result.err().map(|e| e.to_string()) }
+        }).collect()
     }
 
     pub async fn resolve(&'static self, id: String, approved: bool) -> Result<(), AcpError> {
@@ -536,7 +543,10 @@ impl ProjectTrustBroker {
                     if &current != original {
                         return Err(AcpError::protocol("目录资源已变化，请重新发起授权"));
                     }
-                    self.write_decision(&current, approved)?;
+                    // 弹窗拒绝只对本次生效：不写原生拒绝，下次仍可人工批准。
+                    if approved {
+                        self.write_decision(&current, true)?;
+                    }
                 }
                 Ok(())
             })();
@@ -618,15 +628,15 @@ pub async fn inspect(
 
 pub async fn grant_batch(
     db: &AppDatabase,
-    agent_type: String,
-    workspaces: Vec<String>,
+    targets: Vec<ProjectTrustTarget>,
 ) -> Result<Vec<ProjectTrustBatchResult>, AcpError> {
-    let agent = supported(&agent_type)?;
-    if workspaces.len() > 256 {
-        return Err(AcpError::protocol("一次最多授权 256 个目录"));
+    if targets.len() > 256 { return Err(AcpError::protocol("一次最多授权 256 个目录")); }
+    let mut envs = BTreeMap::new();
+    for target in &targets {
+        let agent = supported(&target.agent_type)?;
+        envs.entry(target.agent_type.clone()).or_insert(runtime_env(db, agent).await?);
     }
-    let env = runtime_env(db, agent).await?;
-    tokio::task::spawn_blocking(move || broker().grant_targets(agent, workspaces, &env))
+    tokio::task::spawn_blocking(move || broker().grant_targets(targets, &envs))
         .await
         .map_err(|e| AcpError::protocol(format!("批量目录授权失败：{e}")))
 }
@@ -659,10 +669,9 @@ pub async fn project_trust_inspect(
 #[tauri::command]
 pub async fn project_trust_grant_batch(
     db: tauri::State<'_, AppDatabase>,
-    agent_type: String,
-    workspaces: Vec<String>,
+    targets: Vec<ProjectTrustTarget>,
 ) -> Result<Vec<ProjectTrustBatchResult>, AcpError> {
-    grant_batch(&db, agent_type, workspaces).await
+    grant_batch(&db, targets).await
 }
 
 #[cfg(test)]
@@ -769,16 +778,20 @@ mod tests {
         let request = f.request().await;
         f.broker.resolve(request.request_id, false).await.unwrap();
         assert!(task.await.unwrap().is_err());
-        assert_eq!(
-            decision(&inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap()).unwrap(),
-            Some(false)
-        );
-        assert!(f
-            .broker
-            .before_launch(AgentType::Pi, &f.cwd, &f.env, &EventEmitter::Noop)
-            .await
-            .is_err());
+        // 拒绝仅本次 fail closed：不写原生拒绝，下一次仍需人工确认。
+        let target = inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap();
+        assert_eq!(decision(&target).unwrap(), None);
+        assert!(f.broker.needs_approval(&target).unwrap());
         assert!(f.broker.pending().is_empty());
+    }
+
+    #[test]
+    fn native_explicit_denial_launches_restricted_without_prompt() {
+        let f = Fixture::new(Duration::from_secs(5));
+        let target = inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap();
+        config::pi_write_trust_decision_at(Path::new(&target.trust_file), &f.cwd, Some(false))
+            .unwrap();
+        assert!(!f.broker.needs_approval(&target).unwrap());
     }
 
     #[tokio::test]
@@ -875,19 +888,51 @@ mod tests {
         let f = Fixture::new(Duration::from_secs(5));
         let task = f.start(AgentType::Pi, EventEmitter::Noop);
         f.request().await;
-        let results = f.broker.grant_targets(
-            AgentType::Pi,
-            vec![
-                f.cwd.to_string_lossy().into_owned(),
-                "relative/invalid".into(),
-            ],
-            &f.env,
-        );
+        let reviewed = inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap();
+        let mut invalid = reviewed.clone();
+        invalid.workspace = "relative/invalid".into();
+        let envs = BTreeMap::from([("pi".to_string(), f.env.clone())]);
+        let results = f.broker.grant_targets(vec![reviewed, invalid], &envs);
         assert!(results[0].success);
         assert!(!results[1].success);
         assert!(results[1].error.is_some());
         task.await.unwrap().unwrap();
         assert!(f.broker.pending().is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_refuses_resources_or_profiles_changed_after_review() {
+        let f = Fixture::new(Duration::from_secs(5));
+        let reviewed = inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap();
+        // 审查后新增未展示资源：该目录必须失败且不写原生 trust。
+        std::fs::write(f.cwd.join(".pi/mcp.json"), "{}").unwrap();
+        let envs = BTreeMap::from([("pi".to_string(), f.env.clone())]);
+        let results = f.broker.grant_targets(vec![reviewed.clone()], &envs);
+        assert!(!results[0].success);
+        assert!(!Path::new(&reviewed.trust_file).exists());
+        // profile 变化同样拒绝，不能写入另一个 profile。
+        let fresh = inspect_target(AgentType::Pi, &f.cwd, &f.env).unwrap();
+        let mut other = f.env.clone();
+        other.insert("PI_CODING_AGENT_DIR".into(), "other-profile".into());
+        let moved = BTreeMap::from([("pi".to_string(), other)]);
+        assert!(!f.broker.grant_targets(vec![fresh], &moved)[0].success);
+        assert!(!f.cwd.join("other-profile/trust.json").exists());
+    }
+
+    #[test]
+    fn gemini_trust_file_follows_native_override_and_sandbox_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().join("ws");
+        std::fs::create_dir(&cwd).unwrap();
+        let home = tmp.path().join("home");
+        let mut env = BTreeMap::from([("GEMINI_CLI_HOME".to_string(), home.to_string_lossy().into_owned())]);
+        env.insert("SANDBOX".into(), "sandbox-exec".into());
+        let sandbox = inspect_target(AgentType::Gemini, &cwd, &env).unwrap();
+        assert_eq!(Path::new(&sandbox.trust_file), home.join(".cache/.gemini/trustedFolders.json"));
+        let custom = tmp.path().join("custom/trusted.json");
+        env.insert("GEMINI_CLI_TRUSTED_FOLDERS_PATH".into(), custom.to_string_lossy().into_owned());
+        let overridden = inspect_target(AgentType::Gemini, &cwd, &env).unwrap();
+        assert_eq!(Path::new(&overridden.trust_file), custom);
     }
 
     #[tokio::test]

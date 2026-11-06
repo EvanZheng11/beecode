@@ -26,11 +26,10 @@ impl ParentSessionLookup for ProjectTrustParentLookup {
             let snapshot = state.read().await;
             (snapshot.agent_type, snapshot.external_id.clone())
         };
+        // Kimi 等尚无持久化原生信任存储，不能把“未适配”误报为“已批准”。
         if !matches!(
             agent,
-            crate::models::agent::AgentType::Pi
-                | crate::models::agent::AgentType::Gemini
-                | crate::models::agent::AgentType::KimiCode
+            crate::models::agent::AgentType::Pi | crate::models::agent::AgentType::Gemini
         ) {
             return json!({"approved": false, "message": "此智能体尚无目录信任适配器，请使用其原生权限确认机制；未写入任何授权"});
         }

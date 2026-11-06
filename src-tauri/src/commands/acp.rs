@@ -6226,7 +6226,7 @@ const PI_TRUST_REQUIRING_CONFIG_RESOURCES: [&str; 8] = [
 ];
 
 /// One repo-shipped pi resource that only loads once the workspace is trusted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProjectResource {
     /// Absolute path pi would load.

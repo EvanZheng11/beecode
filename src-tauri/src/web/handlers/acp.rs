@@ -1149,8 +1149,11 @@ pub async fn project_trust_inspect(Extension(state): Extension<Arc<AppState>>, J
         .map(Json).map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
-pub async fn project_trust_grant_batch(Extension(state): Extension<Arc<AppState>>, Json(params): Json<ProjectTrustWorkspaceParams>) -> Result<Json<Vec<crate::acp::project_trust::ProjectTrustBatchResult>>, AppCommandError> {
-    crate::acp::project_trust::grant_batch(&state.db, params.agent_type, params.workspaces).await
+#[derive(Deserialize)]
+pub struct ProjectTrustGrantParams { pub targets: Vec<crate::acp::project_trust::ProjectTrustTarget> }
+
+pub async fn project_trust_grant_batch(Extension(state): Extension<Arc<AppState>>, Json(params): Json<ProjectTrustGrantParams>) -> Result<Json<Vec<crate::acp::project_trust::ProjectTrustBatchResult>>, AppCommandError> {
+    crate::acp::project_trust::grant_batch(&state.db, params.targets).await
         .map(Json).map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
