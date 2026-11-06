@@ -260,13 +260,19 @@ export async function acpConnect(
   preferredModeId?: string | null,
   preferredConfigValues?: Record<string, string> | null
 ): Promise<string> {
-  return getTransport().call("acp_connect", {
-    agentType,
-    workingDir: workingDir ?? null,
-    sessionId: sessionId ?? null,
-    preferredModeId: preferredModeId ?? null,
-    preferredConfigValues: preferredConfigValues ?? null,
-  })
+  // 启动前可能等待人工确认目录信任（后端最多等待 10 分钟）。
+  // 为后续进程启动留余量，避免 Web 默认 60 秒先中断原连接任务。
+  return getTransport().call(
+    "acp_connect",
+    {
+      agentType,
+      workingDir: workingDir ?? null,
+      sessionId: sessionId ?? null,
+      preferredModeId: preferredModeId ?? null,
+      preferredConfigValues: preferredConfigValues ?? null,
+    },
+    { timeoutMs: 720_000 }
+  )
 }
 
 /**
