@@ -42,13 +42,32 @@ impl ParentSessionLookup for ProjectTrustParentLookup {
                 &self.data_dir,
             )
             .await?;
-            crate::acp::project_trust::broker()
-                .before_launch(agent, &PathBuf::from(workspace), &env, &emitter)
+            let broker = crate::acp::project_trust::broker();
+            let cwd = PathBuf::from(workspace);
+            // 原生已拒绝或无需信任时如实返回，不能报告为“已批准”。
+            match broker.native_refusal_or_unneeded(agent, &cwd, &env)? {
+                Some(false) => return Ok(Some(false)),
+                None => return Ok(None),
+                Some(true) => {}
+            }
+            broker
+                .before_launch(agent, &cwd, &env, &emitter)
                 .await
+                .map(|_| Some(true))
         }
         .await;
         match result {
-            Ok(()) => json!({
+            Ok(Some(false)) => json!({
+                "approved": false,
+                "workspace": workspace,
+                "message": "该目录已被原生信任配置明确拒绝，未做任何更改；如需信任请由用户在设置中人工修改。"
+            }),
+            Ok(None) => json!({
+                "approved": true,
+                "workspace": workspace,
+                "message": "该目录没有需要信任的项目资源，无需确认，可继续原任务。"
+            }),
+            Ok(Some(true)) => json!({
                 "approved": true,
                 "workspace": workspace,
                 "message": "目录信任已确认。可继续原任务；这不提升文件系统权限，也不代表当前进程已重载扩展或 MCP。需要重载项目资源时使用智能体原生重载能力，不得擅自重启丢失任务。"

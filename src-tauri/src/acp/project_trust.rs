@@ -176,15 +176,10 @@ fn inspect_target(
             let home = env_value(env, "GEMINI_CLI_HOME")
                 .map(PathBuf::from).unwrap_or_else(|| config::pi_child_home(env));
             let home = if home.is_absolute() { home } else { cwd.join(home) };
+            // 与 Gemini 0.60 原生 Storage.getTrustedFoldersPath 一致：覆盖变量优先，否则 home/.gemini。
             let trust_file = env_value(env, "GEMINI_CLI_TRUSTED_FOLDERS_PATH")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    if env_value(env, "SANDBOX").as_deref() == Some("sandbox-exec") {
-                        home.join(".cache/.gemini/trustedFolders.json")
-                    } else {
-                        home.join(".gemini/trustedFolders.json")
-                    }
-                });
+                .unwrap_or_else(|| home.join(".gemini/trustedFolders.json"));
             let mut resources = Vec::new();
             // Gemini 可读取目录链上的项目设置/指令，展示实际存在的资源。
             for parent in cwd.ancestors() {
@@ -309,6 +304,23 @@ impl ProjectTrustBroker {
             })
             .unwrap_or(false);
         Ok(verdict != Some(true) || !acknowledged)
+    }
+
+    /// 运行中申请前的原生状态：`Some(false)` 原生已拒绝，`None` 无项目资源无需信任。
+    pub fn native_refusal_or_unneeded(
+        &self,
+        agent: AgentType,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> Result<Option<bool>, AcpError> {
+        let target = inspect_target(agent, cwd, env)?;
+        if decision(&target)? == Some(false) {
+            return Ok(Some(false));
+        }
+        if target.agent_type == "pi" && target.resources.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(true))
     }
 
     pub fn verify_launch(
@@ -792,6 +804,11 @@ mod tests {
         config::pi_write_trust_decision_at(Path::new(&target.trust_file), &f.cwd, Some(false))
             .unwrap();
         assert!(!f.broker.needs_approval(&target).unwrap());
+        // 运行中申请工具据此如实报告“原生已拒绝”，而不是“已批准”。
+        assert_eq!(
+            f.broker.native_refusal_or_unneeded(AgentType::Pi, &f.cwd, &f.env).unwrap(),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -920,15 +937,16 @@ mod tests {
     }
 
     #[test]
-    fn gemini_trust_file_follows_native_override_and_sandbox_paths() {
+    fn gemini_trust_file_follows_native_override_path() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("ws");
         std::fs::create_dir(&cwd).unwrap();
         let home = tmp.path().join("home");
         let mut env = BTreeMap::from([("GEMINI_CLI_HOME".to_string(), home.to_string_lossy().into_owned())]);
+        // 0.60 原生没有 sandbox 专用路径，SANDBOX 不应改变信任文件。
         env.insert("SANDBOX".into(), "sandbox-exec".into());
-        let sandbox = inspect_target(AgentType::Gemini, &cwd, &env).unwrap();
-        assert_eq!(Path::new(&sandbox.trust_file), home.join(".cache/.gemini/trustedFolders.json"));
+        let default = inspect_target(AgentType::Gemini, &cwd, &env).unwrap();
+        assert_eq!(Path::new(&default.trust_file), home.join(".gemini/trustedFolders.json"));
         let custom = tmp.path().join("custom/trusted.json");
         env.insert("GEMINI_CLI_TRUSTED_FOLDERS_PATH".into(), custom.to_string_lossy().into_owned());
         let overridden = inspect_target(AgentType::Gemini, &cwd, &env).unwrap();
