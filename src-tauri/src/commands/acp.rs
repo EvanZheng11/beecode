@@ -6030,7 +6030,7 @@ const CHILD_HOME_KEY: &str = "HOME";
 
 /// What `os.homedir()` answers in the pi child of a launch with `runtime_env` —
 /// the home pi expands `~` against and puts its default `.pi/agent` under.
-fn pi_child_home(runtime_env: &BTreeMap<String, String>) -> PathBuf {
+pub(crate) fn pi_child_home(runtime_env: &BTreeMap<String, String>) -> PathBuf {
     pi_child_home_from(runtime_env, std::env::var_os(CHILD_HOME_KEY))
 }
 
@@ -6188,7 +6188,7 @@ fn pi_agent_dir_for_child(
 /// a directory inside THAT workspace — and the `trust.json` pi consults there
 /// is one the repository itself can ship. Reading it relative to codeg's own cwd
 /// instead would let such a grant slip past the launch gate unseen.
-fn pi_agent_dir_in_workspace(runtime_env: &BTreeMap<String, String>, workspace: &Path) -> PathBuf {
+pub(crate) fn pi_agent_dir_in_workspace(runtime_env: &BTreeMap<String, String>, workspace: &Path) -> PathBuf {
     let dir = pi_agent_dir_for_env(runtime_env);
     if dir.is_relative() {
         workspace.join(dir)
@@ -6268,7 +6268,7 @@ pub(crate) fn pi_project_trust_resources(cwd: &Path) -> Vec<PiProjectResource> {
 /// fixture: `dirs::home_dir()` reads the `FOLDERID_Profile` known folder on
 /// Windows and ignores `HOME`/`USERPROFILE`, so pinning the env there cannot
 /// redirect it.
-fn pi_project_trust_resources_with_home(cwd: &Path, home: &Path) -> Vec<PiProjectResource> {
+pub(crate) fn pi_project_trust_resources_with_home(cwd: &Path, home: &Path) -> Vec<PiProjectResource> {
     let mut found = Vec::new();
     let start = pi_canonical_path(cwd);
 
@@ -6318,7 +6318,7 @@ fn pi_project_trust_resources_with_home(cwd: &Path, home: &Path) -> Vec<PiProjec
 /// Returns the deciding path alongside the verdict so the UI can distinguish
 /// "this folder" from "inherited from a parent folder" — the inherited case is
 /// how a single seeded parent silently covered every repo beneath it.
-fn pi_nearest_trust_decision(trust_file: &Path, cwd: &Path) -> Option<(String, bool)> {
+pub(crate) fn pi_nearest_trust_decision(trust_file: &Path, cwd: &Path) -> Option<(String, bool)> {
     let map = read_json_object_or_empty(trust_file);
     if map.is_empty() {
         return None;
@@ -6502,6 +6502,7 @@ fn pi_project_trust_state_at(
 /// acknowledged one is the user's own answer.
 ///
 /// Returns the message to fail the launch with, or `None` to proceed.
+#[cfg(test)]
 pub(crate) fn pi_project_trust_launch_block(
     cwd: &Path,
     runtime_env: &BTreeMap<String, String>,
@@ -6718,8 +6719,10 @@ pub(crate) async fn acp_pi_project_trust_state_core(
 /// Record that the user has seen and kept an existing trust grant, so the launch
 /// gate stops blocking this folder. Writes only codeg's own record — pi's
 /// `trust.json` is untouched, because the grant itself is not changing.
-pub(crate) async fn acp_pi_acknowledge_project_trust_core(workspace: String) -> Result<(), AcpError> {
+pub(crate) async fn acp_pi_acknowledge_project_trust_core(db: &AppDatabase, workspace: String) -> Result<(), AcpError> {
+    let runtime_env = pi_runtime_env_from_db(db).await?;
     tokio::task::spawn_blocking(move || {
+        crate::acp::project_trust::broker().record_pi_confirmation(Path::new(&workspace), &runtime_env, true)?;
         pi_set_trust_acknowledged_at(&pi_trust_ack_path(), Path::new(&workspace), true)
     })
     .await
@@ -6783,7 +6786,7 @@ const PI_TRUST_LOCK_STALE: Duration = Duration::from_secs(10);
 /// `<trust.json>.lock`, created with `mkdir` (atomic) — and takes it for its own
 /// reads *and* writes (`withTrustFileLock`, `core/trust-manager.js`). Held only
 /// for the read-modify-write below, and released on drop.
-struct PiTrustLock {
+pub(crate) struct PiTrustLock {
     path: PathBuf,
 }
 
@@ -6807,7 +6810,7 @@ fn pi_trust_lock_is_stale(path: &Path) -> bool {
 /// (10 attempts, 20ms apart) before giving up. Honoring pi's own protocol is
 /// what keeps a decision written here from interleaving with one the user makes
 /// inside pi, and keeps pi from ever reading a half-written file.
-fn acquire_pi_trust_lock(trust_file: &Path) -> Result<PiTrustLock, AcpError> {
+pub(crate) fn acquire_pi_trust_lock(trust_file: &Path) -> Result<PiTrustLock, AcpError> {
     let mut name = trust_file.as_os_str().to_os_string();
     name.push(".lock");
     let path = PathBuf::from(name);
@@ -6849,7 +6852,7 @@ fn acquire_pi_trust_lock(trust_file: &Path) -> Result<PiTrustLock, AcpError> {
 ///
 /// Blocking (it can sleep waiting for pi's lock), so async callers hand it to
 /// `spawn_blocking` rather than stalling a runtime worker.
-fn pi_write_trust_decision_at(
+pub(crate) fn pi_write_trust_decision_at(
     path: &Path,
     cwd: &Path,
     trusted: Option<bool>,
@@ -7003,7 +7006,7 @@ fn read_json_object_or_empty(path: &Path) -> serde_json::Map<String, serde_json:
 
 /// Pretty-print a JSON object (with a trailing newline) to `path`, creating the
 /// parent directory if needed.
-fn write_json_object_pretty(
+pub(crate) fn write_json_object_pretty(
     path: &Path,
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), AcpError> {
@@ -13723,8 +13726,11 @@ pub async fn acp_pi_set_project_trust(
 /// clears the launch gate for that folder. Does not change pi's trust store.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_pi_acknowledge_project_trust(workspace: String) -> Result<(), AcpError> {
-    acp_pi_acknowledge_project_trust_core(workspace).await
+pub async fn acp_pi_acknowledge_project_trust(
+    db: tauri::State<'_, AppDatabase>,
+    workspace: String,
+) -> Result<(), AcpError> {
+    acp_pi_acknowledge_project_trust_core(&db, workspace).await
 }
 
 /// List every decision in pi's `trust.json` so the settings page can review and

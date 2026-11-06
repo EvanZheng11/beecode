@@ -1122,6 +1122,38 @@ pub struct AcpPiProjectTrustStateParams {
     pub workspace: String,
 }
 
+pub async fn project_trust_pending() -> Json<Vec<crate::acp::project_trust::ProjectTrustRequest>> {
+    Json(crate::acp::project_trust::broker().pending())
+}
+
+pub async fn project_trust_agents() -> Json<Vec<crate::acp::project_trust::ProjectTrustAgent>> {
+    Json(crate::acp::project_trust::agents())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrustResolveParams { pub request_id: String, pub approved: bool }
+
+pub async fn project_trust_resolve(Json(params): Json<ProjectTrustResolveParams>) -> Result<Json<()>, AppCommandError> {
+    crate::acp::project_trust::broker().resolve(params.request_id, params.approved).await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrustWorkspaceParams { pub agent_type: String, pub workspaces: Vec<String> }
+
+pub async fn project_trust_inspect(Extension(state): Extension<Arc<AppState>>, Json(params): Json<ProjectTrustWorkspaceParams>) -> Result<Json<Vec<crate::acp::project_trust::ProjectTrustTarget>>, AppCommandError> {
+    crate::acp::project_trust::inspect(&state.db, params.agent_type, params.workspaces).await
+        .map(Json).map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
+pub async fn project_trust_grant_batch(Extension(state): Extension<Arc<AppState>>, Json(params): Json<ProjectTrustWorkspaceParams>) -> Result<Json<Vec<crate::acp::project_trust::ProjectTrustBatchResult>>, AppCommandError> {
+    crate::acp::project_trust::grant_batch(&state.db, params.agent_type, params.workspaces).await
+        .map(Json).map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+}
+
 pub async fn acp_pi_project_trust_state(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPiProjectTrustStateParams>,
@@ -1159,9 +1191,10 @@ pub struct AcpPiAcknowledgeProjectTrustParams {
 }
 
 pub async fn acp_pi_acknowledge_project_trust(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPiAcknowledgeProjectTrustParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_pi_acknowledge_project_trust_core(params.workspace)
+    acp_commands::acp_pi_acknowledge_project_trust_core(&state.db, params.workspace)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))

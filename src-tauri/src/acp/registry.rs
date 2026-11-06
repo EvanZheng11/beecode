@@ -4408,7 +4408,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 version: "0.60.0",
                 package: "@google/gemini-cli@0.60.0",
                 cmd: "gemini",
-                args: &["--acp", "--skip-trust"],
+                args: &["--acp"],
                 env: &[],
                 node_required: Some("20.0.0"),
             },

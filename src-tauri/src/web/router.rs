@@ -1200,6 +1200,11 @@ pub fn build_router_with_proxy_auth(
             "/acp_antigravity_sign_out",
             post(handlers::acp::acp_antigravity_sign_out),
         )
+        .route("/project_trust_pending", post(handlers::acp::project_trust_pending))
+        .route("/project_trust_agents", post(handlers::acp::project_trust_agents))
+        .route("/project_trust_resolve", post(handlers::acp::project_trust_resolve))
+        .route("/project_trust_inspect", post(handlers::acp::project_trust_inspect))
+        .route("/project_trust_grant_batch", post(handlers::acp::project_trust_grant_batch))
         .route(
             "/acp_pi_project_trust_state",
             post(handlers::acp::acp_pi_project_trust_state),

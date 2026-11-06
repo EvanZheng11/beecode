@@ -798,6 +798,11 @@ impl ConnectionManager {
         preferred_config_values: BTreeMap<String, String>,
         cli_root: Option<crate::cli_run::RootSeed>,
     ) -> Result<SpawnOutcome, AcpError> {
+        let trust_cwd = working_dir.as_deref().map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        crate::acp::project_trust::broker()
+            .before_launch(agent_type, &trust_cwd, &runtime_env, &emitter).await?;
+
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
         // empty connection list and then have one appear underneath it. Not
