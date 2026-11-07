@@ -46,6 +46,8 @@ interface AskQuestionCardProps {
   /** 延长后端等待期限，返回后端确认的新 RFC3339 时间。缺省时不显示延长入口
    *  （只读历史卡片与恢复提问没有可延长的后端等待者）。 */
   onExtend?: (questionId: string) => Promise<string>
+  /** 恢复表单成功发送后等待父层卸载，不允许重复发送同一条新消息。 */
+  lockAfterSubmit?: boolean
   /** Read-only/answered view (the in-message record): controls are disabled,
    *  the footer is dropped, and selections are seeded from `initialSelections`
    *  rather than collected. Omit it for the live, interactive card. */
@@ -119,6 +121,7 @@ export function AskQuestionCard({
   question,
   onAnswer,
   onExtend,
+  lockAfterSubmit = false,
   readOnly = false,
   initialSelections,
   title,
@@ -325,7 +328,7 @@ export function AskQuestionCard({
     try {
       await onAnswer(question.question_id, answer)
       // 宿主撤回可能在 API 返回前恢复同一张卡，成功返回也须解除提交锁。
-      setSubmitting(false)
+      if (!lockAfterSubmit) setSubmitting(false)
       inFlight.current = false
     } catch {
       setError(true)

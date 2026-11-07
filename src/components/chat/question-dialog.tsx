@@ -62,6 +62,7 @@ export function QuestionDialog({ question, onAnswer }: QuestionDialogProps) {
     return (
       <AskQuestionCard
         key={question.tool_call_id}
+        lockAfterSubmit
         question={{
           question_id: question.tool_call_id,
           questions: question.questions,
