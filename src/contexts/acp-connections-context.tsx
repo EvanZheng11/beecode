@@ -8339,15 +8339,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       try {
         lastActivityRef.current.set(contextKey, Date.now())
         await acpAnswerQuestion(conn.connectionId, questionId, answer)
-        // Optimistically clear; the backend also broadcasts question_resolved
-        // (idempotent on the matched id).
-        dispatch({ type: "CLEAR_ASK_QUESTION", contextKey, questionId })
+        // 以有序后端事件清卡；API 返回前宿主可能撤回并恢复同一题号。
+        // 此处再清卡会抹掉那张可重试的卡片。
       } catch (e) {
         console.error("[AcpConnections] answerQuestion failed:", e)
         throw e
       }
     },
-    [dispatch]
+    []
   )
 
   const extendQuestion = useCallback(

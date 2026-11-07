@@ -324,10 +324,8 @@ export function AskQuestionCard({
     setError(false)
     try {
       await onAnswer(question.question_id, answer)
-      // Clear the re-entrancy guard on success too (symmetric with the catch).
-      // The card normally unmounts here, but if this instance is reused for the
-      // next question the guard must not stay latched. `submitting` stays true so
-      // the controls don't flash back on before the unmount/replacement.
+      // 宿主撤回可能在 API 返回前恢复同一张卡，成功返回也须解除提交锁。
+      setSubmitting(false)
       inFlight.current = false
     } catch {
       setError(true)

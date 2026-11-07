@@ -15,7 +15,7 @@ pub(super) struct NativeQuestion {
     current_id: Arc<std::sync::Mutex<String>>,
 }
 
-/// 等原生 responder 确认写出后再释放回执；不能在 wait() 返回时过早确认。
+/// 原生 responder 接纳响应后释放回执；这不证明 JSON-RPC 对端已消费答案。
 pub(super) struct NativeQuestionDelivery {
     access: Arc<dyn SessionQuestionAccess>,
     connection_id: String,
@@ -95,14 +95,19 @@ impl NativeQuestion {
                     biased;
                     () = &mut local_abort => {
                         // 本地清理只撤本题，不把 Stop/替换消息误记为耗尽。
-                        if !self.registered.upstream_closed.load(std::sync::atomic::Ordering::Acquire) {
-                            self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        if !self.registered.upstream_closed.load(std::sync::atomic::Ordering::Acquire)
+                            && !self.access.cancel_question(&self.connection_id, &self.registered.question_id).await
+                        {
+                            // 已提交但尚未响应的答案不能被权限 drain 静默吞掉。
+                            // Stop/替换已收走条目时 mark 是空操作；secret 只清理回执。
+                            self.access.mark_question_host_abandoned(&self.connection_id, &self.registered.question_id).await;
                         }
                         return None;
                     }
                     () = &mut cancellation => {
                         if self.specs.iter().any(|question| question.is_secret) {
-                            self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                            // 也清理与撤回并发的 submitted 回执，秘密答案绝不进入补送。
+                            self.access.mark_question_host_abandoned(&self.connection_id, &self.registered.question_id).await;
                             return None;
                         }
                         self.registered.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
@@ -440,6 +445,48 @@ mod tests {
                 next.registered.question_id
             );
         }
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_local_drain_restores_a_buffered_native_answer() {
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::EventEmitter;
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = manager.insert_test_connection_live("drain-race", AgentType::Codex, None, EventEmitter::Noop).await;
+        let specs = parse_questions(&serde_json::json!({"questions": [{
+            "question": "Choice?", "header": "Choice", "options": [{"label": "A"}, {"label": "B"}]
+        }]})).unwrap();
+        let access = Arc::new(ConnectionManagerQuestionLookup { manager: manager.clone() });
+        let ask = NativeQuestion::register(access, "drain-race", specs, QuestionConfig::default()).await.unwrap();
+        let id = ask.registered.question_id.clone();
+        let state = manager.get_state("drain-race").await.unwrap();
+        state.write().await.turn_in_flight = true;
+        manager.answer_question("drain-race", &id, QuestionAnswer { answers: vec![], declined: true }).await.unwrap();
+        assert!(ask.wait_with_local_abort(std::future::pending(), std::future::ready(())).await.is_none());
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, id);
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_secret_cancellation_discards_a_buffered_answer_receipt() {
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::EventEmitter;
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = manager.insert_test_connection_live("secret-race", AgentType::Codex, None, EventEmitter::Noop).await;
+        let mut specs = parse_questions(&serde_json::json!({"questions": [{
+            "question": "Secret?", "header": "Secret", "options": [{"label": "A"}, {"label": "B"}]
+        }]})).unwrap();
+        specs[0].is_secret = true;
+        let access = Arc::new(ConnectionManagerQuestionLookup { manager: manager.clone() });
+        let ask = NativeQuestion::register(access, "secret-race", specs, QuestionConfig::default()).await.unwrap();
+        let id = ask.registered.question_id.clone();
+        manager.answer_question("secret-race", &id, QuestionAnswer { answers: vec![], declined: true }).await.unwrap();
+        assert!(ask.wait(std::future::ready(())).await.is_none());
+        assert_eq!(manager.sweep_idle(Duration::ZERO).await, 1, "秘密回执不能残留并阻止 idle 回收");
+        assert!(matches!(commands.try_recv(), Ok(crate::acp::connection::ConnectionCommand::Disconnect)));
+        assert!(commands.try_recv().is_err());
     }
 
     #[tokio::test(start_paused = true)]

@@ -74,6 +74,9 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
                 status: ConnectionStatus::Disconnected
             }
             | AcpEvent::Error { .. }
+    ) || matches!(
+        event,
+        AcpEvent::UserMessage { message_id, .. } if message_id.starts_with("question-answer:")
     )
 }
 
@@ -295,6 +298,37 @@ pub(crate) async fn handle_event(
                     .await;
                 crate::commands::conversations::emit_preserved_conversation(
                     &emitter, db_conn, preserved,
+                )
+                .await;
+            }
+            Ok(())
+        }
+        AcpEvent::UserMessage { message_id, .. }
+            if message_id.starts_with("question-answer:") =>
+        {
+            // 补送由连接循环实际处理后才启动会话。与 TurnComplete 共用有序队列，
+            // 旧轮结束不能在这次补送后把侧栏写回待审核；不创建新的会话行。
+            let Some((state, emitter)) = manager
+                .get_state_and_emitter(&envelope.connection_id)
+                .await
+            else {
+                return Ok(());
+            };
+            let cid = state.read().await.conversation_id;
+            if let Some(conversation_id) = cid {
+                conversation_service::update_status(
+                    db_conn,
+                    conversation_id,
+                    ConversationStatus::InProgress,
+                )
+                .await?;
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::ConversationStatusChanged {
+                        conversation_id,
+                        status: ConversationStatus::InProgress,
+                    },
                 )
                 .await;
             }
@@ -3185,6 +3219,7 @@ async fn connection_worker_loop(
     // the terminal work; the second one is a no-op so the broker / DB
     // aren't double-touched.
     let mut terminal_dispatched = false;
+    let mut question_answer_turn = false;
     while let Some(envelope_arc) = rx.recv().await {
         let envelope: &EventEnvelope = envelope_arc.as_ref();
         match &envelope.payload {
@@ -3252,6 +3287,32 @@ async fn connection_worker_loop(
             }
             _ => {
                 handle_event_with_retry(&db, &manager, envelope, broker.as_ref()).await;
+                match &envelope.payload {
+                    AcpEvent::UserMessage { message_id, .. } => {
+                        question_answer_turn = message_id.starts_with("question-answer:");
+                    }
+                    AcpEvent::TurnComplete { stop_reason, .. } => {
+                        // Stop API 的 eager DB 写可能早于积压的 UserMessage。
+                        // 补送轮的取消也在同一队列收尾，避免侧栏被迟到的开始写回运行中。
+                        if std::mem::take(&mut question_answer_turn) && stop_reason == "cancelled" {
+                            if let Some(entry) = cache.get(&connection_id) {
+                                match conversation_service::update_status_if(
+                                    &db, entry.conversation_id,
+                                    ConversationStatus::InProgress, ConversationStatus::Cancelled,
+                                ).await {
+                                    Ok(true) => {
+                                        emit_with_state(&entry.state, &entry.emitter, AcpEvent::ConversationStatusChanged {
+                                            conversation_id: entry.conversation_id, status: ConversationStatus::Cancelled,
+                                        }).await;
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => tracing::error!(%error, connection_id, "补送轮停止状态写入失败"),
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -3843,6 +3904,48 @@ mod tests {
             .unwrap()
             .expect("conversation row exists")
             .status
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_user_message_sets_existing_conversation_in_progress() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/question-answer-status").await;
+        let conv = conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None).await.unwrap();
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::PendingReview).await.unwrap();
+        let manager = ConnectionManager::new();
+        manager.connections.lock().await.insert("c1".into(), fake_connection_with_state("c1", Some(conv.id)));
+        let state = manager.get_state("c1").await.unwrap();
+        let mut events = state.read().await.event_stream().subscribe();
+        let env = EventEnvelope { seq: 2, connection_id: "c1".into(), payload: AcpEvent::UserMessage {
+            message_id: "question-answer:old-question".into(), blocks: vec![],
+        }};
+        assert!(is_lifecycle_relevant(&env.payload));
+        handle_event(&db.conn, &manager, &env, None).await.unwrap();
+        assert_eq!(read_row_status(&db, conv.id).await, ConversationStatus::InProgress);
+        assert!(matches!(events.recv().await.unwrap().payload, AcpEvent::ConversationStatusChanged { status: ConversationStatus::InProgress, .. }));
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_status_worker_orders_a_queued_start_before_stop() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/question-answer-stop").await;
+        let conv = conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None).await.unwrap();
+        // 模拟 Stop API 已写入 Cancelled，而 lifecycle 的开始事件尚未消费。
+        conversation_service::update_status(&db.conn, conv.id, ConversationStatus::Cancelled).await.unwrap();
+        let manager = ConnectionManager::new();
+        manager.connections.lock().await.insert("c1".into(), fake_connection_with_state("c1", Some(conv.id)));
+        let (tx, rx) = mpsc::channel(4);
+        let payloads = [
+            AcpEvent::ConversationLinked { conversation_id: conv.id, folder_id, parent_conversation_id: None, parent_tool_use_id: None },
+            AcpEvent::UserMessage { message_id: "question-answer:q".into(), blocks: vec![] },
+            AcpEvent::TurnComplete { session_id: "s1".into(), stop_reason: "cancelled".into(), agent_type: "claude_code".into() },
+        ];
+        for (index, payload) in payloads.into_iter().enumerate() {
+            tx.send(Arc::new(EventEnvelope { seq: index as u64 + 1, connection_id: "c1".into(), payload })).await.unwrap();
+        }
+        drop(tx);
+        connection_worker_loop("c1".into(), db.conn.clone(), manager, None, rx).await;
+        assert_eq!(read_row_status(&db, conv.id).await, ConversationStatus::Cancelled);
     }
 
     #[tokio::test]

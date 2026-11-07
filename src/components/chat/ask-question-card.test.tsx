@@ -298,6 +298,28 @@ describe("AskQuestionCard", () => {
     d.resolve()
   })
 
+  it("同 ID 卡片在提交成功后仍保留时允许重试并保留选择", async () => {
+    const d = deferred()
+    const onAnswer = vi.fn(() => d.promise)
+    const { rerender } = renderWith(single, onAnswer)
+    fireEvent.click(screen.getByRole("radio", { name: /Rewrite/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard
+          question={{ ...single, survives_turn: true, expires_at: undefined }}
+          onAnswer={onAnswer}
+        />
+      </NextIntlClientProvider>
+    )
+    await act(async () => d.resolve())
+    const submit = screen.getByRole("button", { name: "Submit" })
+    expect(submit).not.toBeDisabled()
+    fireEvent.click(submit)
+    expect(onAnswer).toHaveBeenCalledTimes(2)
+    expect(onAnswer.mock.calls[1]).toEqual(onAnswer.mock.calls[0])
+  })
+
   it("ignores a second submit while one is already in flight", () => {
     const d = deferred()
     const onAnswer = vi.fn(() => d.promise)

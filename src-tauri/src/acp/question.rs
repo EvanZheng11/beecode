@@ -389,7 +389,7 @@ pub trait SessionQuestionAccess: Send + Sync {
     /// 默认无操作，测试桩可以忽略。
     async fn clear_question_deadline(&self, _parent_connection_id: &str, _question_id: &str) {}
 
-    /// 等待器已成功返回答案后释放短期投递回执；生产实现覆盖，测试桩可忽略。
+    /// 本地传输接纳答案后释放回执；不代表对端已消费。生产实现覆盖，测试桩可忽略。
     async fn confirm_question_answer(&self, _parent_connection_id: &str, _question_id: &str) {}
 
     /// 标记「宿主已放弃这次询问」：MCP 对端的工具调用已经消失（socket 关闭），

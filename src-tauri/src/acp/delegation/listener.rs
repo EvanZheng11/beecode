@@ -2479,14 +2479,14 @@ mod tests {
     /// feedback pieces are minimal.
     fn make_question_listener(
         tokens: Arc<TokenRegistry>,
-        questions: Arc<StubQuestion>,
+        questions: Arc<dyn SessionQuestionAccess>,
     ) -> Arc<DelegationListener> {
         make_question_listener_with_config(tokens, questions, QuestionRuntimeConfig::new())
     }
 
     fn make_question_listener_with_config(
         tokens: Arc<TokenRegistry>,
-        questions: Arc<StubQuestion>,
+        questions: Arc<dyn SessionQuestionAccess>,
         question_config: QuestionRuntimeConfig,
     ) -> Arc<DelegationListener> {
         let broker = Arc::new(DelegationBroker::new(
@@ -3982,6 +3982,7 @@ mod tests {
 
     /// 不只测 stub：实际注册表在 peer-close、回合结束、idle扫描后仍须保留同一题，
     /// 用户提交才产生恰好一条可见用户消息。
+    #[cfg(unix)]
     #[tokio::test]
     async fn host_abandoned_real_registry_keeps_card_and_delivers_late_answer() {
         use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
@@ -3989,21 +3990,29 @@ mod tests {
         let mut commands = manager.insert_test_connection_live(
             "real-host-cut", crate::models::agent::AgentType::Codex, None, crate::web::event_bridge::EventEmitter::Noop,
         ).await;
-        let BrokerMessage::Ask(request) = ask_msg("tok") else { unreachable!() };
         let access: Arc<dyn SessionQuestionAccess> = Arc::new(ConnectionManagerQuestionLookup {
             manager: manager.clone(),
         });
-        let mut reg = access.register_question_with_timeout(
-            "real-host-cut", request.questions, Some(Duration::from_secs(600)),
-        ).await.unwrap();
-        let (client, mut server) = duplex(32);
-        drop(client);
-        assert!(matches!(wait_for_question_answer(
-            &mut server, &access, "real-host-cut", &mut reg, true, false,
-        ).await, AskWaitResult::PeerClosed));
-        let question_id = reg.question_id.clone();
-        drop(reg);
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens.register("tok".into(), TokenEntry {
+            parent_connection_id: "real-host-cut".into(), working_dir: PathBuf::from("/tmp"),
+        }).await;
+        let listener = make_question_listener(tokens, access);
+        let (mut client, mut server) = tokio::net::UnixStream::pair().unwrap();
         let state = manager.get_state("real-host-cut").await.unwrap();
+        let mut events = state.read().await.event_stream().subscribe();
+        let serving = tokio::spawn(async move { listener.serve_one(&mut server).await });
+        write_frame(&mut client, &ask_msg("tok")).await.unwrap();
+        let question_id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if let crate::acp::types::AcpEvent::QuestionRequest { question_id, .. } = &event.payload {
+                    break question_id.clone();
+                }
+            }
+        }).await.unwrap();
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(5), serving).await.unwrap().unwrap().unwrap();
         state.write().await.apply_event(&crate::acp::types::AcpEvent::TurnComplete {
             session_id: "s".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
         });

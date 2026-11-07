@@ -9428,6 +9428,8 @@ describe("AcpConnectionsProvider 提问期限", () => {
         "q-background",
         { answers: [], declined: true }
       )
+      expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toEqual(pending)
+      emit({ type: "question_resolved", question_id: "q-background" })
       expect(h.store!.getConnection(TAB)!.pendingAskQuestion).toBeNull()
       emit({
         type: "question_request",
@@ -9450,6 +9452,43 @@ describe("AcpConnectionsProvider 提问期限", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("作答 API 返回不得清掉宿主撤回后恢复的同 ID 卡片", async () => {
+    const handlers = await connectOwner()
+    let resolve!: () => void
+    h.acpAnswerQuestion.mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done
+        })
+    )
+    const emit = (seq: number, type: string) =>
+      emitAcpEvent(handlers, {
+        seq,
+        connection_id: "spawned-conn",
+        type,
+        question_id: "q-restored",
+        questions: [],
+        survives_turn: true,
+      } as EventEnvelope)
+    emit(1, "question_request")
+    let answering!: Promise<void>
+    act(() => {
+      answering = h.actions!.answerQuestion(TAB, "q-restored", {
+        answers: [],
+        declined: true,
+      })
+    })
+    emit(2, "question_resolved")
+    emit(3, "question_request")
+    await act(async () => {
+      resolve()
+      await answering
+    })
+    expect(h.store!.getConnection(TAB)!.pendingAskQuestion?.question_id).toBe(
+      "q-restored"
+    )
   })
 
   it("旧事件和原生问题仍随回合结束清理", async () => {

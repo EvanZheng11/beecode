@@ -48127,6 +48127,7 @@ mod tests {
         respond: Arc<tokio::sync::Notify>,
         /// How many question sweeps had run when each steer reached the agent.
         sweeps_at_steer: Arc<std::sync::Mutex<Vec<usize>>>,
+        prompts: Arc<std::sync::Mutex<Vec<PromptRequest>>>,
         client: tokio::task::JoinHandle<()>,
         agent: tokio::task::JoinHandle<()>,
     }
@@ -48146,6 +48147,8 @@ mod tests {
             let asks = Arc::new(RecordingAsks::default());
             let respond = Arc::new(tokio::sync::Notify::new());
             let sweeps_at_steer = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let agent_prompts = prompts.clone();
             let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
 
             let agent_respond = Arc::clone(&respond);
@@ -48163,9 +48166,10 @@ mod tests {
                         on_receive_request!(),
                     )
                     .on_receive_request(
-                        async move |_req: PromptRequest,
+                        async move |req: PromptRequest,
                                     responder: Responder<PromptResponse>,
                                     _cx: ConnectionTo<Client>| {
+                            agent_prompts.lock().unwrap().push(req);
                             let respond = Arc::clone(&agent_respond);
                             // Off the handler, so the held response doesn't hold
                             // up the steer behind it.
@@ -48200,8 +48204,9 @@ mod tests {
                 "win".to_string(),
                 None,
             )));
+            let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let state = if let Some(mgr) = &manager {
-                mgr.insert_test_connection(
+                cmd_rx = mgr.insert_test_connection_live(
                     Self::CONN,
                     AgentType::ClaudeCode,
                     None,
@@ -48212,10 +48217,12 @@ mod tests {
             } else {
                 state
             };
+            let cmd_tx = if let Some(mgr) = &manager {
+                mgr.connections.lock().await.get(Self::CONN).unwrap().cmd_tx.clone()
+            } else { cmd_tx };
             // 模拟初始化已确认可靠原生能力的 Claude 连接。
             state.write().await.native_steering_available = true;
             let events = state.read().await.event_stream().subscribe();
-            let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
             let questions: Arc<dyn crate::acp::question::SessionQuestionAccess> =
                 if let Some(manager) = manager {
@@ -48277,6 +48284,7 @@ mod tests {
                 events,
                 respond,
                 sweeps_at_steer,
+                prompts,
                 client,
                 agent,
             }
@@ -48346,6 +48354,48 @@ mod tests {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
             self.agent.abort();
         }
+    }
+
+    /// 真实 ACP loop 无 cancel 地结束原生提问回合；补送经管理器队列到同一
+    /// AgentSession，UserMessage 必须先于该轮响应且只能出现一次。
+    #[tokio::test]
+    async fn host_abandoned_native_turn_end_delivers_through_the_real_loop() {
+        use std::time::Duration;
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        let manager = Arc::new(ConnectionManager::new());
+        let mut agent = AskSweepLoop::start_with_manager(Some(manager.clone())).await;
+        agent.open_turn("ask for a choice").await;
+        let access = Arc::new(ConnectionManagerQuestionLookup { manager: manager.clone() });
+        let ask = crate::acp::native_question::NativeQuestion::register(access, AskSweepLoop::CONN,
+            crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+                "id": "q", "header": "Choice", "question": "Choose?",
+                "options": [{"label": "A"}, {"label": "B"}]
+            }]})).unwrap(), crate::acp::question::QuestionConfig::default(),
+        ).await.unwrap();
+        let question_id = agent.state.read().await.pending_question.as_ref().unwrap().question_id.clone();
+        let item_id = agent.state.read().await.pending_question.as_ref().unwrap().questions[0].id.clone();
+        let waiting = tokio::spawn(ask.wait(std::future::pending()));
+        agent.respond.notify_one();
+        agent.until("turn complete without native cancel", |e| matches!(e, AcpEvent::TurnComplete { .. })).await;
+        assert!(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().is_none());
+        assert_eq!(manager.sweep_idle(Duration::ZERO).await, 0);
+        let answer = crate::acp::question::QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem { question_id: item_id, labels: vec!["B".into()] }], declined: false,
+        };
+        manager.answer_question(AskSweepLoop::CONN, &question_id, answer.clone()).await.unwrap();
+        manager.answer_question(AskSweepLoop::CONN, &question_id, answer).await.unwrap();
+        agent.until("visible answer message", |e| matches!(e, AcpEvent::UserMessage { blocks, .. }
+            if matches!(&blocks[0], crate::acp::UserMessageBlock::Text { text } if text.contains("→ B")))).await;
+        // 回应第二轮，保证真实 agent 已收到 PromptRequest 后才核对次数。
+        agent.respond.notify_one();
+        agent.until("answer turn complete", |e| matches!(e, AcpEvent::TurnComplete { .. })).await;
+        {
+            let prompts = agent.prompts.lock().unwrap();
+            assert_eq!(prompts.len(), 2, "初始提问回合 + 一次补送");
+            assert!(serde_json::to_string(&prompts[1]).unwrap().contains("→ B"));
+        }
+        assert!(agent.state.read().await.pending_question.is_none());
+        agent.shutdown().await;
     }
 
     /// A steer sweeps the questions parked on its connection BEFORE the steer
