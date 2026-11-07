@@ -174,6 +174,7 @@ impl SessionQuestionAccess for StubQuestions {
         Some(RegisteredQuestion {
             question_id,
             answer_rx: rx,
+            upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             deadline: None,
         })
     }

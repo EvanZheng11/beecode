@@ -291,6 +291,8 @@ fn chrono_duration(duration: std::time::Duration) -> chrono::Duration {
 pub struct RegisteredQuestion {
     pub question_id: String,
     pub answer_rx: oneshot::Receiver<QuestionOutcome>,
+    /// 在等待器发现宿主撤回时立即置位，作答及回合清理可在抢注册表锁前识别它。
+    pub upstream_closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// 等待期限的共享句柄；`None` 仅供无期限底层调用与兼容测试桩。
     pub deadline: Option<QuestionDeadline>,
 }
@@ -340,7 +342,7 @@ pub trait SessionQuestionAccess: Send + Sync {
         self.register_question_with_timeout(parent_connection_id, questions, Some(timeout)).await
     }
 
-    /// 原生提问带期限注册；生产必须保留 `survives_turn=false`。
+    /// 原生提问带期限注册；非秘密题在宿主回合结束后改为消息补送，秘密题仍按回合清理。
     async fn register_native_question_with_timeout(
         &self,
         parent_connection_id: &str,
@@ -386,6 +388,26 @@ pub trait SessionQuestionAccess: Send + Sync {
     /// 兼容旧调用方的无期限等待入口；正常超时策略不再转为无限等待。
     /// 默认无操作，测试桩可以忽略。
     async fn clear_question_deadline(&self, _parent_connection_id: &str, _question_id: &str) {}
+
+    /// 等待器已成功返回答案后释放短期投递回执；生产实现覆盖，测试桩可忽略。
+    async fn confirm_question_answer(&self, _parent_connection_id: &str, _question_id: &str) {}
+
+    /// 标记「宿主已放弃这次询问」：MCP 对端的工具调用已经消失（socket 关闭），
+    /// 或原生提问的上游 RPC 已撤回。
+    ///
+    /// 宿主侧已经没有可以回填结果的调用，但用户往往还没作答 —— 直接撤题会让卡片
+    /// 凭空消失、答案无处可去。因此这里**保留**注册表条目与卡片，改由
+    /// `answer_question` 把用户的提交作为一条用户消息投递给智能体。
+    ///
+    /// 返回 `true` 表示本次确实标记了一个仍在等待的提问；条目已经不在（已被作答、
+    /// Stop 或断连收走）时返回 `false`，调用方不得复活它。默认无操作供测试桩使用。
+    async fn mark_question_host_abandoned(
+        &self,
+        _parent_connection_id: &str,
+        _question_id: &str,
+    ) -> bool {
+        false
+    }
 
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
@@ -663,6 +685,48 @@ pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> Que
         answers,
         declined: false,
     }
+}
+
+/// 把用户对一次「宿主已放弃」提问的作答渲染成一条可以直接发给智能体的用户消息。
+///
+/// 宿主（agent CLI）给自己的工具调用设了期限，超时就把 `ask_user_question` 的
+/// 往返掐断——那一侧已经没有任何东西能接收答案了。codeg 保留卡片，用户点选后
+/// 用这段文本作为一条普通用户消息补送给智能体，因此措辞要与 codeg-mcp 正常返回
+/// 的结果同形：智能体不需要区分这次答案是阻塞调用返回的，还是事后补送的。
+pub fn format_abandoned_answer_prompt(outcome: &QuestionOutcome) -> String {
+    const DECLINED_GUIDANCE: &str = "Proceed using your best judgment and reasonable \
+                                    defaults. Do not call ask_user_question again to \
+                                    confirm that you should proceed.";
+    if outcome.declined || outcome.answers.is_empty() {
+        return format!(
+            "Your ask_user_question call was interrupted by the host before the user \
+             answered, so it never returned. The user has now dismissed the \
+             question(s) without choosing an answer. {DECLINED_GUIDANCE}"
+        );
+    }
+    let mut text = String::from(
+        "Your ask_user_question call was interrupted by the host before the user \
+         answered, so it never returned; the answer arrives as this message \
+         instead. The user answered your question(s):\n",
+    );
+    for (index, answer) in outcome.answers.iter().enumerate() {
+        let joined = if answer.selected.is_empty() {
+            "(no selection)".to_string()
+        } else {
+            answer.selected.join(", ")
+        };
+        text.push_str(&format!(
+            "{}. [{}] {}\n   → {joined}\n",
+            index + 1,
+            answer.header,
+            answer.question
+        ));
+    }
+    text.push_str(
+        "Proceed with your task using these answers now. Do not call \
+         ask_user_question again to confirm that you should proceed.\n",
+    );
+    text
 }
 
 /// Some native asks carry NO `header` (the short category chip codeg renders):
@@ -2219,6 +2283,58 @@ impl QuestionRuntimeConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 宿主掐断后补送的作答消息：既要让智能体一眼看到选了什么，也要明确告诉它
+    /// 这次不是正常返回，别再重复提问。
+    #[test]
+    fn abandoned_answer_prompt_is_self_describing() {
+        let outcome = QuestionOutcome {
+            answers: vec![
+                QuestionAnsweredItem {
+                    question: "Which approach?".into(),
+                    header: "Approach".into(),
+                    multi_select: false,
+                    selected: vec!["B".into()],
+                },
+                QuestionAnsweredItem {
+                    question: "Which extras?".into(),
+                    header: "Extras".into(),
+                    multi_select: true,
+                    selected: vec!["X".into(), "Y".into()],
+                },
+            ],
+            declined: false,
+        };
+        let text = format_abandoned_answer_prompt(&outcome);
+        assert!(text.contains("interrupted by the host"), "{text}");
+        assert!(text.contains("1. [Approach] Which approach?"), "{text}");
+        assert!(text.contains("→ B"), "{text}");
+        assert!(text.contains("→ X, Y"), "{text}");
+        assert!(
+            text.contains("Do not call ask_user_question again to confirm"),
+            "{text}"
+        );
+    }
+
+    /// 用户跳过（拒答）或异常空结果都要有明确指引，不能冒充“已选”。
+    #[test]
+    fn abandoned_declined_prompt_never_fabricates_a_choice() {
+        for outcome in [
+            QuestionOutcome {
+                answers: vec![],
+                declined: true,
+            },
+            QuestionOutcome {
+                answers: vec![],
+                declined: false,
+            },
+        ] {
+            let text = format_abandoned_answer_prompt(&outcome);
+            assert!(text.contains("dismissed the question(s)"), "{text}");
+            assert!(!text.contains('→'), "空的作答不得编出选项：{text}");
+            assert!(text.contains("best judgment"), "{text}");
+        }
+    }
 
     fn valid_args() -> Value {
         json!({

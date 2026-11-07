@@ -12,6 +12,25 @@ pub(super) struct NativeQuestion {
     specs: Vec<QuestionSpec>,
     config: QuestionConfig,
     registered: RegisteredQuestion,
+    current_id: Arc<std::sync::Mutex<String>>,
+}
+
+/// 等原生 responder 确认写出后再释放回执；不能在 wait() 返回时过早确认。
+pub(super) struct NativeQuestionDelivery {
+    access: Arc<dyn SessionQuestionAccess>,
+    connection_id: String,
+    current_id: Arc<std::sync::Mutex<String>>,
+}
+
+impl NativeQuestionDelivery {
+    pub(super) async fn complete(self, delivered: bool) {
+        let id = self.current_id.lock().unwrap().clone();
+        if delivered {
+            self.access.confirm_question_answer(&self.connection_id, &id).await;
+        } else {
+            self.access.mark_question_host_abandoned(&self.connection_id, &id).await;
+        }
+    }
 }
 
 impl NativeQuestion {
@@ -28,13 +47,23 @@ impl NativeQuestion {
                 Duration::from_secs(u64::from(config.wait_timeout_minutes) * 60),
             )
             .await?;
+        let current_id = Arc::new(std::sync::Mutex::new(registered.question_id.clone()));
         Some(Self {
             access,
             connection_id: connection_id.to_owned(),
             specs,
             config,
             registered,
+            current_id,
         })
+    }
+
+    pub(super) fn delivery(&self) -> NativeQuestionDelivery {
+        NativeQuestionDelivery {
+            access: self.access.clone(),
+            connection_id: self.connection_id.clone(),
+            current_id: self.current_id.clone(),
+        }
     }
 
     pub(super) async fn wait(
@@ -66,12 +95,28 @@ impl NativeQuestion {
                     biased;
                     () = &mut local_abort => {
                         // 本地清理只撤本题，不把 Stop/替换消息误记为耗尽。
-                        self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        if !self.registered.upstream_closed.load(std::sync::atomic::Ordering::Acquire) {
+                            self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                        }
                         return None;
                     }
                     () = &mut cancellation => {
-                        // RPC 已撤回，无法继续原请求；仅本题仍在注册表时停任务。
-                        let stopped = self.access.stop_timed_out_question(&self.connection_id, &self.registered.question_id).await;
+                        if self.specs.iter().any(|question| question.is_secret) {
+                            self.access.cancel_question(&self.connection_id, &self.registered.question_id).await;
+                            return None;
+                        }
+                        self.registered.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+                        // 上游撤回：宿主已经不要这个答案了（RPC 期限、会话关闭或宿主
+                        // 自己取消）。保留卡片与注册表条目，用户作答后由
+                        // `answer_question` 以用户消息补送 —— 否则卡片会凭空消失。
+                        // Stop/断连走 `local_abort`，那时条目已被收走，这里会返回 false。
+                        let kept = self
+                            .access
+                            .mark_question_host_abandoned(
+                                &self.connection_id,
+                                &self.registered.question_id,
+                            )
+                            .await;
                         tracing::warn!(
                             connection_id = %self.connection_id,
                             question_id = %self.registered.question_id,
@@ -80,8 +125,8 @@ impl NativeQuestion {
                             configured_deadline = ?deadline.expires_at(),
                             round,
                             retry_count = self.config.retry_count,
-                            stopped,
-                            "原生提问上游撤回，配置轮次被中断；未收到用户答案"
+                            kept_pending = kept,
+                            "原生提问上游撤回（宿主放弃这次询问）；保留卡片，答案改以用户消息投递"
                         );
                         return None;
                     }
@@ -89,9 +134,26 @@ impl NativeQuestion {
                         if answer.is_err() {
                             tracing::debug!(connection_id = %self.connection_id, question_id = %self.registered.question_id, "原生提问注册表已取消（Stop/回合结束/断连）");
                         }
+                        if answer.is_ok() {
+                            // 同时就绪的上游撤回优先于将答案视为已送达。
+                            tokio::select! {
+                                biased;
+                                () = &mut cancellation => {
+                                    self.registered.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+                                    self.access.mark_question_host_abandoned(&self.connection_id, &self.registered.question_id).await;
+                                    return None;
+                                }
+                                () = std::future::ready(()) => {}
+                            }
+                        }
                         return answer.ok();
                     }
-                    _ = changes.changed() => continue,
+                    _ = changes.changed() => {
+                        if self.registered.upstream_closed.load(std::sync::atomic::Ordering::Acquire) {
+                            return None;
+                        }
+                        continue;
+                    },
                     () = async {
                         match at {
                             Some(at) => tokio::time::sleep_until(at).await,
@@ -120,7 +182,10 @@ impl NativeQuestion {
                     )
                     .await;
                 match next {
-                    Some(next) => self.registered = next,
+                    Some(next) => {
+                        *self.current_id.lock().unwrap() = next.question_id.clone();
+                        self.registered = next;
+                    },
                     None => return self.registered.answer_rx.try_recv().ok(),
                 }
                 continue;
@@ -186,6 +251,7 @@ mod tests {
         pending: Mutex<Option<(String, oneshot::Sender<QuestionOutcome>, QuestionDeadline)>>,
         rounds: Mutex<u32>,
         stops: Mutex<u32>,
+        abandoned: Mutex<u32>,
     }
 
     #[async_trait::async_trait]
@@ -218,6 +284,7 @@ mod tests {
             Some(RegisteredQuestion {
                 question_id: id,
                 answer_rx: rx,
+                upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 deadline: Some(deadline),
             })
         }
@@ -241,6 +308,20 @@ mod tests {
 
         async fn stop_question_task(&self, _: &str) {
             *self.stops.lock().unwrap() += 1;
+        }
+
+        async fn mark_question_host_abandoned(&self, _: &str, id: &str) -> bool {
+            let pending = self.pending.lock().unwrap();
+            if pending
+                .as_ref()
+                .is_some_and(|(current, _, _)| current == id)
+            {
+                drop(pending);
+                *self.abandoned.lock().unwrap() += 1;
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -299,10 +380,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn withdrawal_and_stop_never_default_or_retry() {
+    async fn withdrawal_keeps_the_question_and_never_default_or_retry() {
         for (peer_withdrawal, auto) in [(true, true), (true, false), (false, true), (false, false)] {
             let access = Arc::new(Access::default());
             let ask = question(&access, auto).await;
+            let question_id = ask.registered.question_id.clone();
             let (tx, rx) = oneshot::channel();
             if peer_withdrawal {
                 tx.send(()).unwrap();
@@ -315,9 +397,20 @@ mod tests {
                 })
                 .await
                 .is_none());
-            assert_eq!(*access.rounds.lock().unwrap(), 1);
-            assert_eq!(*access.stops.lock().unwrap(), u32::from(peer_withdrawal));
-            assert!(access.pending.lock().unwrap().is_none());
+            assert_eq!(*access.rounds.lock().unwrap(), 1, "撤回不重提");
+            assert_eq!(*access.stops.lock().unwrap(), 0, "撤回不停止宿主任务");
+            if peer_withdrawal {
+                // 宿主放弃这次询问：条目与卡片保留，等用户作答后再补送。
+                assert_eq!(*access.abandoned.lock().unwrap(), 1);
+                assert_eq!(
+                    access.pending.lock().unwrap().as_ref().unwrap().0,
+                    question_id,
+                    "宿主放弃后不得撤题，否则用户就没有可作答的入口"
+                );
+            } else {
+                assert_eq!(*access.abandoned.lock().unwrap(), 0);
+                assert!(access.pending.lock().unwrap().is_none(), "本地取消照旧撤题");
+            }
         }
     }
 

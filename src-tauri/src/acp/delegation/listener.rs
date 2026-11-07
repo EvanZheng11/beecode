@@ -580,7 +580,12 @@ impl DelegationListener {
                                     Ok(answer) => ask_response(&answer)?,
                                     Err(_) => ask_error_response(BrokerAskError::Cancelled)?,
                                 };
-                                write_frame(conn, &response).await?;
+                                if let Err(error) = write_frame(conn, &response).await {
+                                    reg.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+                                    self.questions.mark_question_host_abandoned(&parent_conn_id, &reg.question_id).await;
+                                    return Err(error);
+                                }
+                                self.questions.confirm_question_answer(&parent_conn_id, &reg.question_id).await;
                                 return Ok(());
                             }
                         }
@@ -605,7 +610,12 @@ impl DelegationListener {
                     .await
                     {
                         AskWaitResult::Answered(outcome) => {
-                            write_frame(conn, &ask_response(&outcome)?).await?;
+                            if let Err(error) = write_frame(conn, &ask_response(&outcome)?).await {
+                                reg.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+                                self.questions.mark_question_host_abandoned(&parent_conn_id, &question_id).await;
+                                return Err(error);
+                            }
+                            self.questions.confirm_question_answer(&parent_conn_id, &question_id).await;
                             return Ok(());
                         }
                         AskWaitResult::Cancelled => {
@@ -1558,28 +1568,33 @@ where
         }
     }
 
-    if matches!(result, AskWaitResult::PeerClosed | AskWaitResult::Cancelled)
+    if matches!(result, AskWaitResult::PeerClosed) {
+        reg.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+        // 对端（agent CLI 里的 codeg-mcp）把自己的工具调用掐断了——通常是宿主的
+        // MCP 请求期限到了。那一侧已经没有接收方，但用户往往还在看这张卡：保留
+        // 条目与卡片，用户作答后由 `answer_question` 以用户消息投递，答案不会凭空
+        // 消失。这个分支不再退回重提：宿主已经不要结果，重提只会再掐断一次。
+        let kept = questions
+            .mark_question_host_abandoned(parent_connection_id, question_id)
+            .await;
+        tracing::warn!(
+            agent = "codeg-mcp",
+            parent_connection_id,
+            question_id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            configured_deadline = ?deadline.and_then(|d| d.expires_at()),
+            kept_pending = kept,
+            "MCP 提问对端提前关闭（宿主放弃这次调用）；保留卡片，答案改以用户消息投递"
+        );
+    } else if matches!(result, AskWaitResult::Cancelled)
         || (matches!(result, AskWaitResult::TimedOut) && !retry_on_timeout)
     {
-        let removed = if matches!(result, AskWaitResult::PeerClosed)
-            || (matches!(result, AskWaitResult::TimedOut) && stop_on_timeout)
-        {
-            // 对端已不接收答案，不能保留孤儿卡，也不能让宿主跳过未答题。
+        let removed = if matches!(result, AskWaitResult::TimedOut) && stop_on_timeout {
+            // 等待全部用尽且禁止自动选择：停止宿主任务，不能让它跳过未答题。
             questions.stop_timed_out_question(parent_connection_id, question_id).await
         } else {
             questions.cancel_question(parent_connection_id, question_id).await
         };
-        if matches!(result, AskWaitResult::PeerClosed) {
-            tracing::warn!(
-                agent = "codeg-mcp",
-                parent_connection_id,
-                question_id,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                configured_deadline = ?deadline.and_then(|d| d.expires_at()),
-                stopped = removed,
-                "MCP 提问对端提前关闭，配置轮次被中断；未收到用户答案"
-            );
-        }
         if matches!(result, AskWaitResult::TimedOut) {
             // 回答在同一注册表锁内投递，先取实际答案；只有自己撤回才算正常超时。
             // 外部撤回可能仍在广播并持有 sender，因此 Empty 和 Closed 都是取消。
@@ -2100,6 +2115,8 @@ mod tests {
         cleared: tokio::sync::Mutex<Vec<String>>,
         cancel_gate: tokio::sync::Mutex<Option<Arc<QuestionCancelGate>>>,
         stopped: tokio::sync::Mutex<Vec<String>>,
+        /// 被标记「宿主已放弃」的提问 id（条目仍然保留）。
+        abandoned: tokio::sync::Mutex<Vec<String>>,
     }
     #[async_trait]
     impl SessionQuestionAccess for StubQuestion {
@@ -2123,6 +2140,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id,
                 answer_rx: rx,
+                upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 deadline: None,
             })
         }
@@ -2166,6 +2184,23 @@ mod tests {
         }
         async fn clear_question_deadline(&self, _parent_connection_id: &str, question_id: &str) {
             self.cleared.lock().await.push(question_id.to_string());
+        }
+        async fn mark_question_host_abandoned(
+            &self,
+            parent_connection_id: &str,
+            question_id: &str,
+        ) -> bool {
+            // 与生产实现一致：只标记，不移除条目——用户仍要能作答。
+            let kept = self
+                .pending
+                .lock()
+                .await
+                .get(question_id)
+                .is_some_and(|(parent, _)| parent == parent_connection_id);
+            if kept {
+                self.abandoned.lock().await.push(question_id.to_string());
+            }
+            kept
         }
         async fn task_start_blocked(&self, parent_connection_id: &str) -> bool {
             self.pending.lock().await.values().any(|(parent, _)| parent == parent_connection_id)
@@ -3906,9 +3941,10 @@ mod tests {
     }
 
     /// A canceled tool call drops the request socket; the listener observes the
-    /// peer-close, cancels the pending question, and returns without writing.
+    /// peer-close and keeps the question pending — the host gave up the call, but
+    /// the user can still answer and that answer is delivered as a message.
     #[tokio::test]
-    async fn ask_peer_close_cancels_question() {
+    async fn ask_peer_close_keeps_question_for_a_late_answer() {
         let questions = Arc::new(StubQuestion::default());
         let tokens = Arc::new(TokenRegistry::default());
         tokens
@@ -3935,8 +3971,55 @@ mod tests {
             .await
             .expect("serve_one must return after peer close");
         result.unwrap().unwrap();
-        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1".to_string()]);
-        assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
+        assert_eq!(questions.abandoned.lock().await.as_slice(), &["q-1".to_string()]);
+        assert!(questions.canceled.lock().await.is_empty(), "宿主放弃不等于撤题");
+        assert!(questions.stopped.lock().await.is_empty(), "宿主放弃不停止宿主任务");
+        assert!(
+            questions.pending.lock().await.contains_key("q-1"),
+            "答案通道要留给用户作答后补送"
+        );
+    }
+
+    /// 不只测 stub：实际注册表在 peer-close、回合结束、idle扫描后仍须保留同一题，
+    /// 用户提交才产生恰好一条可见用户消息。
+    #[tokio::test]
+    async fn host_abandoned_real_registry_keeps_card_and_delivers_late_answer() {
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = manager.insert_test_connection_live(
+            "real-host-cut", crate::models::agent::AgentType::Codex, None, crate::web::event_bridge::EventEmitter::Noop,
+        ).await;
+        let BrokerMessage::Ask(request) = ask_msg("tok") else { unreachable!() };
+        let access: Arc<dyn SessionQuestionAccess> = Arc::new(ConnectionManagerQuestionLookup {
+            manager: manager.clone(),
+        });
+        let mut reg = access.register_question_with_timeout(
+            "real-host-cut", request.questions, Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        let (client, mut server) = duplex(32);
+        drop(client);
+        assert!(matches!(wait_for_question_answer(
+            &mut server, &access, "real-host-cut", &mut reg, true, false,
+        ).await, AskWaitResult::PeerClosed));
+        let question_id = reg.question_id.clone();
+        drop(reg);
+        let state = manager.get_state("real-host-cut").await.unwrap();
+        state.write().await.apply_event(&crate::acp::types::AcpEvent::TurnComplete {
+            session_id: "s".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
+        });
+        assert_eq!(manager.sweep_idle(Duration::ZERO).await, 0);
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, question_id);
+        assert!(state.read().await.pending_question.as_ref().unwrap().expires_at.is_none());
+        manager.answer_question("real-host-cut", &question_id, crate::acp::question::QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem {
+                question_id: "qq-1".into(), labels: vec!["Rewrite".into()],
+            }], declined: false,
+        }).await.unwrap();
+        assert!(matches!(commands.try_recv(), Ok(crate::acp::connection::ConnectionCommand::Prompt {
+            user_message: Some(_), ..
+        })));
+        assert!(commands.try_recv().is_err());
+        assert!(state.read().await.pending_question.is_none());
     }
 
     /// 无效 token 没有用户答案，不能冒充用户拒答。
@@ -4432,9 +4515,13 @@ mod tests {
                 tokio::task::yield_now().await;
             }
             assert_eq!(questions.registered.lock().await.len(), 1);
-            assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
-            assert_eq!(questions.stopped.lock().await.as_slice(), &["parent-conn"]);
-            assert!(questions.pending.lock().await.is_empty());
+            assert_eq!(questions.abandoned.lock().await.as_slice(), &["q-1"]);
+            assert!(questions.canceled.lock().await.is_empty(), "宿主放弃不撤题");
+            assert!(questions.stopped.lock().await.is_empty(), "也不停止宿主任务");
+            assert!(
+                questions.pending.lock().await.contains_key("q-1"),
+                "到期同时被宿主放弃：保留卡片等用户作答"
+            );
         }
     }
 
@@ -4456,8 +4543,12 @@ mod tests {
         for _ in 0..8 {
             tokio::task::yield_now().await;
         }
+        // 宿主放弃这次调用：条目保留，用户仍可作答。
+        assert_eq!(questions.abandoned.lock().await.as_slice(), &["q-1"]);
+        assert!(questions.pending.lock().await.contains_key("q-1"));
+        // 真正的连接拆除仍然清干净（`cancel_questions_by_parent` 由连接清理守卫调用）。
+        questions.cancel_questions_by_parent("parent-conn").await;
         assert!(questions.pending.lock().await.is_empty());
-        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1"]);
     }
 
     // -- browser tools ------------------------------------------------------

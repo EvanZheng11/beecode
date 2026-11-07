@@ -488,10 +488,25 @@ struct PendingQuestionEntry {
     parent_connection_id: String,
     survives_turn: bool,
     questions: Vec<QuestionSpec>,
-    sender: tokio::sync::oneshot::Sender<QuestionOutcome>,
+    sender: Option<tokio::sync::oneshot::Sender<QuestionOutcome>>,
     /// 本次提问的倒计时句柄。`None` 表示原生 agent 提问从来没有期限（不显示
     /// 倒计时，也拒绝延长）；MCP `ask_user_question` 注册时总会带上它。
     deadline: Option<QuestionDeadline>,
+    /// 宿主已经放弃这次询问：MCP 对端的工具调用消失（socket 关闭），或原生提问的
+    /// 上游 RPC 撤回。`sender` 从此没有接收方，用户作答改由
+    /// [`ConnectionManager::answer_question`] 以用户消息投递。
+    host_abandoned: bool,
+    native_request: bool,
+    /// 已交给 waiter、尚未确认上游写出的答案；短暂保留以覆盖作答与撤回竞态。
+    submitted: Option<QuestionAnswer>,
+    upstream_closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PendingQuestionEntry {
+    /// 宿主已放弃的提问仍由用户持有，不能按「receiver 已关闭」当作孤儿回收。
+    fn is_orphaned(&self) -> bool {
+        self.submitted.is_none() && !self.host_abandoned && !self.upstream_closed.load(std::sync::atomic::Ordering::Acquire) && self.sender.as_ref().is_none_or(|sender| sender.is_closed())
+    }
 }
 
 /// A parked Grok `exit_plan_mode` approval awaiting the user's decision. The
@@ -1019,12 +1034,12 @@ impl ConnectionManager {
             let questions = self.pending_questions.lock().await;
             let live_question_parents: std::collections::HashSet<&str> = questions
                 .values()
-                .filter(|e| !e.sender.is_closed())
+                .filter(|e| e.submitted.is_none() && !e.is_orphaned())
                 .map(|e| e.parent_connection_id.as_str())
                 .collect();
             let closed_question_parents: std::collections::HashSet<String> = questions
                 .values()
-                .filter(|e| e.sender.is_closed())
+                .filter(|e| e.submitted.is_some() || e.is_orphaned())
                 .map(|e| e.parent_connection_id.clone())
                 .collect();
             let connections = self.connections.lock().await;
@@ -1062,7 +1077,7 @@ impl ConnectionManager {
         // 先按清理前的活动时间选出候选，避免清理事件本身给孤儿续命。
         // 注册表锁、连接锁均已释放；按闭合状态重新筛选，保留后来注册的新题。
         for id in closed_question_parents {
-            self.cancel_parent_questions(&id, |e| e.sender.is_closed())
+            self.cancel_parent_questions(&id, |e| e.submitted.is_some() || e.is_orphaned())
                 .await;
         }
         let mut disconnected = 0;
@@ -1080,7 +1095,7 @@ impl ConnectionManager {
             let questions = self.pending_questions.lock().await;
             if questions
                 .values()
-                .any(|e| e.parent_connection_id == id && !e.sender.is_closed())
+                .any(|e| e.parent_connection_id == id && e.submitted.is_none() && !e.is_orphaned())
             {
                 return false;
             }
@@ -3916,7 +3931,7 @@ impl ConnectionManager {
     /// 仅按父连接阻止新工作，不影响同目录其他连接或已运行子任务。
     pub(crate) async fn question_blocks_task_start(&self, conn_id: &str) -> bool {
         let pending = self.pending_questions.lock().await;
-        if pending.values().any(|entry| entry.parent_connection_id == conn_id) {
+        if pending.values().any(|entry| entry.parent_connection_id == conn_id && entry.submitted.is_none()) {
             return true;
         }
         let Some((state, _)) = self.get_state_and_emitter(conn_id).await else {
@@ -3949,7 +3964,7 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion> {
         // 保留无期限底层入口；实时原生桥走 register_native_question_with_timeout。
-        self.register_question_inner(conn_id, questions, None, false, None)
+        self.register_question_inner(conn_id, questions, None, false, None, false)
             .await
     }
 
@@ -3963,7 +3978,7 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: Option<std::time::Duration>,
     ) -> Option<RegisteredQuestion> {
-        self.register_question_inner(conn_id, questions, timeout, true, None)
+        self.register_question_inner(conn_id, questions, timeout, true, None, false)
             .await
     }
 
@@ -3973,7 +3988,9 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: std::time::Duration,
     ) -> Option<RegisteredQuestion> {
-        self.register_question_inner(conn_id, questions, Some(timeout), false, None)
+        // 非秘密原生 RPC 也可能跨越前台回合；只有上游撤回/用户操作能结束它。
+        let survives_turn = !questions.iter().any(|question| question.is_secret);
+        self.register_question_inner(conn_id, questions, Some(timeout), survives_turn, None, true)
             .await
     }
 
@@ -3984,6 +4001,7 @@ impl ConnectionManager {
         timeout: Option<std::time::Duration>,
         survives_turn: bool,
         replacing_question: Option<&str>,
+        native_request: bool,
     ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
@@ -3994,6 +4012,7 @@ impl ConnectionManager {
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let upstream_closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let deadline = timeout.map(QuestionDeadline::from_now);
         let drained = {
             let mut reg = self.pending_questions.lock().await;
@@ -4006,7 +4025,8 @@ impl ConnectionManager {
             let mut drained = Vec::new();
             if let Some(previous_id) = replacing_question {
                 let previous = reg.get(previous_id)?;
-                if previous.parent_connection_id != conn_id || previous.survives_turn != survives_turn {
+                if previous.parent_connection_id != conn_id || previous.survives_turn != survives_turn
+                    || previous.submitted.is_some() || previous.host_abandoned {
                     return None;
                 }
                 // 同一临界区替换，Stop/回答先赢锁时不会重新创建提问。
@@ -4014,7 +4034,7 @@ impl ConnectionManager {
                 drained.push(previous_id.to_string());
             }
             drained.extend(Self::drain_parent_questions(&mut reg, conn_id, |e| {
-                e.sender.is_closed()
+                e.submitted.is_some() || e.is_orphaned()
             }));
             if reg.values().any(|e| e.parent_connection_id == conn_id) {
                 return None;
@@ -4025,8 +4045,12 @@ impl ConnectionManager {
                     parent_connection_id: conn_id.to_string(),
                     survives_turn,
                     questions: questions.clone(),
-                    sender: tx,
+                    sender: Some(tx),
                     deadline: deadline.clone(),
+                    host_abandoned: false,
+                    native_request,
+                    submitted: None,
+                    upstream_closed: upstream_closed.clone(),
                 },
             );
             drained
@@ -4069,6 +4093,7 @@ impl ConnectionManager {
         Some(RegisteredQuestion {
             question_id,
             answer_rx: rx,
+            upstream_closed,
             deadline,
         })
     }
@@ -4087,7 +4112,7 @@ impl ConnectionManager {
     pub async fn extend_question(&self, question_id: &str) -> Result<String, AcpError> {
         let (parent_connection_id, new_expires_at) = {
             let reg = self.pending_questions.lock().await;
-            let Some(entry) = reg.get(question_id) else {
+            let Some(entry) = reg.get(question_id).filter(|entry| entry.submitted.is_none()) else {
                 return Err(AcpError::QuestionDeadlineNotExtendable(
                     "question is no longer pending".to_string(),
                 ));
@@ -4195,43 +4220,187 @@ impl ConnectionManager {
         true
     }
 
-    /// Resolve a pending `ask_user_question` with the user's submission (from any
-    /// client). Removes the one-shot atomically (first answer wins; a duplicate /
-    /// already-resolved id is an idempotent no-op), sends the self-describing
-    /// outcome to the blocked listener, and broadcasts `QuestionResolved` so the
-    /// card clears on every client. Routing uses the entry's stored parent
-    /// connection (the `question_id` is the authoritative key), so a stale
-    /// `conn_id` from the caller can't misroute.
-    pub async fn answer_question(
+    /// 宿主已不再接收工具结果，但用户尚可作答。保留同一题号和卡片，取消倒计时，
+    /// 后续作答改为普通用户消息。与作答/Stop 共用注册表锁，不能复活已撤回的问题。
+    pub async fn mark_question_host_abandoned(
         &self,
         conn_id: &str,
         question_id: &str,
+    ) -> bool {
+        let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await else {
+            return false;
+        };
+        let mut reg = self.pending_questions.lock().await;
+        let Some(entry) = reg.get_mut(question_id).filter(|entry| {
+            entry.parent_connection_id == conn_id && !entry.host_abandoned
+        }) else {
+            return false;
+        };
+        // 秘密输入不得绕过本地表单通道写入普通用户消息/历史。
+        if entry.questions.iter().any(|question| question.is_secret) {
+            reg.remove(question_id);
+            drop(reg);
+            emit_with_state(&state, &emitter, AcpEvent::QuestionResolved {
+                question_id: question_id.to_string(),
+            }).await;
+            return false;
+        }
+        let specs = entry.questions.clone();
+        let submitted = entry.submitted.take();
+        // 写快照与翻转注册表状态受同一把锁保护；TurnComplete 即使已清掉原生题，
+        // 也能从仍有效的注册表重建卡片，Stop 则必须先赢得同一注册表锁才能撤回。
+        emit_with_state_built(&state, &emitter, |s| {
+            if s.replacing_turn || s.question_timed_out
+                || matches!(s.status, ConnectionStatus::Disconnected | ConnectionStatus::Error)
+            {
+                return None;
+            }
+            entry.host_abandoned = true;
+            entry.survives_turn = true;
+            if let Some(deadline) = &entry.deadline {
+                deadline.clear();
+            }
+            // 让旧等待器退出，但保留条目；它已没有可以返回答案的上游 RPC。
+            entry.sender.take();
+            Some(AcpEvent::QuestionRequest {
+                question_id: question_id.to_string(),
+                questions: specs,
+                survives_turn: true,
+                expires_at: None,
+            })
+        }).await;
+        let kept = entry.host_abandoned;
+        drop(reg);
+        if kept {
+            if let Some(answer) = submitted {
+                if let Err(error) = self.answer_question(conn_id, question_id, answer).await {
+                    tracing::warn!(parent_connection_id = conn_id, question_id, %error,
+                        "撤回与作答并发：恢复卡片供用户重试");
+                }
+            }
+        }
+        tracing::info!(parent_connection_id = conn_id, question_id, kept_pending = kept,
+            "宿主放弃提问等待；保留卡片，作答后转为用户消息");
+        kept
+    }
+
+    /// 上游确认收取答案后释放短期回执，不影响已经转为补送的题目。
+    pub async fn confirm_question_answer(&self, conn_id: &str, question_id: &str) {
+        let mut pending = self.pending_questions.lock().await;
+        if pending.get(question_id).is_some_and(|entry| {
+            entry.parent_connection_id == conn_id && entry.submitted.is_some() && !entry.host_abandoned
+        }) {
+            pending.remove(question_id);
+        }
+    }
+
+    /// 正常回答仍交给原工具；宿主已放弃时，原子接纳一条用户消息后才移除卡片。
+    /// 接纳失败保持题目与选择不变，接口返回错误供前端重试，绝不后台静默丢答案。
+    pub async fn answer_question(
+        &self,
+        _conn_id: &str,
+        question_id: &str,
         answer: QuestionAnswer,
     ) -> Result<(), AcpError> {
-        let _ = conn_id;
-        let parent_connection_id = {
-            let mut reg = self.pending_questions.lock().await;
-            let Some(entry) = reg.remove(question_id) else {
-                // 已回答、取消或移除时保持幂等成功。
+        let mut reg = self.pending_questions.lock().await;
+        let Some(entry) = reg.get_mut(question_id) else { return Ok(()); };
+        if entry.submitted.is_some() && !entry.host_abandoned { return Ok(()); }
+        let outcome = build_outcome(&entry.questions, &answer);
+        if !entry.host_abandoned && !entry.upstream_closed.load(std::sync::atomic::Ordering::Acquire) {
+            // 接收方恰在用户提交时消失也不能丢答案：send 的失败会返回原始结果。
+            if entry.sender.take().is_some_and(|sender| sender.send(outcome.clone()).is_ok()) {
+                let parent = entry.parent_connection_id.clone();
+                entry.submitted = Some(answer.clone());
+                drop(reg);
+                if let Some((state, emitter)) = self.get_state_and_emitter(&parent).await {
+                    emit_with_state(&state, &emitter, AcpEvent::QuestionResolved {
+                        question_id: question_id.to_string(),
+                    }).await;
+                }
                 return Ok(());
-            };
-            let outcome = build_outcome(&entry.questions, &answer);
-            // 移除和同步发送共用锁，确保超时取消看到条目消失时答案已经可读。
-            // 接收端可能同时断开；仍忽略发送失败，锁外广播继续清理卡片。
-            let _ = entry.sender.send(outcome);
-            entry.parent_connection_id
-        };
-        if let Some((state, emitter)) = self.get_state_and_emitter(&parent_connection_id).await {
-            emit_with_state(
-                &state,
-                &emitter,
-                AcpEvent::QuestionResolved {
-                    question_id: question_id.to_string(),
-                },
-            )
-            .await;
+            }
+            entry.host_abandoned = true;
+            entry.survives_turn = true;
+            if let Some(deadline) = &entry.deadline { deadline.clear(); }
         }
-        Ok(())
+        if entry.questions.iter().any(|question| question.is_secret) {
+            let parent = entry.parent_connection_id.clone();
+            reg.remove(question_id);
+            drop(reg);
+            if let Some((state, emitter)) = self.get_state_and_emitter(&parent).await {
+                emit_with_state(&state, &emitter, AcpEvent::QuestionResolved {
+                    question_id: question_id.to_string(),
+                }).await;
+            }
+            return Err(AcpError::protocol("secret question cannot be delivered as a chat message"));
+        }
+        if !outcome.declined && outcome.answers.is_empty() {
+            return Err(AcpError::protocol("question answer contains no usable selection"));
+        }
+        entry.host_abandoned = true;
+        entry.survives_turn = true;
+        if let Some(deadline) = &entry.deadline { deadline.clear(); }
+        let parent = entry.parent_connection_id.clone();
+        let specs = entry.questions.clone();
+        let (cmd_tx, state, emitter, prompt_lock) = {
+            let connections = self.connections.lock().await;
+            let connection = connections.get(&parent)
+                .ok_or_else(|| AcpError::ConnectionNotFound(parent.clone()))?;
+            (connection.cmd_tx.clone(), connection.state.clone(),
+                connection.emitter.clone(), connection.prompt_lock.clone())
+        };
+        emit_with_state_built(&state, &emitter, |s| {
+            if let Some(pending) = s.pending_question.as_mut().filter(|q| q.question_id == question_id) {
+                pending.survives_turn = true;
+                pending.expires_at = None;
+            }
+            None
+        }).await;
+        // 不等待另一个 prompt 持有的锁（避免与 Stop/替换的清理锁形成环）。
+        let _prompt_guard = prompt_lock.try_lock_owned().map_err(|_| AcpError::TurnInProgress)?;
+        let permit = cmd_tx.try_reserve().map_err(|error| match error {
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => AcpError::ProcessExited,
+            tokio::sync::mpsc::error::TrySendError::Full(_) => AcpError::TurnInProgress,
+        })?;
+        let text = crate::acp::question::format_abandoned_answer_prompt(&outcome);
+        let blocks = vec![PromptInputBlock::Text { text: text.clone() }];
+        let user_blocks = vec![crate::acp::UserMessageBlock::Text { text }];
+        let mut result = Ok(());
+        let mut queued = false;
+        emit_with_state_built(&state, &emitter, |s| {
+            // 无 waiter 的题也必须跨回合存活；此处兼顾用户提交与 PeerClosed 的竞态。
+            if s.replacing_turn || s.question_timed_out
+                || matches!(s.status, ConnectionStatus::Disconnected | ConnectionStatus::Error)
+                || s.pending_question.as_ref().is_some_and(|q| q.question_id != question_id)
+            {
+                result = Err(AcpError::TurnInProgress);
+                return None;
+            }
+            if s.turn_in_flight || s.prompt_barrier {
+                result = Err(AcpError::TurnInProgress);
+                // 仍忙时保留卡片。用户稍后重试，不启动无人监管的后台重试任务。
+                return Some(AcpEvent::QuestionRequest {
+                    question_id: question_id.to_string(), questions: specs,
+                    survives_turn: true, expires_at: None,
+                });
+            }
+            // 与普通用户消息相同的命令载荷，连接循环负责 UserMessage 广播及历史。
+            s.turn_in_flight = true;
+            let message_id = format!("question-answer:{question_id}");
+            permit.send(ConnectionCommand::Prompt {
+                blocks,
+                user_message: Some((message_id, user_blocks)),
+                internal_suffix: Vec::new(),
+            });
+            queued = true;
+            Some(AcpEvent::QuestionResolved { question_id: question_id.to_string() })
+        }).await;
+        if queued {
+            reg.remove(question_id);
+            tracing::info!(parent_connection_id = %parent, question_id,
+                "宿主中断后的用户答案已进入消息队列");
+        }
+        result
     }
 
     /// Cancel a pending `ask_user_question` — the companion's tool call was
@@ -4244,7 +4413,8 @@ impl ConnectionManager {
             let mut reg = self.pending_questions.lock().await;
             if !reg
                 .get(question_id)
-                .is_some_and(|entry| entry.parent_connection_id == conn_id)
+                .is_some_and(|entry| entry.parent_connection_id == conn_id
+                    && (entry.submitted.is_none() || entry.host_abandoned))
             {
                 return false;
             }
@@ -4280,8 +4450,24 @@ impl ConnectionManager {
     }
 
     pub async fn cancel_turn_questions_by_parent(&self, conn_id: &str) {
-        self.cancel_parent_questions(conn_id, |e| !e.survives_turn)
-            .await;
+        // 原生 RPC 的宿主有时只结束回合而不发送 cancel_request；不能继续把后续
+        // 答案交给一个已经无人等待的 RPC。将未答的非秘密题转为用户消息补送模式。
+        let native_ids = {
+            let pending = self.pending_questions.lock().await;
+            pending.iter().filter_map(|(id, entry)| {
+                if entry.parent_connection_id == conn_id && entry.native_request
+                    && entry.submitted.is_none() && !entry.host_abandoned
+                {
+                    entry.upstream_closed.store(true, std::sync::atomic::Ordering::Release);
+                    Some(id.clone())
+                } else { None }
+            }).collect::<Vec<_>>()
+        };
+        for id in native_ids {
+            self.mark_question_host_abandoned(conn_id, &id).await;
+        }
+        self.cancel_parent_questions(conn_id, |e| !e.survives_turn
+            && !e.upstream_closed.load(std::sync::atomic::Ordering::Acquire)).await;
     }
 
     fn drain_parent_questions(
@@ -4964,7 +5150,7 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         timeout: std::time::Duration,
     ) -> Option<RegisteredQuestion> {
         self.manager.register_question_inner(
-            parent_connection_id, questions, Some(timeout), true, Some(question_id),
+            parent_connection_id, questions, Some(timeout), true, Some(question_id), false,
         ).await
     }
 
@@ -4975,13 +5161,15 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         questions: Vec<QuestionSpec>,
         timeout: std::time::Duration,
     ) -> Option<RegisteredQuestion> {
+        let survives_turn = !questions.iter().any(|question| question.is_secret);
         self.manager
             .register_question_inner(
                 parent_connection_id,
                 questions,
                 Some(timeout),
-                false,
+                survives_turn,
                 Some(question_id),
+                true,
             )
             .await
     }
@@ -5017,7 +5205,7 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         let Ok(permit) = cmd_tx.reserve().await else { return false; };
         {
             let mut pending = self.manager.pending_questions.lock().await;
-            if !pending.get(question_id).is_some_and(|q| q.parent_connection_id == parent_connection_id) {
+            if !pending.get(question_id).is_some_and(|q| q.parent_connection_id == parent_connection_id && q.submitted.is_none()) {
                 return false;
             }
             // 此时待答快照仍挡住 prompt admission；先同步排入 Cancel，再移除条目。
@@ -5038,6 +5226,20 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
     async fn clear_question_deadline(&self, parent_connection_id: &str, question_id: &str) {
         self.manager
             .clear_question_deadline(parent_connection_id, question_id)
+            .await
+    }
+
+    async fn confirm_question_answer(&self, parent_connection_id: &str, question_id: &str) {
+        self.manager.confirm_question_answer(parent_connection_id, question_id).await;
+    }
+
+    async fn mark_question_host_abandoned(
+        &self,
+        parent_connection_id: &str,
+        question_id: &str,
+    ) -> bool {
+        self.manager
+            .mark_question_host_abandoned(parent_connection_id, question_id)
             .await
     }
 
@@ -11166,6 +11368,271 @@ mod tests {
         assert!(!state.read().await.question_timed_out);
     }
 
+    /// 宿主（agent CLI）把自己的工具调用掐断后：卡片必须留着，用户作答后答案要
+    /// 作为一条用户消息补送，而不是随接收方一起消失。
+    #[tokio::test]
+    async fn host_abandoned_question_delivers_the_answer_as_a_user_message() {
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands =
+            insert_live_connection(&manager, "abandoned", AgentType::Codex, None).await;
+        let access = ConnectionManagerQuestionLookup {
+            manager: manager.clone(),
+        };
+        let reg = access
+            .register_question_with_timeout(
+                "abandoned",
+                q_spec(),
+                Some(Duration::from_secs(600)),
+            )
+            .await
+            .expect("注册成功");
+        assert!(pending_expires_at(&manager, "abandoned").await.is_some());
+
+        assert!(
+            access
+                .mark_question_host_abandoned("abandoned", &reg.question_id)
+                .await
+        );
+        let state = manager.get_state("abandoned").await.unwrap();
+        {
+            let snapshot = state.read().await;
+            let pending = snapshot.pending_question.as_ref().expect("卡片必须留着");
+            assert_eq!(pending.question_id, reg.question_id);
+            assert!(pending.expires_at.is_none(), "宿主已放弃，倒计时应清空");
+            assert!(pending.survives_turn, "原生题也要跨回合保留");
+            assert!(!snapshot.question_timed_out, "宿主放弃不是超时耗尽");
+        }
+        assert!(
+            pending_expires_at(&manager, "abandoned").await.is_none(),
+            "期限已清空"
+        );
+        assert!(
+            commands.try_recv().is_err(),
+            "标记放弃本身不得向宿主投递任何命令"
+        );
+
+        manager
+            .answer_question(
+                "abandoned",
+                &reg.question_id,
+                QuestionAnswer {
+                    answers: vec![crate::acp::question::QuestionAnswerItem {
+                        question_id: "qa".into(),
+                        labels: vec!["B".into()],
+                    }],
+                    declined: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(state.read().await.pending_question.is_none(), "作答后卡片清掉");
+
+        let delivered = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(command) = commands.try_recv() {
+                    break command;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("宿主放弃后的作答必须在重试窗口内作为用户消息投递");
+        let ConnectionCommand::Prompt { blocks, user_message, .. } = delivered else {
+            panic!("应投递一条用户消息，实际收到别的命令");
+        };
+        assert!(user_message.is_some(), "补送必须携带 UserMessage 历史载荷");
+        let text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert!(text.contains("The user answered your question(s)"), "{text}");
+        assert!(text.contains("→ B"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_native_question_survives_turn_idle_and_reregistration() {
+        let manager = ConnectionManager::new();
+        let _commands = insert_live_connection(&manager, "kept-native", AgentType::Codex, None).await;
+        let reg = manager.register_native_question_with_timeout(
+            "kept-native", q_spec(), Duration::from_secs(600),
+        ).await.unwrap();
+        assert!(manager.mark_question_host_abandoned("kept-native", &reg.question_id).await);
+        drop(reg.answer_rx); // 真正的上游等待器已经离开，不能再靠 receiver 存活保护它。
+        let state = manager.get_state("kept-native").await.unwrap();
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "s".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
+        });
+        backdate_last_activity(&manager, "kept-native", 1000).await;
+        assert_eq!(manager.sweep_idle(Duration::from_secs(180)).await, 0);
+        assert!(manager.register_question("kept-native", q_spec()).await.is_none());
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, reg.question_id);
+        // 用户 Stop 仍是终态，之后迟到的提交不得启动新消息。
+        manager.cancel_questions_by_parent("kept-native").await;
+        assert!(state.read().await.pending_question.is_none());
+        assert!(!manager.mark_question_host_abandoned("kept-native", &reg.question_id).await);
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_busy_answer_is_retryable_and_stop_never_replays_it() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "busy-answer", AgentType::Codex, None).await;
+        let reg = manager.register_question_with_timeout(
+            "busy-answer", q_spec(), Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        manager.mark_question_host_abandoned("busy-answer", &reg.question_id).await;
+        let state = manager.get_state("busy-answer").await.unwrap();
+        state.write().await.turn_in_flight = true;
+        let answer = QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem {
+                question_id: "qa".into(), labels: vec!["B".into()],
+            }], declined: false,
+        };
+        assert!(matches!(manager.answer_question("busy-answer", &reg.question_id, answer.clone()).await,
+            Err(AcpError::TurnInProgress)));
+        assert!(state.read().await.pending_question.is_some(), "发送失败时不能假装已回答");
+        assert!(commands.try_recv().is_err());
+        manager.cancel_questions_by_parent("busy-answer").await;
+        state.write().await.turn_in_flight = false;
+        manager.answer_question("busy-answer", &reg.question_id, answer).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(commands.try_recv().is_err(), "Stop 后绝不后台重放旧答案");
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_duplicate_answers_enqueue_exactly_one_visible_message() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "dup-answer", AgentType::Codex, None).await;
+        let reg = manager.register_question_with_timeout(
+            "dup-answer", q_spec(), Some(Duration::from_secs(600)),
+        ).await.unwrap();
+        manager.mark_question_host_abandoned("dup-answer", &reg.question_id).await;
+        let answer = QuestionAnswer { answers: vec![], declined: true };
+        let (first, second) = tokio::join!(
+            manager.answer_question("dup-answer", &reg.question_id, answer.clone()),
+            manager.answer_question("dup-answer", &reg.question_id, answer),
+        );
+        first.unwrap(); second.unwrap();
+        let ConnectionCommand::Prompt { user_message, .. } = commands.try_recv().unwrap() else {
+            panic!("应入队用户消息");
+        };
+        let (message_id, blocks) = user_message.expect("补送必须使用可见的用户消息载荷");
+        assert_eq!(message_id, format!("question-answer:{}", reg.question_id));
+        assert!(!blocks.is_empty());
+        assert!(commands.try_recv().is_err(), "重复点击不得多发消息");
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_answer_receipt_survives_a_failed_upstream_write() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "receipt", AgentType::Codex, None).await;
+        let reg = manager.register_question_with_timeout("receipt", q_spec(), Some(Duration::from_secs(600))).await.unwrap();
+        manager.answer_question("receipt", &reg.question_id, QuestionAnswer {
+            answers: vec![crate::acp::question::QuestionAnswerItem { question_id: "qa".into(), labels: vec!["B".into()] }], declined: false,
+        }).await.unwrap();
+        assert!(reg.answer_rx.await.is_ok());
+        assert!(manager.mark_question_host_abandoned("receipt", &reg.question_id).await);
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { user_message: Some(_), .. })));
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_secret_never_becomes_a_chat_message() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "secret", AgentType::Codex, None).await;
+        let mut specs = q_spec(); specs[0].is_secret = true;
+        let reg = manager.register_native_question_with_timeout("secret", specs, Duration::from_secs(600)).await.unwrap();
+        assert!(!manager.mark_question_host_abandoned("secret", &reg.question_id).await);
+        manager.answer_question("secret", &reg.question_id, QuestionAnswer { answers: vec![crate::acp::question::QuestionAnswerItem { question_id: "qa".into(), labels: vec!["secret-value".into()] }], declined: false }).await.unwrap();
+        assert!(commands.try_recv().is_err());
+        assert!(manager.get_state("secret").await.unwrap().read().await.pending_question.is_none());
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_native_turn_end_without_cancel_switches_to_message_delivery() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "silent-native", AgentType::Codex, None).await;
+        let reg = manager.register_native_question_with_timeout("silent-native", q_spec(), Duration::from_secs(600)).await.unwrap();
+        let state = manager.get_state("silent-native").await.unwrap();
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "s".into(), stop_reason: "end_turn".into(), agent_type: "codex".into(),
+        });
+        manager.cancel_turn_questions_by_parent("silent-native").await;
+        assert!(reg.upstream_closed.load(std::sync::atomic::Ordering::Acquire));
+        assert!(reg.answer_rx.await.is_err(), "不能再回答已无人等待的原生RPC");
+        manager.answer_question("silent-native", &reg.question_id, QuestionAnswer { answers: vec![], declined: true }).await.unwrap();
+        assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { user_message: Some(_), .. })));
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn host_abandoned_secret_receiver_loss_does_not_wedge_the_card() {
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "secret-lost", AgentType::Codex, None).await;
+        let mut specs = q_spec(); specs[0].is_secret = true;
+        let reg = manager.register_native_question_with_timeout("secret-lost", specs, Duration::from_secs(600)).await.unwrap();
+        drop(reg.answer_rx);
+        assert!(manager.answer_question("secret-lost", &reg.question_id, QuestionAnswer { answers: vec![], declined: true }).await.is_err());
+        assert!(!manager.question_blocks_task_start("secret-lost").await);
+        assert!(commands.try_recv().is_err());
+    }
+
+    /// 标记只能落在仍在等待的提问上：条目已被作答 / Stop / 断连收走时不得复活，
+    /// 重复标记也必须只生效一次。
+    #[tokio::test]
+    async fn host_abandoned_mark_never_revives_a_finished_question() {
+        let manager = Arc::new(ConnectionManager::new());
+        let _commands =
+            insert_live_connection(&manager, "abandoned-idem", AgentType::Codex, None).await;
+        let access = ConnectionManagerQuestionLookup {
+            manager: manager.clone(),
+        };
+        let reg = access
+            .register_question_with_timeout(
+                "abandoned-idem",
+                q_spec(),
+                Some(Duration::from_secs(600)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            access
+                .mark_question_host_abandoned("abandoned-idem", &reg.question_id)
+                .await
+        );
+        assert!(
+            !access
+                .mark_question_host_abandoned("abandoned-idem", &reg.question_id)
+                .await,
+            "重复标记不再生效"
+        );
+        assert!(
+            !access
+                .mark_question_host_abandoned("other-conn", &reg.question_id)
+                .await,
+            "连接不匹配时不得标记"
+        );
+        manager
+            .answer_question(
+                "abandoned-idem",
+                &reg.question_id,
+                QuestionAnswer {
+                    answers: vec![],
+                    declined: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            !access
+                .mark_question_host_abandoned("abandoned-idem", &reg.question_id)
+                .await,
+            "已解决的提问不得被再次标记"
+        );
+    }
+
     #[tokio::test]
     async fn question_timeout_must_not_admit_preexisting_queued_work() {
         let manager = Arc::new(ConnectionManager::new());
@@ -11558,7 +12025,7 @@ mod tests {
                 .try_lock()
                 .expect("新题已注册，广播在锁外等待");
             assert_eq!(reg.len(), 1);
-            assert!(reg.values().all(|e| !e.sender.is_closed()));
+            assert!(reg.values().all(|e| !e.is_orphaned()));
         }
         drop(state_guard);
         let (reclaimed, next) = tokio::time::timeout(Duration::from_secs(2), async {
@@ -11769,7 +12236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_timed_retry_keeps_turn_scope_and_cannot_revive_withdrawn_question() {
+    async fn native_timed_retry_keeps_live_request_and_cannot_revive_withdrawn_question() {
         let manager = Arc::new(ConnectionManager::new());
         let mut commands =
             insert_live_connection(&manager, "native-timed", AgentType::Codex, None).await;
@@ -11800,7 +12267,7 @@ mod tests {
         assert!(pending_expires_at(&manager, "native-timed").await.unwrap() > first_expiry);
         let state = manager.get_state("native-timed").await.unwrap();
         assert!(
-            !state
+            state
                 .read()
                 .await
                 .pending_question
@@ -11809,6 +12276,8 @@ mod tests {
                 .survives_turn
         );
         manager.cancel_turn_questions_by_parent("native-timed").await;
+        assert!(state.read().await.pending_question.is_some(), "正常回合结束不得撤回活跃RPC");
+        manager.cancel_questions_by_parent("native-timed").await;
         assert!(second.answer_rx.await.is_err());
         assert!(access
             .retry_native_question_with_timeout(
@@ -12019,11 +12488,11 @@ mod tests {
             _ = std::future::ready(()) => {}
         }
         assert!(!canceling.await, "回答已赢得条目，取消不得声称自己移除");
-        assert!(!mgr
+        assert!(mgr
             .pending_questions
             .lock()
             .await
-            .contains_key(&reg.question_id));
+            .get(&reg.question_id).unwrap().submitted.is_some());
         let outcome = reg.answer_rx.try_recv().expect("移除后答案必须已经可读");
         assert!(!outcome.declined);
         assert_eq!(outcome.answers[0].selected, vec!["B".to_string()]);

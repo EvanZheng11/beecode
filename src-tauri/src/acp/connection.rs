@@ -10268,6 +10268,7 @@ async fn handle_grok_ask_user_question(
     let state = Arc::clone(state);
     let emitter = emitter.clone();
     let cancellation = responder.cancellation();
+    let delivery = registered.delivery();
     tokio::spawn(async move {
         match registered
             .wait(async { cancellation.cancelled().await })
@@ -10306,7 +10307,8 @@ async fn handle_grok_ask_user_question(
                     )
                     .await;
                 }
-                let _ = responder.respond(crate::acp::question::build_grok_ext_response(&outcome));
+                let delivered = responder.respond(crate::acp::question::build_grok_ext_response(&outcome)).is_ok();
+                delivery.complete(delivered).await;
             }
             // Sender dropped: the ask was canceled or the connection tore down —
             // nothing to render; let grok fall back via skip_interview.
@@ -10537,6 +10539,7 @@ async fn try_bridge_pi_select_ask(
     let state = Arc::clone(state);
     let emitter = emitter.clone();
     let cancellation = responder.cancellation();
+    let delivery = registered.delivery();
     // 本地权限清理与上游撤回分别处理，前者不得停止替换后的任务。
     tokio::spawn(async move {
         let answer = registered
@@ -10596,7 +10599,8 @@ async fn try_bridge_pi_select_ask(
                     }
                     None => RequestPermissionOutcome::Cancelled,
                 };
-                let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                let delivered = responder.respond(RequestPermissionResponse::new(outcome)).is_ok();
+                delivery.complete(delivered).await;
             }
             // Either the ask was canceled outright (turn cancel, teardown) or a
             // permission drain reclaimed it — the connection's "everything
@@ -10707,6 +10711,7 @@ async fn try_bridge_antigravity_ask(
     let state = Arc::clone(state);
     let emitter = emitter.clone();
     let cancellation = responder.cancellation();
+    let delivery = registered.delivery();
 
     tokio::spawn(async move {
         let answer = registered
@@ -10736,7 +10741,8 @@ async fn try_bridge_antigravity_ask(
                     }
                     None => RequestPermissionOutcome::Cancelled,
                 };
-                let _ = responder.respond(RequestPermissionResponse::new(response_outcome));
+                let delivered = responder.respond(RequestPermissionResponse::new(response_outcome)).is_ok();
+                delivery.complete(delivered).await;
             }
             None => {
                 let _ = responder.respond(RequestPermissionResponse::new(
@@ -10917,6 +10923,7 @@ async fn handle_cursor_ask_question(
     let state = Arc::clone(state);
     let emitter = emitter.clone();
     let cancellation = responder.cancellation();
+    let delivery = registered.delivery();
     tokio::spawn(async move {
         match registered
             .wait(async { cancellation.cancelled().await })
@@ -10947,9 +10954,10 @@ async fn handle_cursor_ask_question(
                     )
                     .await;
                 }
-                let _ = responder.respond(crate::acp::cursor_ext::build_cursor_ask_response(
+                let delivered = responder.respond(crate::acp::cursor_ext::build_cursor_ask_response(
                     &parsed, &outcome,
-                ));
+                )).is_ok();
+                delivery.complete(delivered).await;
             }
             None => {
                 let _ = responder.respond(crate::acp::cursor_ext::cursor_ask_skip_response());
@@ -11216,7 +11224,7 @@ async fn handle_elicitation_request(
             // write through the session state from the spawned task.
             let card_state = Arc::clone(state);
             let card_emitter = emitter.clone();
-            // 上游撤回后不能再完成原 RPC；等待器会按题号抢占注册表并停止宿主。
+            // 上游撤回后保留非秘密提问，用户作答改以新消息送达。
             // 仅记录已知元数据，不记录题目或用户内容；此日志不是现场五分钟复现结论。
             let agent_type = state.read().await.agent_type;
             let request_id = questions.tool_call_id.clone();
@@ -11225,6 +11233,7 @@ async fn handle_elicitation_request(
                 .and_then(serde_json::Value::as_u64);
             let started = tokio::time::Instant::now();
             let cancellation = responder.cancellation();
+            let delivery = registered.delivery();
             tokio::spawn(async move {
                 let answer = registered
                     .wait(async {
@@ -11305,7 +11314,8 @@ async fn handle_elicitation_request(
                         response
                     }
                 };
-                let _ = responder.respond(serde_json::to_value(response).unwrap_or_default());
+                let delivered = responder.respond(serde_json::to_value(response).unwrap_or_default()).is_ok();
+                delivery.complete(delivered).await;
             });
         }
     }
@@ -15816,6 +15826,11 @@ async fn run_conversation_loop(
                             // permission on this connection from displaying. A
                             // no-op on the normal path (an agent blocked on
                             // approval does not end its turn).
+                            // 先转移仍待答的原生问题，再 drain 权限等待器；否则 abort 通道
+                            // 会抢先把用户仍在看的问题撤走。
+                            if let Some(inj) = delegation_injection {
+                                inj.questions.cancel_turn_questions_by_parent(conn_id).await;
+                            }
                             drain_permissions_then_emit(
                                 perms,
                                 state,
@@ -15827,10 +15842,6 @@ async fn run_conversation_loop(
                                 },
                             )
                             .await;
-                            // 按注册表来源清理原生问题，不依赖可能已被新消息清空的快照。
-                            if let Some(inj) = delegation_injection {
-                                inj.questions.cancel_turn_questions_by_parent(conn_id).await;
-                            }
                             // Cascade-cancel any pending delegations whenever
                             // the parent's turn ended for a reason other than
                             // clean `end_turn`. The `end_turn` path lets the
@@ -28055,8 +28066,8 @@ mod tests {
         );
     }
 
-    /// Records the questions an elicitation registers and cancels, and never
-    /// answers any — only a withdrawal can settle them.
+    /// Records the questions an elicitation registers, cancels and abandons, and
+    /// never answers any — only a withdrawal can settle them.
     #[derive(Default)]
     struct UnansweredQuestions {
         pending: tokio::sync::Mutex<
@@ -28064,6 +28075,8 @@ mod tests {
         >,
         canceled: std::sync::Mutex<Vec<String>>,
         stopped: std::sync::Mutex<Vec<String>>,
+        /// 上游撤回后保留给用户作答的提问 id（条目不移除）。
+        abandoned: std::sync::Mutex<Vec<String>>,
     }
 
     #[async_trait::async_trait]
@@ -28082,6 +28095,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: "q-1".to_string(),
                 answer_rx: rx,
+                upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 deadline: None,
             })
         }
@@ -28100,15 +28114,31 @@ mod tests {
         }
 
         async fn cancel_questions_by_parent(&self, _parent_connection_id: &str) {}
+
+        async fn mark_question_host_abandoned(
+            &self,
+            parent_connection_id: &str,
+            question_id: &str,
+        ) -> bool {
+            let kept = self
+                .pending
+                .lock()
+                .await
+                .contains_key(&(parent_connection_id.to_string(), question_id.to_string()));
+            if kept {
+                self.abandoned.lock().unwrap().push(question_id.to_string());
+            }
+            kept
+        }
     }
 
     /// codex abandons a `request_user_input` it stops waiting for — its
     /// `autoResolutionMs` expired, or the turn was interrupted — with
-    /// `$/cancel_request`. The question card must go at once (it used to wait
-    /// on a timer guessed from `autoResolutionMs`), and codex still gets a
+    /// `$/cancel_request`. The card is KEPT so the user can still answer (that
+    /// answer is re-delivered to the agent as a message), and codex still gets a
     /// well-formed `cancel` reply.
     #[tokio::test]
-    async fn codex_withdrawing_a_question_elicitation_retires_the_card() {
+    async fn codex_withdrawing_a_question_elicitation_keeps_the_card_for_a_late_answer() {
         use agent_client_protocol::Channel;
 
         let (client_end, agent_end) = Channel::duplex();
@@ -28199,11 +28229,18 @@ mod tests {
             .expect("a response, not an error");
         client.abort();
         assert_eq!(response["action"], "cancel", "{response}");
-        assert_eq!(questions.stopped.lock().unwrap().as_slice(), &["conn-test"]);
+        assert!(
+            questions.stopped.lock().unwrap().is_empty(),
+            "上游撤回不等于超时耗尽，不得停止宿主任务"
+        );
+        assert!(
+            questions.canceled.lock().unwrap().is_empty(),
+            "上游撤回不得撤掉卡片：用户还要靠它作答"
+        );
         assert_eq!(
-            questions.canceled.lock().unwrap().clone(),
+            questions.abandoned.lock().unwrap().clone(),
             vec!["q-1".to_string()],
-            "the question card must be retracted"
+            "撤回只做标记，条目留给用户作答后补送"
         );
     }
 
@@ -51114,6 +51151,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: q.id.clone(),
                 answer_rx: rx,
+                upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 deadline: None,
             })
         }
@@ -51445,6 +51483,7 @@ mod tests {
             Some(crate::acp::question::RegisteredQuestion {
                 question_id: "q-1".to_string(),
                 answer_rx: rx,
+                upstream_closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 deadline: None,
             })
         }
