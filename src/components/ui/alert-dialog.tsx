@@ -76,7 +76,10 @@ function AlertDialogContent({
           data-slot="alert-dialog-content"
           data-size={size}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto group/alert-dialog-content grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full gap-4 overflow-y-auto rounded-3xl px-6 pt-5 pb-5 duration-200 [animation-timing-function:var(--ease-apple)] outline-none has-[[data-slot=alert-dialog-footer]:last-child]:pb-0 data-[size=default]:max-w-[26.25rem] data-[size=sm]:max-w-xs",
+            // overflow-x-hidden：底栏用 -mx-6 通栏出血（见 AlertDialogFooter），
+            // 负外边距会被 WebKit（桌面端 WKWebView / WebKitGTK）计入可滚动溢出区，
+            // 于是确认框底部多出一条横向滚动条；横向本来不该滚动，直接裁掉。
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong pointer-events-auto group/alert-dialog-content grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full gap-4 overflow-x-hidden overflow-y-auto rounded-3xl px-6 pt-5 pb-5 duration-200 [animation-timing-function:var(--ease-apple)] outline-none has-[[data-slot=alert-dialog-footer]:last-child]:pb-0 data-[size=default]:max-w-[26.25rem] data-[size=sm]:max-w-xs",
             className
           )}
           {...props}

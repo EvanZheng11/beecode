@@ -87,6 +87,35 @@ describe("P1 视觉默认值", () => {
     )
   })
 
+  // 底栏用 -mx-6 通栏出血，WebKit（桌面端 WKWebView / WebKitGTK）会把负外边距算进
+  // 可滚动溢出区：对话框因此横向可滚动，底部画出一条横向滚动条。横向固定裁掉。
+  it("对话框只纵向滚动，通栏底栏不会带出横向滚动条", () => {
+    const { rerender } = render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>t</DialogTitle>
+          <DialogFooter>f</DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+    expect(screen.getByRole("dialog")).toHaveClass(
+      "overflow-x-hidden",
+      "overflow-y-auto"
+    )
+    rerender(
+      <AlertDialog open>
+        <AlertDialogContent>
+          <AlertDialogTitle>t</AlertDialogTitle>
+          <AlertDialogFooter>f</AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    )
+    expect(screen.getByRole("alertdialog")).toHaveClass(
+      "overflow-x-hidden",
+      "overflow-y-auto"
+    )
+  })
+
   it("Tooltip 默认 300ms 后才出现，并带 6px 偏移", async () => {
     render(
       <TooltipProvider>

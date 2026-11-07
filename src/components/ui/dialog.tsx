@@ -99,7 +99,10 @@ function DialogContent({
             guardOutsidePress(event)
           }}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong group/dialog-content pointer-events-auto relative grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full max-w-[35rem] overflow-y-auto rounded-3xl duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
+            // overflow-x-hidden：底栏用 -mx-6 通栏出血（见 DialogFooter），负外边距会被
+            // WebKit（桌面端 WKWebView / WebKitGTK）计入可滚动溢出区，对话框底部就会多出
+            // 一条横向滚动条；横向本来不该滚动，直接裁掉。
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-97 surface-glass-strong group/dialog-content pointer-events-auto relative grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full max-w-[35rem] overflow-x-hidden overflow-y-auto rounded-3xl duration-200 [animation-timing-function:var(--ease-apple)] outline-none",
             padded
               ? "dialog-default-padding gap-4 px-6 pt-5 pb-4 has-[[data-slot=dialog-footer]:last-child]:pb-0 has-[[data-slot=dialog-footer]+[data-slot=dialog-close]:last-child]:pb-0"
               : "gap-6 p-6",
