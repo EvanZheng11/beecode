@@ -164,6 +164,10 @@ impl Collector {
                 },
             );
         }
+        // macOS 的 WebKit/XPC 服务由 launchd 启动，不一定在应用的父子链中。
+        // 只接受系统明确归属当前实例的进程，不能用名称或开发终端的归属扩散认领。
+        #[cfg(target_os = "macos")]
+        let responsibility_available = discover_responsible_processes(&tree, &mut owners, own_pid);
         // 只沿已校验的父子链扩展。已观察到的后代脱离父进程后仍保留归属。
         // ponytail: 首次发现按树深扫描进程表；大规模进程树再改父 PID 索引。
         loop {
@@ -180,7 +184,7 @@ impl Collector {
                     continue;
                 };
                 if let Some(start) = verified_child(pid, *parent_pid, parent.start) {
-                    let frontend = name.starts_with("WebKit")
+                    let frontend = name.contains("WebKit")
                         || name.contains("WebContent")
                         || name.contains("msedgewebview");
                     let category = if frontend {
@@ -226,7 +230,14 @@ impl Collector {
                 .push("无法枚举进程树，当前仅展示已登记进程。".into());
         }
         snapshot.sampled_at = chrono::Utc::now().timestamp_millis().max(0) as u64;
-        snapshot.warnings.push("仅包含本运行实例已登记或已观察到的后代；在首次观察前已脱离父进程的服务可能缺失。未记录可信重启配置的进程不可重启。CPU 百分比按单逻辑核心计，首次采样为零。".into());
+        snapshot.warnings.push("包含本运行实例已登记、已观察到的后代及系统明确归属本实例的辅助进程；无法确认归属的服务可能缺失。未记录可信重启配置的进程不可重启。CPU 百分比按单逻辑核心计，首次采样为零。".into());
+        #[cfg(target_os = "macos")]
+        if !responsibility_available {
+            snapshot.warnings.push(
+                "系统进程归属查询不可用或本实例归属启动终端，WebKit/XPC 等非后代辅助进程可能缺失。"
+                    .into(),
+            );
+        }
         #[cfg(not(target_os = "linux"))]
         snapshot
             .warnings
@@ -291,6 +302,71 @@ impl Collector {
         self.cached = Some((Instant::now(), snapshot.clone()));
         snapshot
     }
+}
+
+/// 只接纳系统明确归属本实例的辅助进程；回调使身份竞态可在非 macOS 平台回归。
+#[cfg(any(target_os = "macos", test))]
+fn discover_responsible_processes_with(
+    tree: &[(u32, Option<u32>, String)],
+    owners: &mut HashMap<u32, Owner>,
+    own_pid: u32,
+    mut responsible: impl FnMut(u32) -> Option<u32>,
+    mut process_identity: impl FnMut(u32) -> Option<u64>,
+) -> bool {
+    let Some(root) = owners.get(&own_pid).cloned() else {
+        return false;
+    };
+    // 开发启动时本实例可能归属 Terminal，绝不能反向认领同属 Terminal 的其他进程。
+    if responsible(own_pid) != Some(own_pid) {
+        return false;
+    }
+    for (pid, _, name) in tree {
+        if owners.contains_key(pid) {
+            continue;
+        }
+        let Some(start) = process_identity(*pid) else {
+            continue;
+        };
+        if start < root.start
+            || responsible(*pid) != Some(own_pid)
+            || process_identity(*pid) != Some(start)
+            || process_identity(own_pid) != Some(root.start)
+        {
+            continue;
+        }
+        let frontend = name.starts_with("WebKit")
+            || name.contains("com.apple.WebKit")
+            || name.contains("WebContent")
+            || name == "tauri://localhost";
+        owners.insert(
+            *pid,
+            Owner {
+                start,
+                category: if frontend { "frontend" } else { "process" }.into(),
+                label: root.label.clone(),
+                // XPC 由系统管理生命周期，只展示，不继承会话或终端的进程控制权限。
+                controllable: false,
+                handler: None,
+                restart: false,
+            },
+        );
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn discover_responsible_processes(
+    tree: &[(u32, Option<u32>, String)],
+    owners: &mut HashMap<u32, Owner>,
+    own_pid: u32,
+) -> bool {
+    discover_responsible_processes_with(
+        tree,
+        owners,
+        own_pid,
+        crate::computer::tcc::responsible_pid,
+        identity,
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -718,6 +794,140 @@ mod tests {
             "忙循环 CPU 应大于 1%，实际 {}",
             process.cpu_percent
         );
+    }
+
+    fn responsibility_test_owners() -> HashMap<u32, Owner> {
+        HashMap::from([(
+            10,
+            Owner {
+                start: 100,
+                category: "backend".into(),
+                label: Some("BeeCode".into()),
+                controllable: false,
+                handler: None,
+                restart: false,
+            },
+        )])
+    }
+
+    #[test]
+    fn responsible_xpc_services_are_discovered_without_parent_chain_or_name_matching() {
+        let names = [
+            "com.apple.WebKit.WebContent",
+            "com.apple.WebKit.GPU",
+            "com.apple.WebKit.Networking",
+            "Open and Save Panel Service",
+            "ThemeWidgetControlViewService",
+            "QuickLookUIService",
+            "tauri://localhost",
+        ];
+        let mut tree: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (20 + i as u32, Some(1), (*name).into()))
+            .collect();
+        // 同名但归属另一实例/开发终端/未知的进程不应被认领。
+        tree.extend([
+            (30, Some(1), names[0].into()),
+            (31, Some(1), "tauri://localhost".into()),
+            (32, Some(1), names[1].into()),
+        ]);
+        let mut owners = responsibility_test_owners();
+        assert!(discover_responsible_processes_with(
+            &tree,
+            &mut owners,
+            10,
+            |pid| match pid {
+                20..=26 => Some(10),
+                10 => Some(10),
+                31 => Some(5), // 不认领另一个终端的进程。
+                30 => Some(11),
+                _ => None,
+            },
+            |pid| Some(if pid == 10 { 100 } else { 200 }),
+        ));
+        assert_eq!(owners.len(), 1 + names.len());
+        for pid in 20..=26 {
+            let owner = &owners[&pid];
+            assert_eq!(owner.label.as_deref(), Some("BeeCode"));
+            assert!(!owner.controllable);
+            assert!(!owner.restart);
+            for action in [Action::Stop, Action::Kill, Action::Restart] {
+                assert!(authorize(&owners, pid, 200, action).is_err());
+            }
+        }
+        assert_eq!(owners[&20].category, "frontend");
+        assert_eq!(owners[&23].category, "process");
+    }
+
+    #[test]
+    fn responsibility_discovery_fails_closed_on_missing_api_and_reused_identities() {
+        let tree = vec![(20, Some(1), "com.apple.WebKit.WebContent".into())];
+        let mut owners = responsibility_test_owners();
+        assert!(!discover_responsible_processes_with(
+            &tree,
+            &mut owners,
+            10,
+            |_| None,
+            |_| panic!("归属接口不可用时不应继续检查候选进程"),
+        ));
+        assert_eq!(owners.len(), 1);
+        assert!(!discover_responsible_processes_with(
+            &tree,
+            &mut owners,
+            10,
+            |_| Some(5),
+            |_| panic!("开发终端归属不能扩散认领"),
+        ));
+        assert!(discover_responsible_processes_with(
+            &tree,
+            &mut owners,
+            10,
+            |_| Some(10),
+            |pid| Some(if pid == 10 { 100 } else { 99 }),
+        ));
+        assert_eq!(owners.len(), 1, "早于本实例启动的进程不可认领");
+        for change in [20, 10] {
+            let mut calls = HashMap::<u32, usize>::new();
+            assert!(discover_responsible_processes_with(
+                &tree,
+                &mut owners,
+                10,
+                |_| Some(10),
+                |pid| {
+                    let count = calls.entry(pid).or_default();
+                    *count += 1;
+                    let start = if pid == 10 { 100 } else { 200 };
+                    Some(start + u64::from(pid == change && (pid == 10 || *count > 1)))
+                },
+            ));
+            assert_eq!(owners.len(), 1, "候选或根进程身份变化时不可认领");
+        }
+    }
+
+    #[test]
+    fn responsibility_discovery_preserves_registered_lifecycle_and_handles_process_exit() {
+        let mut owners = responsibility_test_owners();
+        let mut terminal = owners[&10].clone();
+        terminal.category = "terminal".into();
+        terminal.controllable = true;
+        terminal.restart = true;
+        owners.insert(20, terminal);
+        let tree = vec![
+            (20, Some(1), "registered".into()),
+            (21, Some(1), "exited".into()),
+            (22, Some(1), "query failed".into()),
+        ];
+        assert!(discover_responsible_processes_with(
+            &tree,
+            &mut owners,
+            10,
+            |pid| if pid == 22 { None } else { Some(10) },
+            |pid| if pid == 21 { None } else { Some(100) },
+        ));
+        assert_eq!(owners.len(), 2);
+        assert_eq!(owners[&20].category, "terminal");
+        assert!(owners[&20].controllable && owners[&20].restart);
     }
 
     #[test]
