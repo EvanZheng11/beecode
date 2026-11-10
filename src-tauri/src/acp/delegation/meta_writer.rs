@@ -29,14 +29,40 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
+use crate::acp::delegation::types::RemoteTaskInfo;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::AcpEvent;
-use crate::web::event_bridge::{emit_with_state, emit_with_state_gated};
+use crate::web::event_bridge::{emit_event, emit_with_state, emit_with_state_gated};
 
 /// Top-level key under which delegation state lives on a tool call's
 /// `meta` object. Single source of truth — both the writer and the
 /// frontend reader must spell it the same way.
 pub const DELEGATION_META_KEY: &str = "codeg.delegation";
+
+/// 远程委派的三个实时事件名（设计 7.4 表，wire 为 snake_case）。
+///
+/// 它们与 `delegation_started` / `delegation_completed` 并列而**不复用**后者：
+/// 那两个事件的 `child_connection_id` / `child_conversation_id` 是必填的本机
+/// 语义，远程任务没有本机子连接（设计 7.5）。
+///
+/// 注意：`AcpEvent`（`acp/types.rs`）当前没有对应变体，本轮也不能加，所以这三
+/// 个事件暂时走 `EventEmitter` 的同名事件通道；后续由主智能体在 `AcpEvent` 里
+/// 补上变体后，把 [`ConnectionManagerMetaWriter::write_remote_event`] 的
+/// `emit_event` 换成 `emit_with_state`，状态更新与信封入队即可合并到同一临界区。
+pub const REMOTE_DELEGATION_STARTED_EVENT: &str = "remote_delegation_started";
+pub const REMOTE_DELEGATION_UPDATED_EVENT: &str = "remote_delegation_updated";
+pub const REMOTE_DELEGATION_COMPLETED_EVENT: &str = "remote_delegation_completed";
+
+/// 三个远程委派事件名是否属于本机制（其余名字一律不发，避免把未知事件
+/// 撒到前端）。
+pub fn is_remote_delegation_event(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        REMOTE_DELEGATION_STARTED_EVENT
+            | REMOTE_DELEGATION_UPDATED_EVENT
+            | REMOTE_DELEGATION_COMPLETED_EVENT
+    )
+}
 
 /// Capability the broker uses to patch `meta["codeg.delegation"]` on
 /// the parent connection's active `delegate_to_agent` tool call.
@@ -68,6 +94,22 @@ pub trait DelegationMetaWriter: Send + Sync {
         _tool_call_id: &str,
         _title: &str,
         _raw_input: serde_json::Value,
+    ) {
+    }
+
+    /// 发一条远程委派（跨机执行）的实时事件，并把它的状态并入父连接的快照。
+    ///
+    /// `event_name` 是 [`REMOTE_DELEGATION_STARTED_EVENT`] /
+    /// [`REMOTE_DELEGATION_UPDATED_EVENT`] / [`REMOTE_DELEGATION_COMPLETED_EVENT`]
+    /// 之一；`payload` 是 snake_case 事件载荷（含 `parent_connection_id`、
+    /// `parent_tool_use_id`、`task_id`、`remote`、`status` 等，见设计 7.4）。
+    ///
+    /// 默认空实现，`NoopMetaWriter` 与不关心远程事件的 mock 保持不变。
+    async fn write_remote_event(
+        &self,
+        _parent_connection_id: &str,
+        _event_name: &str,
+        _payload: serde_json::Value,
     ) {
     }
 }
@@ -197,6 +239,52 @@ impl DelegationMetaWriter for ConnectionManagerMetaWriter {
         )
         .await;
     }
+
+    /// 远程委派的实时事件 + 快照状态，两件事一起做。
+    ///
+    /// 顺序是"先状态、后事件"，不是反过来：客户端在两者之间 attach 时，读到的
+    /// 快照里已经包含这次状态更新（前端再用同一个 `task_id` 收到事件是幂等的
+    /// 覆盖），所以刷新重生（replay）不会漏掉任何一步——包括**终态**。这一点
+    /// 比 `write_meta` 的守卫更宽松：终态往往在父回合结束之后才到，那时父工具
+    /// 调用已经不在 `active_tool_calls` 里，meta 写不进去，卡片只能靠这份快照
+    /// 或冷加载恢复。
+    async fn write_remote_event(
+        &self,
+        parent_connection_id: &str,
+        event_name: &str,
+        payload: serde_json::Value,
+    ) {
+        if !is_remote_delegation_event(event_name) {
+            tracing::warn!(
+                event_name,
+                parent_connection_id,
+                "[委托][远程] 未知事件名，丢弃"
+            );
+            return;
+        }
+        let Some((state_arc, emitter)) = self
+            .manager
+            .get_state_and_emitter(parent_connection_id)
+            .await
+        else {
+            // 父连接已经断开：没有快照可写，也没有客户端可发。远程任务本身
+            // 的状态仍在 `remote_delegation` 表里，冷加载照常可见。
+            return;
+        };
+        // 归属由父连接决定，不让载荷里缺字段的连接 id 决定事件落到谁身上。
+        let mut payload = payload;
+        if let Some(obj) = payload.as_object_mut() {
+            obj.entry("parent_connection_id")
+                .or_insert_with(|| serde_json::Value::String(parent_connection_id.to_string()));
+        }
+        // 同一把写锁内落状态：与 `emit_with_state_built` 一样，先改状态再释放锁
+        // 广播，两者之间不会插进一个"只看到事件、快照里却没有"的窗口。
+        state_arc
+            .write()
+            .await
+            .upsert_remote_delegation(payload.clone());
+        emit_event(&emitter, event_name, &payload);
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -212,6 +300,7 @@ pub mod mock {
     pub struct MockMetaWriter {
         pub calls: Mutex<Vec<MetaWriteCall>>,
         pub identity_calls: Mutex<Vec<IdentityWriteCall>>,
+        pub remote_calls: Mutex<Vec<RemoteWriteCall>>,
     }
 
     #[derive(Debug, Clone)]
@@ -219,6 +308,15 @@ pub mod mock {
         pub parent_connection_id: String,
         pub parent_tool_use_id: String,
         pub meta: serde_json::Value,
+    }
+
+    /// 一条远程委派事件的记录（事件名 + 载荷），供 broker 侧测试断言
+    /// started / updated / completed 的归属与顺序。
+    #[derive(Debug, Clone)]
+    pub struct RemoteWriteCall {
+        pub parent_connection_id: String,
+        pub event_name: String,
+        pub payload: serde_json::Value,
     }
 
     #[derive(Debug, Clone)]
@@ -240,6 +338,10 @@ pub mod mock {
 
         pub async fn identity_snapshot(&self) -> Vec<IdentityWriteCall> {
             self.identity_calls.lock().await.clone()
+        }
+
+        pub async fn remote_snapshot(&self) -> Vec<RemoteWriteCall> {
+            self.remote_calls.lock().await.clone()
         }
     }
 
@@ -270,6 +372,19 @@ pub mod mock {
                 tool_call_id: tool_call_id.to_string(),
                 title: title.to_string(),
                 raw_input,
+            });
+        }
+
+        async fn write_remote_event(
+            &self,
+            parent_connection_id: &str,
+            event_name: &str,
+            payload: serde_json::Value,
+        ) {
+            self.remote_calls.lock().await.push(RemoteWriteCall {
+                parent_connection_id: parent_connection_id.to_string(),
+                event_name: event_name.to_string(),
+                payload,
             });
         }
     }
@@ -375,6 +490,57 @@ pub fn build_delegation_meta(
         serde_json::Value::Object(inner),
     );
     serde_json::Value::Object(outer)
+}
+
+/// 构造远程委派（跨机执行）的 canonical `meta["codeg.delegation"]`。
+///
+/// 场景是"任务在远程机器上跑，本机没有子智能体"：`child_connection_id` /
+/// `child_conversation_id` 一律不写（AC1 要求元数据里没有任何本机 child 字段，
+/// 也不能拿远程会话 id 冒充本机 id），改为写入一个 `remote` 子对象
+/// （`RemoteTaskInfo`，设计 7.5）。`status` 用远程自己的状态词
+/// （`reserving/running/blocked/unreachable/completed/failed/canceled`），前端
+/// 卡片据此走远程展示分支。
+///
+/// 其余字段与 [`build_delegation_meta`] 同义、同"整份替换"语义：`meta` 在
+/// `ToolCallState` 上是整体覆盖的，所以 `task_id` / `task_preview` / `remote`
+/// 这类身份字段每次写入都必须带上，否则终态那次写入会把运行期写入的身份抹掉。
+#[allow(clippy::too_many_arguments)]
+pub fn build_remote_delegation_meta(
+    status: &str,
+    remote: &RemoteTaskInfo,
+    error_code: Option<&str>,
+    text_preview: Option<&str>,
+    duration_ms: Option<u64>,
+    task_preview: Option<&str>,
+    task_id: Option<&str>,
+) -> serde_json::Value {
+    // 本机 child 槽位全部为空：远程任务在本机没有子连接、子会话。
+    let mut meta = build_delegation_meta(
+        status,
+        None,
+        None,
+        error_code,
+        text_preview,
+        duration_ms,
+        task_preview,
+        task_id,
+        None,
+    );
+    if let Some(inner) = meta
+        .get_mut(DELEGATION_META_KEY)
+        .and_then(|v| v.as_object_mut())
+    {
+        match serde_json::to_value(remote) {
+            Ok(value) => {
+                inner.insert("remote".to_string(), value);
+            }
+            Err(error) => {
+                // 只会发生在 RemoteTaskInfo 无法序列化这种编译期就该发现的问题。
+                tracing::warn!("[委托][远程] 远程任务信息序列化失败: {error}");
+            }
+        }
+    }
+    meta
 }
 
 /// True when the broker handed out a synthetic placeholder
@@ -529,5 +695,260 @@ mod tests {
             state.read().await.active_tool_calls.is_empty(),
             "no phantom tool call minted for a call the turn already released"
         );
+    }
+
+    // ── 远程委派（跨机执行）：meta / 事件 / 快照重放 ──────────────────────
+
+    fn remote_info(connection_id: i32) -> RemoteTaskInfo {
+        RemoteTaskInfo {
+            connection_id,
+            connection_name: "构建机".into(),
+            run_id: "run-1".into(),
+            conversation_id: Some(77),
+            link: Some("codeg://session/77".into()),
+            worktree: Some(crate::cli_run::wire::WorktreeInfo {
+                path: "/srv/repo-wt".into(),
+                branch: "codeg/remote-1".into(),
+            }),
+        }
+    }
+
+    fn remote_event(status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "parent_connection_id": "p1",
+            "parent_tool_use_id": "tu-remote",
+            "task_id": "task-remote",
+            "status": status,
+            "remote": serde_json::to_value(remote_info(3)).unwrap(),
+            "task_preview": "远程跑一遍测试",
+        })
+    }
+
+    /// AC1：canonical meta 是 snake_case 的远程形状，且**不含**本机 child 字段
+    /// ——远程会话 id 只能出现在 `remote.conversation_id` 里。
+    #[test]
+    fn build_remote_meta_carries_remote_but_no_local_child_fields() {
+        let meta = build_remote_delegation_meta(
+            "running",
+            &remote_info(3),
+            None,
+            None,
+            None,
+            Some("远程跑一遍测试"),
+            Some("task-remote"),
+        );
+        let inner = meta.get(DELEGATION_META_KEY).unwrap().as_object().unwrap();
+        assert_eq!(inner.get("status").unwrap().as_str().unwrap(), "running");
+        assert_eq!(
+            inner.get("task_id").unwrap().as_str().unwrap(),
+            "task-remote"
+        );
+        assert_eq!(
+            inner.get("task_preview").unwrap().as_str().unwrap(),
+            "远程跑一遍测试"
+        );
+        assert!(
+            inner.get("child_connection_id").is_none(),
+            "远程任务没有本机子连接"
+        );
+        assert!(
+            inner.get("child_conversation_id").is_none(),
+            "远程会话 id 不能塞进本机 child 字段"
+        );
+        let remote = inner.get("remote").unwrap().as_object().unwrap();
+        assert_eq!(remote.get("connection_id").unwrap().as_i64(), Some(3));
+        assert_eq!(
+            remote.get("connection_name").unwrap().as_str().unwrap(),
+            "构建机"
+        );
+        assert_eq!(remote.get("run_id").unwrap().as_str().unwrap(), "run-1");
+        assert_eq!(remote.get("conversation_id").unwrap().as_i64(), Some(77));
+        assert_eq!(
+            remote.get("link").unwrap().as_str().unwrap(),
+            "codeg://session/77"
+        );
+        assert_eq!(
+            remote.get("worktree").unwrap().get("branch").unwrap().as_str(),
+            Some("codeg/remote-1")
+        );
+    }
+
+    /// 终态写入同样保留 task id / remote / 预览与耗时：`meta` 是整份替换的，
+    /// 终态那次少了身份字段，刷新后的卡片就认不出这是哪个远程任务。
+    #[test]
+    fn build_remote_meta_terminal_keeps_identity_and_result() {
+        let meta = build_remote_delegation_meta(
+            "completed",
+            &remote_info(3),
+            None,
+            Some("全部通过"),
+            Some(4321),
+            Some("远程跑一遍测试"),
+            Some("task-remote"),
+        );
+        let inner = meta.get(DELEGATION_META_KEY).unwrap().as_object().unwrap();
+        assert_eq!(inner.get("status").unwrap().as_str().unwrap(), "completed");
+        assert_eq!(
+            inner.get("text_preview").unwrap().as_str().unwrap(),
+            "全部通过"
+        );
+        assert_eq!(inner.get("duration_ms").unwrap().as_u64(), Some(4321));
+        assert_eq!(
+            inner.get("task_id").unwrap().as_str().unwrap(),
+            "task-remote"
+        );
+        assert_eq!(
+            inner
+                .get("remote")
+                .unwrap()
+                .get("connection_id")
+                .unwrap()
+                .as_i64(),
+            Some(3)
+        );
+        assert!(inner.get("child_conversation_id").is_none());
+    }
+
+    /// AC2：远程事件写入父连接的 `active_remote_delegations`，并出现在快照里。
+    #[tokio::test]
+    async fn write_remote_event_updates_snapshot_state() {
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::EventEmitter;
+
+        let manager = Arc::new(ConnectionManager::new());
+        manager
+            .insert_test_connection("p1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let writer = ConnectionManagerMetaWriter {
+            manager: manager.clone(),
+        };
+        writer
+            .write_remote_event(
+                "p1",
+                REMOTE_DELEGATION_STARTED_EVENT,
+                remote_event("running"),
+            )
+            .await;
+
+        let state = manager.get_state("p1").await.expect("test connection state");
+        let snapshot = state.read().await.to_snapshot();
+        assert_eq!(snapshot.active_remote_delegations.len(), 1);
+        let entry = &snapshot.active_remote_delegations[0];
+        assert_eq!(entry.get("task_id").unwrap().as_str(), Some("task-remote"));
+        assert_eq!(entry.get("status").unwrap().as_str(), Some("running"));
+        assert_eq!(
+            entry.get("parent_tool_use_id").unwrap().as_str(),
+            Some("tu-remote")
+        );
+        assert_eq!(
+            entry.get("parent_connection_id").unwrap().as_str(),
+            Some("p1"),
+            "归属由父连接决定"
+        );
+        assert_eq!(
+            entry.get("remote").unwrap().get("run_id").unwrap().as_str(),
+            Some("run-1")
+        );
+        // 快照序列化也带出该字段（前端读 snake_case）。
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert!(json.get("active_remote_delegations").is_some());
+    }
+
+    /// AC2 的关键一条：终态常常在父回合结束**之后**才到（父工具调用已被
+    /// `TurnComplete` 清掉，`write_meta` 会跳过），快照仍必须能重放出终态，
+    /// 否则刷新后的卡片永远停在 running。
+    #[tokio::test]
+    async fn remote_terminal_survives_parent_turn_complete() {
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::EventEmitter;
+
+        let manager = Arc::new(ConnectionManager::new());
+        manager
+            .insert_test_connection("p1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let writer = ConnectionManagerMetaWriter {
+            manager: manager.clone(),
+        };
+        let state = manager.get_state("p1").await.expect("test connection state");
+
+        writer
+            .write_remote_event(
+                "p1",
+                REMOTE_DELEGATION_STARTED_EVENT,
+                remote_event("running"),
+            )
+            .await;
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        writer
+            .write_remote_event(
+                "p1",
+                REMOTE_DELEGATION_COMPLETED_EVENT,
+                serde_json::json!({
+                    "parent_connection_id": "p1",
+                    "parent_tool_use_id": "tu-remote",
+                    "task_id": "task-remote",
+                    "status": "completed",
+                    "result_preview": "全部通过",
+                    "duration_ms": 4321,
+                }),
+            )
+            .await;
+
+        let snapshot = state.read().await.to_snapshot();
+        assert_eq!(snapshot.active_remote_delegations.len(), 1);
+        let entry = &snapshot.active_remote_delegations[0];
+        assert_eq!(entry.get("status").unwrap().as_str(), Some("completed"));
+        assert_eq!(
+            entry.get("result_preview").unwrap().as_str(),
+            Some("全部通过")
+        );
+        assert_eq!(entry.get("duration_ms").unwrap().as_u64(), Some(4321));
+        // updated/completed 不带 remote：合并时不能把 started 写入的身份抹掉。
+        assert_eq!(
+            entry.get("remote").unwrap().get("run_id").unwrap().as_str(),
+            Some("run-1")
+        );
+        // 既有约束不变：父工具调用仍然被 TurnComplete 清空，不会冒出幻影卡片。
+        assert!(snapshot.active_tool_calls.is_empty());
+    }
+
+    /// 未知事件名不落快照、不广播：这个通道只认三个远程事件。
+    #[tokio::test]
+    async fn write_remote_event_ignores_unknown_event_names() {
+        use crate::models::agent::AgentType;
+        use crate::web::event_bridge::EventEmitter;
+
+        let manager = Arc::new(ConnectionManager::new());
+        manager
+            .insert_test_connection("p1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let writer = ConnectionManagerMetaWriter {
+            manager: manager.clone(),
+        };
+        writer
+            .write_remote_event("p1", "delegation_started", remote_event("running"))
+            .await;
+        let state = manager.get_state("p1").await.expect("test connection state");
+        assert!(state.read().await.active_remote_delegations.is_empty());
+    }
+
+    /// 父连接已断开时静默返回：远程任务的状态仍在本机表里，冷加载可见。
+    #[tokio::test]
+    async fn write_remote_event_tolerates_a_missing_parent_connection() {
+        let manager = Arc::new(ConnectionManager::new());
+        let writer = ConnectionManagerMetaWriter {
+            manager: manager.clone(),
+        };
+        writer
+            .write_remote_event(
+                "gone",
+                REMOTE_DELEGATION_STARTED_EVENT,
+                remote_event("running"),
+            )
+            .await;
     }
 }

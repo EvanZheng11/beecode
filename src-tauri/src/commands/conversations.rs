@@ -1401,23 +1401,11 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
 
     // The task id lives on the call's RESULT, which the parsers emit as a
     // separate block (usually a later turn), so collect it up front.
-    let mut task_id_by_call: HashMap<String, String> = HashMap::new();
-    if !by_task_id.is_empty() {
-        for turn in turns.iter() {
-            for block in turn.blocks.iter() {
-                if let ContentBlock::ToolResult {
-                    tool_use_id: Some(tu),
-                    output_preview: Some(output),
-                    ..
-                } = block
-                {
-                    if let Some(task_id) = parse_delegate_task_id(output) {
-                        task_id_by_call.insert(tu.clone(), task_id);
-                    }
-                }
-            }
-        }
-    }
+    let task_id_by_call: HashMap<String, String> = if by_task_id.is_empty() {
+        HashMap::new()
+    } else {
+        task_id_by_call(turns)
+    };
 
     for turn in turns.iter_mut() {
         for block in turn.blocks.iter_mut() {
@@ -1473,6 +1461,302 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
                     "codeg.delegation": build_historical_delegation_meta(child),
                 }));
             }
+        }
+    }
+}
+
+/// 逐块扫一遍工具结果，收集「工具调用 id → broker task id」。
+///
+/// task id 只出现在调用的**结果**里（解析器把它输出成单独一块，通常落在后面的
+/// turn）。本机子会话匹配和远程委派表匹配都要先做这一步：宿主 persist 的工具
+/// 调用 id 与 broker 记录的可能不同名（codex 的 `call_<id>` 对 `exec-<uuid>`），
+/// task id 是两者之间唯一的桥。
+fn task_id_by_call(turns: &[MessageTurn]) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for turn in turns.iter() {
+        for block in turn.blocks.iter() {
+            if let ContentBlock::ToolResult {
+                tool_use_id: Some(tu),
+                output_preview: Some(output),
+                ..
+            } = block
+            {
+                if let Some(task_id) = parse_delegate_task_id(output) {
+                    out.insert(tu.clone(), task_id);
+                }
+            }
+        }
+    }
+    out
+}
+
+// ── 远程委派（跨机执行）的冷加载 ───────────────────────────────────────────
+
+/// `remote_delegation` 行在冷加载里需要的字段。
+///
+/// 单独定义而不直接吃 DB 实体：合并逻辑与单测只需要这些字段，也避免把远程语义
+/// （远程会话、远程 worktree）混进本机字段。实体与查询由 DB 侧提供，映射见
+/// [`remote_delegation_row`]。
+#[derive(Debug, Clone, Default)]
+struct RemoteDelegationRow {
+    task_id: String,
+    parent_tool_use_id: String,
+    /// 连接被删除后本机置空（外键 `ON DELETE SET NULL`）。卡片靠下面的
+    /// `connection_name` 快照显示历史，绝不能凭空补一个连接 id。
+    connection_id: Option<i32>,
+    connection_name: String,
+    run_id: Option<String>,
+    remote_conversation_id: Option<i32>,
+    remote_link: Option<String>,
+    /// 远程 worktree 的 JSON 文本（`{path, branch}`），只存在本机库里。
+    remote_worktree: Option<String>,
+    task_preview: String,
+    status: String,
+    error_code: Option<String>,
+    result_text: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+/// DB 实体 → 冷加载视图。只做字段搬运，不读远程任何东西：卡片要的结果、状态、
+/// 预览、错误和远程身份全部来自本机这一行，不依赖远程还留着什么。
+fn remote_delegation_row(
+    row: &crate::db::entities::remote_delegation::Model,
+) -> RemoteDelegationRow {
+    RemoteDelegationRow {
+        task_id: row.task_id.clone(),
+        parent_tool_use_id: row.parent_tool_use_id.clone(),
+        connection_id: row.connection_id,
+        connection_name: row.connection_name.clone(),
+        run_id: row.run_id.clone(),
+        remote_conversation_id: row.remote_conversation_id,
+        remote_link: row.remote_link.clone(),
+        remote_worktree: row.remote_worktree.clone(),
+        task_preview: row.task_preview.clone(),
+        status: row.status.clone(),
+        error_code: row.error_code.clone(),
+        result_text: row.result_text.clone(),
+        duration_ms: row.duration_ms,
+    }
+}
+
+/// 冷加载带进 meta 的结果预览上限。与在线写入的 `text_preview` 用同一个预算
+/// （broker 的 2 KiB），免得把最多 256 KiB 的 `result_text` 整份塞进每一条历史
+/// 工具调用。
+const REMOTE_RESULT_PREVIEW_CAP: usize = 2 * 1024;
+
+/// 截到 `cap` 字节（按整字符边界）并标注省略号；空文本不产出预览。
+fn remote_result_preview(text: Option<&str>) -> Option<String> {
+    let text = text?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.len() <= REMOTE_RESULT_PREVIEW_CAP {
+        return Some(text.to_string());
+    }
+    const ELLIPSIS: &str = "…";
+    let budget = REMOTE_RESULT_PREVIEW_CAP.saturating_sub(ELLIPSIS.len());
+    let mut end = budget.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}{ELLIPSIS}", &text[..end]))
+}
+
+/// 把一条 `remote_delegation` 行投影成 `meta["codeg.delegation"]` 的内层对象。
+///
+/// 形状与在线写入的 [`crate::acp::delegation::meta_writer::build_remote_delegation_meta`]
+/// 一致：`status` 是远程自己的状态词，身份信息进 `remote` 子对象，**不写任何
+/// 本机 `child_*` 字段**——远程会话 id 只在 `remote.conversation_id` 里，前端
+/// 不会拿它去加载本机子会话。
+fn build_remote_historical_delegation_meta(row: &RemoteDelegationRow) -> serde_json::Value {
+    // 状态原样带回（前端按 `reserving/blocked/unreachable` 等给出远程文案）；
+    // 认不出的值（更新的版本写的）沿用本机历史 meta 的保守兜底。
+    let status = match row.status.as_str() {
+        "reserving" | "running" | "blocked" | "unreachable" | "completed" | "failed"
+        | "canceled" => row.status.as_str(),
+        _ => "running",
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert("status".into(), serde_json::Value::String(status.into()));
+    obj.insert(
+        "task_id".into(),
+        serde_json::Value::String(row.task_id.clone()),
+    );
+    let task_preview = row.task_preview.trim();
+    if !task_preview.is_empty() {
+        obj.insert(
+            "task_preview".into(),
+            serde_json::Value::String(task_preview.to_string()),
+        );
+    }
+    // 结果预览来自本机行，与远程是否还保留 run 无关。
+    if let Some(preview) = remote_result_preview(row.result_text.as_deref()) {
+        obj.insert("text_preview".into(), serde_json::Value::String(preview));
+    }
+    if let Some(code) = row.error_code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        obj.insert(
+            "error_code".into(),
+            serde_json::Value::String(code.into()),
+        );
+    }
+    if let Some(ms) = row.duration_ms.filter(|ms| *ms >= 0) {
+        obj.insert(
+            "duration_ms".into(),
+            serde_json::Value::Number(serde_json::Number::from(ms)),
+        );
+    }
+
+    let mut remote = serde_json::Map::new();
+    // 连接已删除时本机为 NULL：保留名称快照，但不伪造一个连接 id。
+    if let Some(id) = row.connection_id.filter(|id| *id > 0) {
+        remote.insert(
+            "connection_id".into(),
+            serde_json::Value::Number(serde_json::Number::from(id)),
+        );
+    }
+    let connection_name = row.connection_name.trim();
+    if !connection_name.is_empty() {
+        remote.insert(
+            "connection_name".into(),
+            serde_json::Value::String(connection_name.to_string()),
+        );
+    }
+    remote.insert(
+        "run_id".into(),
+        serde_json::Value::String(row.run_id.clone().unwrap_or_default()),
+    );
+    if let Some(id) = row.remote_conversation_id {
+        remote.insert(
+            "conversation_id".into(),
+            serde_json::Value::Number(serde_json::Number::from(id)),
+        );
+    }
+    if let Some(link) = row.remote_link.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+        remote.insert("link".into(), serde_json::Value::String(link.into()));
+    }
+    if let Some(worktree) = row
+        .remote_worktree
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .filter(|v| v.is_object())
+    {
+        remote.insert("worktree".into(), worktree);
+    }
+    obj.insert("remote".into(), serde_json::Value::Object(remote));
+    serde_json::Value::Object(obj)
+}
+
+/// 块上是否已经带着远程委派信息（在线写入或上一次注入的结果）。
+fn has_remote_delegation_meta(meta: &serde_json::Value) -> bool {
+    meta.get(crate::acp::delegation::meta_writer::DELEGATION_META_KEY)
+        .and_then(|inner| inner.get("remote"))
+        .is_some_and(|remote| remote.is_object())
+}
+
+/// 把远程委派的 meta 合并进工具调用块。
+///
+/// 已有 `codeg.delegation`（本机历史注入写的）就只补远程字段，不覆盖它的
+/// 内容；块上已有别的非对象 meta 时保持原样（与 [`inject_tool_approvals`]
+/// 的约定一致）。
+fn merge_remote_delegation_meta(
+    meta: &mut Option<serde_json::Value>,
+    remote_inner: serde_json::Value,
+) {
+    const KEY: &str = crate::acp::delegation::meta_writer::DELEGATION_META_KEY;
+    // 非对象 meta（目前没有解析器写）保持原样，不覆盖别人的结构。
+    if matches!(meta, Some(value) if !value.is_object()) {
+        return;
+    }
+    if meta.is_none() {
+        *meta = Some(serde_json::Value::Object(serde_json::Map::new()));
+    }
+    let Some(serde_json::Value::Object(map)) = meta.as_mut() else {
+        return;
+    };
+    let serde_json::Value::Object(remote) = remote_inner else {
+        return;
+    };
+    match map.get_mut(KEY).and_then(|inner| inner.as_object_mut()) {
+        Some(inner) => {
+            for (key, value) in remote {
+                inner.insert(key, value);
+            }
+        }
+        // 没有 `codeg.delegation`（或它不是对象）：整块写入。
+        None => {
+            map.insert(KEY.to_string(), serde_json::Value::Object(remote));
+        }
+    }
+}
+
+/// 按父会话的 `remote_delegation` 行，把远程委派信息合并进对应的工具调用块。
+///
+/// 远程任务的终态只落本机这张表：没有本机子会话行可查，父工具调用也常常已经
+/// 结束，所以冷加载是刷新后仍能显示"已完成 + 结果 + 远程会话"的唯一来源。
+///
+/// 匹配与 [`inject_delegation_meta`] 同序：先 `parent_tool_use_id`，再用结果里
+/// 的 task id 兜底（宿主与 broker 的工具调用 id 不同名时）；`resume_delegation`
+/// 只按它自己参数里的 task id 匹配。已有的远程 meta 不再覆盖。
+fn inject_remote_delegation_meta(turns: &mut [MessageTurn], remotes: &[RemoteDelegationRow]) {
+    if remotes.is_empty() {
+        return;
+    }
+    let by_parent_tool_use_id: HashMap<&str, &RemoteDelegationRow> = remotes
+        .iter()
+        .filter(|r| !r.parent_tool_use_id.trim().is_empty())
+        .map(|r| (r.parent_tool_use_id.as_str(), r))
+        .collect();
+    let by_task_id: HashMap<&str, &RemoteDelegationRow> = remotes
+        .iter()
+        .filter(|r| !r.task_id.trim().is_empty())
+        .map(|r| (r.task_id.as_str(), r))
+        .collect();
+    let task_id_by_call = task_id_by_call(turns);
+
+    for turn in turns.iter_mut() {
+        for block in turn.blocks.iter_mut() {
+            let ContentBlock::ToolUse {
+                tool_use_id,
+                tool_name,
+                input_preview,
+                meta,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            if meta.as_ref().is_some_and(has_remote_delegation_meta) {
+                continue;
+            }
+            let row: Option<&RemoteDelegationRow> =
+                if tool_name.contains("resume_delegation") {
+                    input_preview
+                        .as_deref()
+                        .and_then(parse_resume_task_id)
+                        .and_then(|task_id| by_task_id.get(task_id.as_str()).copied())
+                } else if tool_name.contains("delegate_to_agent")
+                    || crate::acp::lifecycle::is_delegation_invocation(
+                        tool_name,
+                        input_preview.as_deref(),
+                    )
+                {
+                    tool_use_id.as_deref().and_then(|tu| {
+                        by_parent_tool_use_id
+                            .get(tu)
+                            .or_else(|| {
+                                task_id_by_call
+                                    .get(tu)
+                                    .and_then(|task_id| by_task_id.get(task_id.as_str()))
+                            })
+                            .copied()
+                    })
+                } else {
+                    None
+                };
+            let Some(row) = row else {
+                continue;
+            };
+            merge_remote_delegation_meta(meta, build_remote_historical_delegation_meta(row));
         }
     }
 }
@@ -1720,6 +2004,23 @@ pub async fn get_folder_conversation_core(
         .await
         .unwrap_or_default();
     inject_delegation_meta(&mut turns, &children);
+    // 远程委派（跨机执行）任务在本机没有子会话行，只能按父会话查
+    // `remote_delegation` 才能恢复卡片。同样是尽力而为：读失败只是少一张远程
+    // 卡片的终态，绝不让会话详情加载失败。
+    let remote_delegations =
+        crate::db::service::remote_delegation_service::list_by_parent_conversation(
+            conn,
+            conversation_id,
+        )
+        .await
+        .unwrap_or_default();
+    if !remote_delegations.is_empty() {
+        let remote_rows: Vec<RemoteDelegationRow> = remote_delegations
+            .iter()
+            .map(remote_delegation_row)
+            .collect();
+        inject_remote_delegation_meta(&mut turns, &remote_rows);
+    }
     // Same best-effort contract: a failed read costs the approval chips, never
     // the detail load.
     let approvals = tool_approval_service::list_by_conversation(conn, conversation_id)
@@ -4036,6 +4337,174 @@ mod tests {
         let mut turns = vec![tool_use_turn(Some("tu-other"), "delegate_to_agent")];
         let children = vec![summary_child(42, "tu-1", "completed")];
         inject_delegation_meta(&mut turns, &children);
+        assert!(first_block_meta(&turns[0]).is_none());
+    }
+
+    // ── 远程委派（跨机执行）的冷加载 ──────────────────────────────────────
+
+    fn remote_row(task_id: &str, parent_tool_use_id: &str, status: &str) -> RemoteDelegationRow {
+        RemoteDelegationRow {
+            task_id: task_id.into(),
+            parent_tool_use_id: parent_tool_use_id.into(),
+            connection_id: Some(3),
+            connection_name: "构建机".into(),
+            run_id: Some("run-1".into()),
+            remote_conversation_id: Some(77),
+            remote_link: Some("codeg://session/77".into()),
+            remote_worktree: Some(r#"{"path":"/srv/repo-wt","branch":"codeg/remote-1"}"#.into()),
+            task_preview: "远程跑一遍测试".into(),
+            status: status.into(),
+            error_code: None,
+            result_text: Some("全部通过".into()),
+            duration_ms: Some(4321),
+        }
+    }
+
+    /// AC3 主路径：远程行按父工具调用 id 绑定，卡片拿到状态、结果预览、任务
+    /// 摘要和远程身份；**不写任何本机 child 字段**（远程会话 id 只在
+    /// `remote.conversation_id` 里）。
+    #[test]
+    fn inject_remote_delegation_meta_binds_by_parent_tool_use_id() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-remote"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        inject_remote_delegation_meta(&mut turns, &[remote_row("task-1", "tu-remote", "completed")]);
+
+        let inner = &first_block_meta(&turns[0]).expect("meta")["codeg.delegation"];
+        assert_eq!(inner["status"], "completed");
+        assert_eq!(inner["task_id"], "task-1");
+        assert_eq!(inner["task_preview"], "远程跑一遍测试");
+        assert_eq!(inner["text_preview"], "全部通过");
+        assert_eq!(inner["duration_ms"], 4321);
+        assert!(
+            inner.get("child_conversation_id").is_none(),
+            "不能把远程会话 id 塞进本机 child 字段"
+        );
+        assert!(inner.get("child_connection_id").is_none());
+        assert_eq!(inner["remote"]["connection_id"], 3);
+        assert_eq!(inner["remote"]["connection_name"], "构建机");
+        assert_eq!(inner["remote"]["run_id"], "run-1");
+        assert_eq!(inner["remote"]["conversation_id"], 77);
+        assert_eq!(inner["remote"]["link"], "codeg://session/77");
+        assert_eq!(inner["remote"]["worktree"]["branch"], "codeg/remote-1");
+    }
+
+    /// 宿主 persist 的调用 id 与 broker 不同名时，靠结果里的 task id 兜底。
+    #[test]
+    fn inject_remote_delegation_meta_falls_back_to_the_task_id() {
+        let mut turns = vec![
+            tool_use_turn(Some("call_73UFK2"), "delegate_to_agent"),
+            tool_result_turn("call_73UFK2", "Delegation started. task_id=task-1."),
+        ];
+        inject_remote_delegation_meta(&mut turns, &[remote_row("task-1", "exec-other-id", "running")]);
+        let inner = &first_block_meta(&turns[0]).expect("meta")["codeg.delegation"];
+        assert_eq!(inner["task_id"], "task-1");
+        assert_eq!(inner["status"], "running");
+    }
+
+    /// 连接被删除（本机外键置空）后历史仍可显示：名称快照留着，连接 id 不伪造。
+    #[test]
+    fn inject_remote_delegation_meta_keeps_history_after_connection_deleted() {
+        let mut row = remote_row("task-1", "tu-remote", "failed");
+        row.connection_id = None;
+        row.error_code = Some("remote_unreachable".into());
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        inject_remote_delegation_meta(&mut turns, &[row]);
+
+        let inner = &first_block_meta(&turns[0]).expect("meta")["codeg.delegation"];
+        assert_eq!(inner["status"], "failed");
+        assert_eq!(inner["error_code"], "remote_unreachable");
+        assert_eq!(inner["text_preview"], "全部通过");
+        assert_eq!(inner["remote"]["connection_name"], "构建机");
+        assert!(
+            inner["remote"].get("connection_id").is_none(),
+            "连接已删除，不能凭空补一个连接 id"
+        );
+    }
+
+    /// 远程侧已经没有任何保留（run / 远程会话 / worktree / 结果都不在了）时，
+    /// 本机行里的终态与预览照常显示。
+    #[test]
+    fn inject_remote_delegation_meta_does_not_depend_on_remote_state() {
+        let mut row = remote_row("task-1", "tu-remote", "canceled");
+        row.remote_conversation_id = None;
+        row.remote_link = None;
+        row.remote_worktree = None;
+        row.run_id = None;
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        inject_remote_delegation_meta(&mut turns, &[row]);
+
+        let inner = &first_block_meta(&turns[0]).expect("meta")["codeg.delegation"];
+        assert_eq!(inner["status"], "canceled");
+        assert_eq!(inner["text_preview"], "全部通过");
+        assert_eq!(inner["remote"]["run_id"], "");
+        assert!(inner["remote"].get("conversation_id").is_none());
+        assert!(inner["remote"].get("link").is_none());
+        assert!(inner["remote"].get("worktree").is_none());
+    }
+
+    /// 在线写入（或上一次注入）已经带远程信息的 meta 不再覆盖。
+    #[test]
+    fn inject_remote_delegation_meta_preserves_existing_remote_meta() {
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        if let ContentBlock::ToolUse { meta, .. } = &mut turns[0].blocks[0] {
+            *meta = Some(serde_json::json!({
+                "codeg.delegation": {
+                    "status": "running",
+                    "remote": {"connection_id": 9, "connection_name": "别的机器", "run_id": "run-9"},
+                },
+            }));
+        }
+        inject_remote_delegation_meta(&mut turns, &[remote_row("task-1", "tu-remote", "completed")]);
+        let inner = &first_block_meta(&turns[0]).expect("meta")["codeg.delegation"];
+        assert_eq!(inner["status"], "running");
+        assert_eq!(inner["remote"]["connection_id"], 9);
+    }
+
+    /// 已有的本机 meta（批准记录等）不会被远程注入抹掉。
+    #[test]
+    fn inject_remote_delegation_meta_keeps_other_meta_keys() {
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        if let ContentBlock::ToolUse { meta, .. } = &mut turns[0].blocks[0] {
+            *meta = Some(serde_json::json!({"codeg.approval": {"option_kind": "allow_once"}}));
+        }
+        inject_remote_delegation_meta(&mut turns, &[remote_row("task-1", "tu-remote", "completed")]);
+        let meta = first_block_meta(&turns[0]).expect("meta");
+        assert_eq!(meta[APPROVAL_META_KEY]["option_kind"], "allow_once");
+        assert_eq!(meta["codeg.delegation"]["task_id"], "task-1");
+    }
+
+    /// 结果预览有上限：本机行最多存 256 KiB，不能整份塞进历史工具调用。
+    #[test]
+    fn inject_remote_delegation_meta_bounds_the_result_preview() {
+        let mut row = remote_row("task-1", "tu-remote", "completed");
+        row.result_text = Some("通".repeat(REMOTE_RESULT_PREVIEW_CAP));
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        inject_remote_delegation_meta(&mut turns, &[row]);
+        let preview = first_block_meta(&turns[0]).expect("meta")["codeg.delegation"]["text_preview"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            preview.len() <= REMOTE_RESULT_PREVIEW_CAP,
+            "预览超过上限：{} 字节",
+            preview.len()
+        );
+        assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn inject_remote_delegation_meta_no_op_when_rows_empty() {
+        let mut turns = vec![tool_use_turn(Some("tu-remote"), "delegate_to_agent")];
+        inject_remote_delegation_meta(&mut turns, &[]);
+        assert!(first_block_meta(&turns[0]).is_none());
+    }
+
+    #[test]
+    fn inject_remote_delegation_meta_leaves_unrelated_calls_alone() {
+        let mut turns = vec![tool_use_turn(Some("tu-bash"), "Bash")];
+        inject_remote_delegation_meta(&mut turns, &[remote_row("task-1", "tu-bash", "completed")]);
         assert!(first_block_meta(&turns[0]).is_none());
     }
 
