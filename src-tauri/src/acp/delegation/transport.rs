@@ -488,6 +488,8 @@ pub enum BrokerMessage {
     /// `assistant_id` call as a plain `agent_type` delegation, silently
     /// dropping the assistant's options and instructions. That is why the
     /// companion asks before it forwards one (`AssistantSupport`).
+    /// 新 listener 可额外返回 `remote_delegation: true`；缺省/false 表示不支持。
+    /// Ping 请求保持不变，旧 listener 的 `ok`、`assistants` 字段不受影响。
     Ping,
 }
 

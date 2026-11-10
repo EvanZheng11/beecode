@@ -74,8 +74,14 @@ impl DelegationAssistant {
 }
 
 /// What a `delegate_to_agent` call names as its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DelegationTarget {
+    /// 远程身份必须包含项目，避免同一连接上的平行任务撞绑。
+    Remote {
+        connection_id: i32,
+        folder_id: i32,
+        target: RemoteTarget,
+    },
     Agent(AgentType),
     /// An assistant by id. Wins over any `agent_type` the same call carries:
     /// the assistant decides which agent runs.
@@ -92,6 +98,82 @@ pub enum DelegationTargetError {
     InvalidAgentType(String),
     /// Neither field is present.
     Missing,
+    MixedLocalRemoteTarget,
+    InvalidRemoteTarget(String),
+}
+
+impl DelegationTargetError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::MixedLocalRemoteTarget => "mixed_local_remote_target",
+            Self::InvalidRemoteTarget(_) => "invalid_remote_target",
+            Self::InvalidAssistantId(_) => "invalid_assistant_id",
+            Self::InvalidAgentType(_) | Self::Missing => "invalid_agent_type",
+        }
+    }
+}
+
+/// 远程 slug 来自远端能力表，不受本机 AgentType 枚举约束。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteTarget {
+    Assistant(i32),
+    Agent(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteDelegationTarget {
+    pub connection_id: i32,
+    pub folder_id: i32,
+    /// 仅由 listener 按已登记的 folder 换算，不能取调用方的路径。
+    pub workspace: String,
+    pub target: RemoteTarget,
+    pub permissions: crate::cli_run::PermissionPolicy,
+}
+
+/// connection_id 是本机保存连接的 ID；conversation_id 只属于远端。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteTaskInfo {
+    pub connection_id: i32,
+    pub connection_name: String,
+    pub run_id: String,
+    pub conversation_id: Option<i32>,
+    pub link: Option<String>,
+    pub worktree: Option<crate::cli_run::wire::WorktreeInfo>,
+}
+
+/// 任何远程参数（即便 null 或缺少连接 ID）都不能回落成本机调用。
+pub fn has_remote_delegation_fields(args: &serde_json::Value) -> bool {
+    [
+        "remote_connection_id",
+        "remote_folder_id",
+        "remote_assistant_id",
+        "remote_agent",
+    ]
+    .iter()
+    .any(|key| args.get(*key).is_some())
+}
+
+fn remote_positive_id(args: &serde_json::Value, key: &str) -> Result<i32, DelegationTargetError> {
+    args.get(key)
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|id| i32::try_from(id).ok())
+        .filter(|id| *id > 0)
+        .ok_or_else(|| DelegationTargetError::InvalidRemoteTarget(key.to_string()))
+}
+
+/// 解析权限但不决定缺省设置；listener 使用设置中的缺省值。
+pub fn remote_permissions_from_args(
+    args: &serde_json::Value,
+) -> Result<Option<crate::cli_run::PermissionPolicy>, DelegationTargetError> {
+    match args.get("permissions") {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .and_then(crate::cli_run::PermissionPolicy::parse)
+            .map(Some)
+            .ok_or_else(|| DelegationTargetError::InvalidRemoteTarget("permissions".into())),
+    }
 }
 
 /// Read the target out of `delegate_to_agent` arguments. THE one parser: the
@@ -106,6 +188,46 @@ pub enum DelegationTargetError {
 pub fn delegation_target_from_args(
     args: &serde_json::Value,
 ) -> Result<DelegationTarget, DelegationTargetError> {
+    if has_remote_delegation_fields(args) {
+        if args.get("assistant_id").is_some() || args.get("agent_type").is_some() {
+            return Err(DelegationTargetError::MixedLocalRemoteTarget);
+        }
+        let connection_id = remote_positive_id(args, "remote_connection_id")?;
+        let folder_id = remote_positive_id(args, "remote_folder_id")?;
+        let target = match (args.get("remote_assistant_id"), args.get("remote_agent")) {
+            (Some(_), None) => {
+                RemoteTarget::Assistant(remote_positive_id(args, "remote_assistant_id")?)
+            }
+            (None, Some(value)) => {
+                let agent = value
+                    .as_str()
+                    .filter(|s| {
+                        !s.is_empty()
+                            && s.len() <= 1024
+                            && !s.chars().any(|c| {
+                                c.is_whitespace()
+                                    || c.is_control()
+                                    || matches!(c, '/' | '\\' | '?' | '#')
+                            })
+                    })
+                    .ok_or_else(|| {
+                        DelegationTargetError::InvalidRemoteTarget("remote_agent".into())
+                    })?;
+                RemoteTarget::Agent(agent.to_string())
+            }
+            _ => {
+                return Err(DelegationTargetError::InvalidRemoteTarget(
+                    "remote_assistant_id/remote_agent 必须二选一".into(),
+                ))
+            }
+        };
+        remote_permissions_from_args(args)?;
+        return Ok(DelegationTarget::Remote {
+            connection_id,
+            folder_id,
+            target,
+        });
+    }
     match args.get("assistant_id") {
         None | Some(serde_json::Value::Null) => {}
         Some(raw) => return assistant_id_from_value(raw).map(DelegationTarget::Assistant),
@@ -190,12 +312,21 @@ pub struct DelegationRequest {
     /// ignored — and the child runs on the assistant's options and brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<DelegationAssistant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteDelegationTarget>,
 }
 
 impl DelegationRequest {
     /// The target this call named — what its correlation key is built from,
     /// symmetric with the lifecycle's key over the same arguments.
     pub fn target(&self) -> DelegationTarget {
+        if let Some(remote) = &self.remote {
+            return DelegationTarget::Remote {
+                connection_id: remote.connection_id,
+                folder_id: remote.folder_id,
+                target: remote.target.clone(),
+            };
+        }
         match &self.assistant {
             Some(a) => DelegationTarget::Assistant(a.id),
             None => DelegationTarget::Agent(self.agent_type),
@@ -465,9 +596,18 @@ pub struct DelegationTaskReport {
     /// tool, or the session it ran in is no longer in memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<DelegationProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteTaskInfo>,
 }
 
 impl DelegationTaskReport {
+    /// 远端会话 ID 只能保存在 remote 内，不能复用本机子会话定位字段。
+    pub fn with_remote(mut self, remote: RemoteTaskInfo) -> Self {
+        self.child_conversation_id = None;
+        self.remote = Some(remote);
+        self
+    }
+
     /// Stamp the assistant identity onto a report built without it. An
     /// `Unknown` report is left alone: it answers a task the caller does not
     /// own (or that never existed), and must not name whoever it belongs to.
@@ -515,6 +655,85 @@ impl DelegationOutcome {
 mod target_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn remote_target_parser_is_strict_and_folder_scoped() {
+        let args = json!({"remote_connection_id": 2, "remote_folder_id": 4, "remote_agent": "brand-new:agent"});
+        let target = delegation_target_from_args(&args).unwrap();
+        assert_eq!(
+            target,
+            DelegationTarget::Remote {
+                connection_id: 2,
+                folder_id: 4,
+                target: RemoteTarget::Agent("brand-new:agent".into())
+            }
+        );
+        for field in ["assistant_id", "agent_type"] {
+            let mut mixed = args.clone();
+            mixed[field] = serde_json::Value::Null;
+            assert_eq!(
+                delegation_target_from_args(&mixed),
+                Err(DelegationTargetError::MixedLocalRemoteTarget)
+            );
+        }
+        for (field, value) in [
+            ("remote_connection_id", json!(0)),
+            ("remote_folder_id", json!("4")),
+            ("remote_assistant_id", json!(3)),
+            ("permissions", json!("bad")),
+        ] {
+            let mut bad = args.clone();
+            bad[field] = value;
+            assert!(delegation_target_from_args(&bad).is_err());
+        }
+        let mut other = args.clone();
+        other["remote_folder_id"] = json!(5);
+        assert_ne!(target, delegation_target_from_args(&other).unwrap());
+        other = args.clone();
+        other["remote_connection_id"] = json!(3);
+        assert_ne!(target, delegation_target_from_args(&other).unwrap());
+        assert!(delegation_target_from_args(&json!({"remote_agent":"x"})).is_err());
+    }
+
+    #[test]
+    fn remote_request_and_report_keep_remote_ids_separate() {
+        let remote = RemoteDelegationTarget {
+            connection_id: 2,
+            folder_id: 4,
+            workspace: "/remote/project".into(),
+            target: RemoteTarget::Assistant(3),
+            permissions: crate::cli_run::PermissionPolicy::Wait,
+        };
+        let request: DelegationRequest = serde_json::from_value(json!({"parent_connection_id":"p","parent_conversation_id":1,"parent_tool_use_id":"t","agent_type":"codex","task":"x","working_dir":null,"remote":remote})).unwrap();
+        assert_eq!(
+            request.target(),
+            delegation_target_from_args(
+                &json!({"remote_connection_id":2,"remote_folder_id":4,"remote_assistant_id":3})
+            )
+            .unwrap()
+        );
+        let info = RemoteTaskInfo {
+            connection_id: 2,
+            connection_name: "B".into(),
+            run_id: "r".into(),
+            conversation_id: Some(99),
+            link: None,
+            worktree: None,
+        };
+        let report: DelegationTaskReport =
+            serde_json::from_value(json!({"status":"running","remote":info})).unwrap();
+        assert_eq!(report.child_conversation_id, None);
+        assert_eq!(report.remote.as_ref().unwrap().conversation_id, Some(99));
+        let info = report.remote.clone().unwrap();
+        let mut local = report;
+        local.child_conversation_id = Some(7);
+        let remote = local.with_remote(info);
+        assert_eq!(remote.child_conversation_id, None);
+        assert_eq!(remote.remote.unwrap().conversation_id, Some(99));
+        let old: DelegationTaskReport =
+            serde_json::from_value(json!({"status":"running"})).unwrap();
+        assert!(serde_json::to_value(old).unwrap().get("remote").is_none());
+    }
 
     #[test]
     fn an_assistant_id_wins_over_any_agent_type() {
