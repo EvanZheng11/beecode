@@ -372,12 +372,7 @@ function useRemoteSnapshotProgress(tabId: string | null) {
  * 发送、队列或插话逻辑 —— 发送链路完全由后端负责。
  */
 function RemoteSnapshotNotice({ tabId }: { tabId: string | null }) {
-  // `remoteSnapshotPreparing` / `remoteSnapshotDegraded` 两个键由 RM02 统一加入
-  // i18n（本分支尚未合入），这里按约定键名调用；键落地后恢复类型化 `t`。
-  const t = useTranslations("Folder.chat.messageInput") as unknown as (
-    key: string,
-    values?: Record<string, string | number>
-  ) => string
+  const t = useTranslations("Folder.chat.messageInput")
   const progress = useRemoteSnapshotProgress(tabId)
   const visible = isLocalDesktop() && !!tabId
 

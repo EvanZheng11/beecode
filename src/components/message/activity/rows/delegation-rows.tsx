@@ -254,17 +254,6 @@ function useRemoteConnectionAvailability(
   return known.availability
 }
 
-/**
- * 远程委派的文案键（`remoteLabel` / `remoteGoToSession` / `remoteHandleThere` /
- * `remoteCancelUnconfirmed` / `remoteUnreachable` / `remoteResync` /
- * `remoteConnectionDeleted` 等）由 RM02 统一加进 i18n，本分支尚未合入，类型化的
- * `t` 只认识现有键。这里先按约定键名调用；键落地后删掉这两处转换即可恢复校验。
- */
-type RemoteTextFn = (
-  key: string,
-  values?: Record<string, string | number>
-) => string
-
 /** 「打开远程会话」按钮的统一外观。 */
 const REMOTE_ACTION_CLASS =
   "inline-flex shrink-0 items-center gap-0.5 rounded-sm text-sm text-foreground/80 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
@@ -287,9 +276,7 @@ function RemoteDelegationActions({
   onJump: () => void
   onResync: () => void
 }) {
-  const tDelegation = useTranslations(
-    "Folder.chat.delegation"
-  ) as unknown as RemoteTextFn
+  const tDelegation = useTranslations("Folder.chat.delegation")
   const deleted = availability === "deleted"
   const unreachable = remote.status === "unreachable"
   const blocked = remote.status === "blocked"
@@ -384,8 +371,7 @@ function DelegationStepRow({
 }) {
   const t = useTranslations("Folder.chat.activity")
   const tDelegation = useTranslations("Folder.chat.delegation")
-  // 只有远程委派的新键需要绕过类型（见 `RemoteTextFn`）。
-  const tRemote = tDelegation as unknown as RemoteTextFn
+  const tRemote = tDelegation
   const statusText = useStatusText()
   const { pinnedOnly } = useActivityRender()
   const viewerHost = useSessionViewerHost()
