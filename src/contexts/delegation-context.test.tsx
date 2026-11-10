@@ -63,6 +63,55 @@ function TaskIdProbe({ taskId }: { taskId: string }) {
   )
 }
 
+/**
+ * 远程委派绑定的探针：远程信息、本机 child* 是否为空、以及按远程会话 id 查本机
+ * 绑定是否会误命中。
+ */
+function RemoteProbe({
+  parentToolUseId,
+  taskId,
+  remoteConversationId,
+}: {
+  parentToolUseId: string
+  taskId: string
+  remoteConversationId: number
+}) {
+  const { findByParentToolUseId, findByTaskId, findByChildConversationId } =
+    useDelegation()
+  const binding = findByParentToolUseId(parentToolUseId)
+  return (
+    <div>
+      <div data-testid="binding-status">{binding?.status ?? "-"}</div>
+      <div data-testid="remote-status">{binding?.remote?.status ?? "-"}</div>
+      <div data-testid="remote-name">
+        {binding?.remote?.connectionName ?? "-"}
+      </div>
+      <div data-testid="remote-conversation">
+        {binding?.remote?.conversationId ?? "-"}
+      </div>
+      <div data-testid="remote-result">
+        {binding?.remote?.resultPreview ?? "-"}
+      </div>
+      <div data-testid="remote-blocked">
+        {binding?.remote?.blockedOn ?? "-"}
+      </div>
+      <div data-testid="remote-error">{binding?.remote?.errorCode ?? "-"}</div>
+      <div data-testid="child-conversation">
+        {String(binding?.childConversationId)}
+      </div>
+      <div data-testid="child-connection">
+        {String(binding?.childConnectionId)}
+      </div>
+      <div data-testid="by-child">
+        {findByChildConversationId(remoteConversationId) ? "hit" : "none"}
+      </div>
+      <div data-testid="by-task">
+        {findByTaskId(taskId)?.parentToolUseId ?? "none"}
+      </div>
+    </div>
+  )
+}
+
 function renderProvider(children: ReactNode = null) {
   return render(
     <DelegationProvider>
@@ -385,5 +434,149 @@ describe("DelegationProvider", () => {
       connectionId: "c-seeded",
       hydrate: true,
     })
+  })
+})
+
+describe("DelegationProvider · 远程委派", () => {
+  const REMOTE = {
+    connection_id: 7,
+    connection_name: "办公室 Mac mini",
+    run_id: "run-abcdef123456",
+    conversation_id: 512,
+    link: "codeg://session/512",
+    worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+  }
+
+  const started = (overrides: Record<string, unknown> = {}) =>
+    ({
+      type: "remote_delegation_started",
+      parent_connection_id: "p1",
+      parent_tool_use_id: "pt-1",
+      task_id: "task-1",
+      remote: REMOTE,
+      task_preview: "在远端跑 pnpm build",
+      ...overrides,
+    }) as unknown as EventEnvelope
+
+  function renderRemote() {
+    return renderProvider(
+      <RemoteProbe
+        parentToolUseId="pt-1"
+        taskId="task-1"
+        remoteConversationId={512}
+      />
+    )
+  }
+
+  beforeEach(() => {
+    capturedHandler = null
+    mockAttach.mockReset()
+    mockDetach.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("binds a remote task with no local child, and never matches its remote conversation id", async () => {
+    renderRemote()
+    await awaitHandlerCaptured()
+    dispatch(started())
+
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("running")
+    expect(screen.getByTestId("remote-status")).toHaveTextContent("running")
+    expect(screen.getByTestId("remote-name")).toHaveTextContent(
+      "办公室 Mac mini"
+    )
+    expect(screen.getByTestId("remote-conversation")).toHaveTextContent("512")
+    // 远程任务没有本机子连接/子会话：不去 attach 子连接，也绝不把远程会话 id
+    // 当成本机会话 id 命中。
+    expect(screen.getByTestId("child-conversation")).toHaveTextContent("null")
+    expect(screen.getByTestId("child-connection")).toHaveTextContent("null")
+    expect(mockAttach).not.toHaveBeenCalled()
+    expect(screen.getByTestId("by-child")).toHaveTextContent("none")
+    // task id 仍是找回绑定的把手（updated/completed 只带 task id）。
+    expect(screen.getByTestId("by-task")).toHaveTextContent("pt-1")
+  })
+
+  it("applies updated (blocked) and completed (result preview) by task id", async () => {
+    renderRemote()
+    await awaitHandlerCaptured()
+    dispatch(started())
+
+    dispatch({
+      type: "remote_delegation_updated",
+      task_id: "task-1",
+      status: "blocked",
+      blocked_on: "permission",
+    } as unknown as EventEnvelope)
+    expect(screen.getByTestId("remote-status")).toHaveTextContent("blocked")
+    expect(screen.getByTestId("remote-blocked")).toHaveTextContent("permission")
+    // 远程在等权限时任务仍在进行（不是本机三态里的失败）。
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("running")
+
+    dispatch({
+      type: "remote_delegation_completed",
+      task_id: "task-1",
+      status: "completed",
+      result_preview: "构建通过",
+      duration_ms: 4321,
+    } as unknown as EventEnvelope)
+    expect(screen.getByTestId("remote-status")).toHaveTextContent("completed")
+    expect(screen.getByTestId("remote-result")).toHaveTextContent("构建通过")
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("ok")
+    // 终态后不再挂着「等权限」。
+    expect(screen.getByTestId("remote-blocked")).toHaveTextContent("-")
+  })
+
+  it("keeps a failed remote task's error code", async () => {
+    renderRemote()
+    await awaitHandlerCaptured()
+    dispatch(started())
+    dispatch({
+      type: "remote_delegation_completed",
+      task_id: "task-1",
+      status: "failed",
+      error_code: "remote_run_lost",
+    } as unknown as EventEnvelope)
+
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("err")
+    expect(screen.getByTestId("remote-error")).toHaveTextContent(
+      "remote_run_lost"
+    )
+  })
+
+  it("does not regress to running when a started replay arrives after the terminal state", async () => {
+    renderRemote()
+    await awaitHandlerCaptured()
+    dispatch(started())
+    dispatch({
+      type: "remote_delegation_completed",
+      task_id: "task-1",
+      status: "completed",
+      result_preview: "构建通过",
+    } as unknown as EventEnvelope)
+    // 快照重放/重连会再发一遍 started：终态不能被它抹平。
+    dispatch(started())
+
+    expect(screen.getByTestId("remote-status")).toHaveTextContent("completed")
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("ok")
+    expect(screen.getByTestId("remote-result")).toHaveTextContent("构建通过")
+  })
+
+  it("carries a status that arrived before the binding was established", async () => {
+    renderRemote()
+    await awaitHandlerCaptured()
+    // 乱序：updated 先到（绑定还不知道 task 属于哪个工具调用）。
+    dispatch({
+      type: "remote_delegation_updated",
+      task_id: "task-1",
+      status: "unreachable",
+    } as unknown as EventEnvelope)
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("-")
+
+    dispatch(started())
+    expect(screen.getByTestId("remote-status")).toHaveTextContent("unreachable")
+    expect(screen.getByTestId("binding-status")).toHaveTextContent("running")
   })
 })

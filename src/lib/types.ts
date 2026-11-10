@@ -100,6 +100,64 @@ export interface RemoteWorkspaceConnectionInput {
   headers: RemoteWorkspaceHeader[]
 }
 
+/**
+ * 远程委派任务在另一台机器上的标识（跨进程契约，字段为 snake_case）。
+ * 镜像 Rust `RemoteTaskInfo`。
+ *
+ * `conversation_id` 是**远程**会话 id：它在本机不存在，任何按本机会话查询的
+ * 路径（加载子会话、按子会话找连接）都必须跳过它，否则会打开错误会话。
+ */
+export interface RemoteTaskInfo {
+  connection_id: number
+  connection_name: string
+  run_id: string
+  /** 远程会话 id（远程 DB 语义），未知/未产生时为 null。 */
+  conversation_id?: number | null
+  /** 远程 `codeg://session/<id>` 链接，供复制/外部打开。 */
+  link?: string | null
+  /** 远程为任务建的 worktree（分支名用于展示）。 */
+  worktree?: { path: string; branch: string } | null
+}
+
+/**
+ * 远程委派的执行状态（设计 9.3.3）。`unreachable` 是**非终态**：连不上远程
+ * 但保留 run 信息，可手动「重新同步」；`canceled` 可能没被远程确认。
+ */
+export type RemoteDelegationStatus =
+  | "reserving"
+  | "running"
+  | "blocked"
+  | "unreachable"
+  | "completed"
+  | "failed"
+  | "canceled"
+
+/** 快照里被降级的远程引用：`uri` 原样回显，`reason` 是后端给的原因码/文案。 */
+export interface RemoteSnapshotDegraded {
+  uri: string
+  reason: string
+  bytes?: number
+}
+
+/**
+ * 刷新/重连时快照带出的在飞远程委派。字段与 `remote_delegation_started`
+ * 一致，外加最新状态。镜像 Rust `SessionState.active_remote_delegations`。
+ */
+export interface ActiveRemoteDelegationState {
+  parent_tool_use_id: string
+  task_id: string
+  remote: RemoteTaskInfo
+  status: RemoteDelegationStatus
+  blocked_on?: string | null
+  result_preview?: string | null
+  error_code?: string | null
+  duration_ms?: number | null
+  task_preview?: string | null
+  assistant_id?: number | null
+  assistant_name?: string | null
+  agent_type?: AgentType | null
+}
+
 export interface ConversationSummary {
   id: string
   agent_type: AgentType
@@ -3397,6 +3455,60 @@ export type AcpEvent =
       assistant_name?: string | null
     }
   /**
+   * 远程委派启动（rmdl001002）：本机 broker 没有在本机起子智能体，而是在
+   * 另一台机器上 reserve + start 了一个 run。远程任务不产生本机
+   * `child_connection_id` / `child_conversation_id`，卡片只能按 `remote`
+   * 里的远程会话跳转，不能按本机会话 id 加载子会话。
+   *
+   * 与 `delegation_started` 并列的独立事件（而不是复用必填 child_* 的那个），
+   * 见设计 7.5。
+   */
+  | {
+      type: "remote_delegation_started"
+      /** 本机父连接（事件所在连接的 id）。 */
+      parent_connection_id: string
+      parent_tool_use_id: string
+      task_id: string
+      remote: RemoteTaskInfo
+      /** 任务文本预览，与本机 `delegation_started.task_preview` 同义。 */
+      task_preview?: string | null
+      /** 远程目标是助手时带上（`agent_type` 是它跑的智能体）。 */
+      assistant_id?: number | null
+      assistant_name?: string | null
+      agent_type?: AgentType | null
+    }
+  /** 远程委派状态变化（rmdl001003）。只带 task id，前端按 task id 找回绑定。 */
+  | {
+      type: "remote_delegation_updated"
+      task_id: string
+      status: RemoteDelegationStatus
+      /** 远程在等权限/提问时的种类（`permission` / `question` / …）。 */
+      blocked_on?: string | null
+    }
+  /** 远程委派结束（终态）。 */
+  | {
+      type: "remote_delegation_completed"
+      task_id: string
+      status: RemoteDelegationStatus
+      result_preview?: string | null
+      error_code?: string | null
+      duration_ms?: number | null
+    }
+  /**
+   * 发送边界的远程文件快照开始（rmui001 / 4.1.3）：消息里有远程引用、
+   * 后端正在把内容拉回本机。`connection_id` 就是本机 ACP 连接 id（信封自带），
+   * `count` 是待取回的远程引用数。
+   */
+  | {
+      type: "remote_snapshot_preparing"
+      count: number
+    }
+  /** 远程文件快照结束：列出被降级成指针的引用，前端逐项 toast 一次。 */
+  | {
+      type: "remote_snapshot_done"
+      degraded: RemoteSnapshotDegraded[]
+    }
+  /**
    * The user's submitted prompt, broadcast on the connection stream so OTHER
    * clients viewing this conversation synthesize the user turn in real time.
    * The sending client renders its own optimistic turn and ignores this echo.
@@ -3872,6 +3984,8 @@ export interface LiveSessionSnapshot {
   /** Live sub-agent delegations recoverable from the snapshot. May be absent
    *  on older server payloads (then treated as `[]`). */
   active_delegations?: ActiveDelegationState[]
+  /** 在飞的**远程**委派（跨机执行，本机没有子连接）。缺失按 `[]` 处理。 */
+  active_remote_delegations?: ActiveRemoteDelegationState[]
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]

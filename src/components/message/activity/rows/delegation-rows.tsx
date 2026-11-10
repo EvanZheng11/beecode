@@ -1,8 +1,22 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
 import { useTranslations } from "next-intl"
-import { ActivityIcon, BanIcon, RotateCcwIcon } from "lucide-react"
+import { toast } from "sonner"
+import {
+  ActivityIcon,
+  ArrowUpRightIcon,
+  BanIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+} from "lucide-react"
 
 import {
   DelegationIdentityGlyph,
@@ -34,6 +48,14 @@ import {
   type DelegationTaskRow,
 } from "@/lib/delegation-status"
 import { cn } from "@/lib/utils"
+import { toErrorMessage } from "@/lib/app-error"
+import { isLocalDesktop } from "@/lib/platform"
+import {
+  listRemoteWorkspaceConnections,
+  openRemoteWorkspace,
+  resyncRemoteDelegation,
+} from "@/lib/remote-workspace"
+import type { RemoteDelegationView } from "@/hooks/use-delegation-card-model"
 import { useActivityRender } from "../activity-context"
 import { ActivityRow } from "../activity-row"
 import { DetailBox } from "../detail-box"
@@ -171,6 +193,178 @@ export const DelegationResumeRow = memo(function DelegationResumeRow({
   )
 })
 
+/** 保存的远程连接 id 缓存：一张卡片一个查询太浪费，远端连接列表变化很慢。 */
+let remoteConnectionIdsCache: { at: number; ids: Set<number> } | null = null
+const REMOTE_CONNECTION_IDS_TTL_MS = 15_000
+
+/** 测试用：清掉连接 id 缓存（真实运行不需要）。 */
+export function resetRemoteConnectionIdsCache(): void {
+  remoteConnectionIdsCache = null
+}
+
+async function loadRemoteConnectionIds(): Promise<Set<number>> {
+  const now = Date.now()
+  if (
+    remoteConnectionIdsCache &&
+    now - remoteConnectionIdsCache.at < REMOTE_CONNECTION_IDS_TTL_MS
+  ) {
+    return remoteConnectionIdsCache.ids
+  }
+  const list = await listRemoteWorkspaceConnections()
+  const ids = new Set(list.map((c) => c.id))
+  remoteConnectionIdsCache = { at: now, ids }
+  return ids
+}
+
+type RemoteAvailability = "unknown" | "available" | "deleted"
+
+/**
+ * 远程卡片引用的连接是否还在（删掉连接的远程任务不再可跳转，按钮禁用）。
+ * 列表拿不到时保持 `unknown` —— 不禁用，把失败交给点击时的 toast。
+ */
+function useRemoteConnectionAvailability(
+  connectionId: number | null
+): RemoteAvailability {
+  const [known, setKnown] = useState<{
+    connectionId: number
+    availability: RemoteAvailability
+  } | null>(null)
+  useEffect(() => {
+    if (connectionId === null || !isLocalDesktop()) return
+    let cancelled = false
+    void loadRemoteConnectionIds()
+      .then((ids) => {
+        if (cancelled) return
+        setKnown({
+          connectionId,
+          availability: ids.has(connectionId) ? "available" : "deleted",
+        })
+      })
+      .catch(() => {
+        // 查不到就保持 unknown：不禁用按钮，失败由点击时的 toast 说清楚。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connectionId])
+  // 换了一个连接就还没有答案，不沿用上一个连接的结果。
+  if (connectionId === null || known?.connectionId !== connectionId) {
+    return "unknown"
+  }
+  return known.availability
+}
+
+/**
+ * 远程委派的文案键（`remoteLabel` / `remoteGoToSession` / `remoteHandleThere` /
+ * `remoteCancelUnconfirmed` / `remoteUnreachable` / `remoteResync` /
+ * `remoteConnectionDeleted` 等）由 RM02 统一加进 i18n，本分支尚未合入，类型化的
+ * `t` 只认识现有键。这里先按约定键名调用；键落地后删掉这两处转换即可恢复校验。
+ */
+type RemoteTextFn = (
+  key: string,
+  values?: Record<string, string | number>
+) => string
+
+/** 「打开远程会话」按钮的统一外观。 */
+const REMOTE_ACTION_CLASS =
+  "inline-flex shrink-0 items-center gap-0.5 rounded-sm text-sm text-foreground/80 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
+
+/**
+ * 远程委派卡片专属的操作与提示行：远程在等权限要「去远程处理」、连不上给
+ * 「重新同步」、取消可能没被远程确认要说清楚，以及其他来源都能用的「查看会话」
+ * （打开/聚焦该连接的远程窗口并定位会话，连接已删除时禁用）。
+ */
+function RemoteDelegationActions({
+  remote,
+  availability,
+  resyncing,
+  onJump,
+  onResync,
+}: {
+  remote: RemoteDelegationView
+  availability: RemoteAvailability
+  resyncing: boolean
+  onJump: () => void
+  onResync: () => void
+}) {
+  const tDelegation = useTranslations(
+    "Folder.chat.delegation"
+  ) as unknown as RemoteTextFn
+  const deleted = availability === "deleted"
+  const unreachable = remote.status === "unreachable"
+  const blocked = remote.status === "blocked"
+  const canceled = remote.status === "canceled"
+  // 跳转与重新同步都落在本机后端（打开本地窗口 / 本机协程重连），浏览器与远程
+  // 窗口里没有这些能力；提示类文案仍然照常显示。
+  const desktop = isLocalDesktop()
+  const canJump = desktop && remote.conversationId != null
+  const canResync = desktop && unreachable
+  if (!unreachable && !blocked && !canceled && !canJump) return null
+  return (
+    <div
+      data-testid="delegation-remote-actions"
+      className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pb-0.5 text-sm"
+    >
+      {blocked ? (
+        <span
+          data-testid="delegation-remote-handle-there"
+          className="shrink-0 text-tone-warning"
+        >
+          {tDelegation("remoteHandleThere")}
+        </span>
+      ) : null}
+      {unreachable ? (
+        <>
+          <span
+            data-testid="delegation-remote-unreachable"
+            className="shrink-0 text-tone-warning"
+          >
+            {tDelegation("remoteUnreachable")}
+          </span>
+          {canResync ? (
+            <button
+              type="button"
+              data-testid="delegation-remote-resync"
+              className={REMOTE_ACTION_CLASS}
+              disabled={resyncing}
+              onClick={onResync}
+            >
+              <RefreshCwIcon aria-hidden="true" className="size-3.5" />
+              {tDelegation("remoteResync")}
+            </button>
+          ) : null}
+        </>
+      ) : null}
+      {canceled ? (
+        <span
+          data-testid="delegation-remote-cancel-unconfirmed"
+          className="shrink-0 text-muted-foreground"
+        >
+          {tDelegation("remoteCancelUnconfirmed")}
+        </span>
+      ) : null}
+      {canJump ? (
+        <button
+          type="button"
+          data-testid="delegation-remote-jump"
+          className={REMOTE_ACTION_CLASS}
+          disabled={deleted}
+          title={deleted ? tDelegation("remoteConnectionDeleted") : undefined}
+          onClick={onJump}
+        >
+          {deleted
+            ? tDelegation("remoteConnectionDeleted")
+            : tDelegation("remoteGoToSession")}
+          <ArrowUpRightIcon
+            aria-hidden="true"
+            className="size-3.5 rtl:-scale-x-100"
+          />
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 function DelegationStepRow({
   step,
   source,
@@ -190,6 +384,8 @@ function DelegationStepRow({
 }) {
   const t = useTranslations("Folder.chat.activity")
   const tDelegation = useTranslations("Folder.chat.delegation")
+  // 只有远程委派的新键需要绕过类型（见 `RemoteTextFn`）。
+  const tRemote = tDelegation as unknown as RemoteTextFn
   const statusText = useStatusText()
   const { pinnedOnly } = useActivityRender()
   const viewerHost = useSessionViewerHost()
@@ -210,18 +406,51 @@ function DelegationStepRow({
   const { ref: taskRef, truncated: taskCut } =
     useTruncation<HTMLSpanElement>(taskLine)
   const elapsed = useLiveElapsed(step.key, status === "running")
+  // 远程委派：没有本机子连接/子会话，跳转走远程窗口；连接是否还在决定按钮禁用。
+  const remote = model.remote
+  const remoteAvailability = useRemoteConnectionAvailability(
+    remote?.connectionId ?? null
+  )
+  const [resyncing, setResyncing] = useState(false)
+
+  const handleRemoteJump = useCallback(() => {
+    if (!remote) return
+    openRemoteWorkspace(remote.connectionId, {
+      conversationId: remote.conversationId,
+    }).catch((err) => {
+      toast.error(tRemote("remoteOpenFailed"), {
+        description: toErrorMessage(err),
+      })
+    })
+  }, [remote, tRemote])
+
+  const handleRemoteResync = useCallback(() => {
+    if (!remote || !model.taskId) return
+    setResyncing(true)
+    resyncRemoteDelegation(model.taskId, remote.connectionId)
+      .catch((err) => {
+        toast.error(tRemote("remoteResyncFailed"), {
+          description: toErrorMessage(err),
+        })
+      })
+      .finally(() => setResyncing(false))
+  }, [remote, model.taskId, tRemote])
 
   if (pinnedOnly && status !== "running" && status !== "awaiting") return null
 
+  // 远程结果优先用事件带回的预览；没有就退到本机已有的报告文本。
   const result =
-    model.status === "ok" || model.status === "err"
-      ? previewLine(latest?.report.text, RESULT_PREVIEW_CHARS)
-      : null
+    remote && remote.resultPreview
+      ? previewLine(remote.resultPreview, RESULT_PREVIEW_CHARS)
+      : model.status === "ok" || model.status === "err"
+        ? previewLine(latest?.report.text, RESULT_PREVIEW_CHARS)
+        : null
   // While it works, what it is doing now stands where the result will be.
   const current = working && status !== "awaiting" ? progress?.lastStep : null
   const summary = result ?? current ?? null
-  const openSession =
-    model.childConversationId != null
+  const openSession = remote
+    ? null
+    : model.childConversationId != null
       ? () =>
           viewerHost
             ? viewerHost.open({ kind: "delegation", source })
@@ -274,13 +503,24 @@ function DelegationStepRow({
           />
         }
         addon={
-          <ProgressLine
-            progress={progress}
-            working={status === "running"}
-            summary={summary}
-            summaryLive={!result}
-            onOpenSession={openSession}
-          />
+          <>
+            <ProgressLine
+              progress={progress}
+              working={status === "running"}
+              summary={summary}
+              summaryLive={!result}
+              onOpenSession={openSession}
+            />
+            {remote ? (
+              <RemoteDelegationActions
+                remote={remote}
+                availability={remoteAvailability}
+                resyncing={resyncing}
+                onJump={handleRemoteJump}
+                onResync={handleRemoteResync}
+              />
+            ) : null}
+          </>
         }
         detail={() => (
           <DetailBox tone="neutral">
@@ -291,6 +531,29 @@ function DelegationStepRow({
               >
                 {model.task}
               </p>
+            ) : null}
+            {remote ? (
+              <div
+                data-testid="delegation-remote-meta"
+                className={cn(
+                  "space-y-0.5 px-4 py-3 text-xs text-activity-secondary",
+                  model.task && "border-t"
+                )}
+              >
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                  <span dir="auto">{remote.connectionName}</span>
+                  {remote.runId ? (
+                    <span dir="ltr" className="font-mono">
+                      run {remote.runId.slice(0, 8)}
+                    </span>
+                  ) : null}
+                  {remote.worktree?.branch ? (
+                    <span dir="ltr" className="font-mono">
+                      {remote.worktree.branch}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
             {reason ? (
               // The interruption context the agent passed into the child's
@@ -322,6 +585,15 @@ function DelegationStepRow({
             identity={model.identity}
             className="max-w-[60%] shrink-0 truncate font-semibold text-foreground"
           />
+          {remote ? (
+            <span
+              data-testid="delegation-remote-label"
+              className="shrink-0 truncate text-xs text-activity-secondary"
+              title={`${remote.connectionName} · ${remote.runId}`}
+            >
+              {tRemote("remoteLabel", { name: remote.connectionName })}
+            </span>
+          ) : null}
           {model.taskId ? (
             <span
               className="shrink-0 font-mono text-[0.8125rem] text-activity-secondary"

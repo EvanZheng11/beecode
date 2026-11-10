@@ -104,9 +104,14 @@ vi.mock("./composer-connection-status", () => ({
 }))
 // The platform opener is the DESKTOP arm of the shared opener; this suite runs
 // in web mode, where a system-browser target lands on `window.open` instead.
-const platform = vi.hoisted(() => ({ openUrl: vi.fn(async () => {}) }))
+const platform = vi.hoisted(() => ({
+  openUrl: vi.fn(async () => {}),
+  // 远程快照提示只在本机桌面窗口出现（远程窗口/浏览器不显示）。
+  localDesktop: true,
+}))
 vi.mock("@/lib/platform", () => ({
   isDesktop: () => false,
+  isLocalDesktop: () => platform.localDesktop,
   openFileDialog: vi.fn(),
   openUrl: platform.openUrl,
 }))
@@ -137,7 +142,13 @@ vi.mock("@/lib/turn-busy", () => ({
 // Nothing here mounts a Toaster, so toasts would vanish silently — record them
 // instead. The steering tests assert the uploading gate's honest signal.
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), info: vi.fn(), success: vi.fn(), dismiss: vi.fn() },
+  toast: {
+    error: vi.fn(),
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    dismiss: vi.fn(),
+  },
 }))
 // Wrap-mock (rich-composer pattern above): render the REAL attachments hook,
 // but let a test stage image attachments — the drop/paste pipelines that
@@ -3745,5 +3756,127 @@ describe("MessageInput live content for draft tidying", () => {
     })
     expect(markedAtStart).toBe(true)
     await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+  })
+})
+
+/**
+ * 远程文件快照的进行中提示与降级 toast（设计 4.1.3.1 / 7.4）。
+ *
+ * 后端在真正发送前拉取远程引用内容并发出 `remote_snapshot_preparing/done`；
+ * 输入框只负责显示进度、逐项提示降级，不参与任何发送/队列行为 —— 所以这些用例
+ * 全部只驱动进度 store，不触碰 onSend。
+ */
+describe("远程文件快照进度", () => {
+  const messagesWithSnapshotKeys = {
+    ...enMessages,
+    Folder: {
+      ...enMessages.Folder,
+      chat: {
+        ...enMessages.Folder.chat,
+        messageInput: {
+          ...enMessages.Folder.chat.messageInput,
+          remoteSnapshotPreparing: "正在获取远程文件（{count}）…",
+          remoteSnapshotDegraded: "远程引用已降级为指针：{reason}",
+        },
+      },
+    },
+  } as typeof enMessages
+
+  function renderSnapshotInput(
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    return render(
+      <NextIntlClientProvider locale="en" messages={messagesWithSnapshotKeys}>
+        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} {...props} />
+      </NextIntlClientProvider>
+    )
+  }
+
+  beforeEach(async () => {
+    const mod = await import("@/lib/remote-snapshot-progress")
+    mod.clearAllRemoteSnapshotProgress()
+    vi.mocked(toast.warning).mockClear()
+  })
+
+  afterEach(async () => {
+    const mod = await import("@/lib/remote-snapshot-progress")
+    mod.clearAllRemoteSnapshotProgress()
+  })
+
+  it("在输入框上方显示正在获取的远程引用数，结束后消失", async () => {
+    const { beginRemoteSnapshotPreparing, endRemoteSnapshotDone } =
+      await import("@/lib/remote-snapshot-progress")
+    act(() => {
+      beginRemoteSnapshotPreparing("tab-remote", 2)
+    })
+    renderSnapshotInput({ attachmentTabId: "tab-remote" })
+
+    const strip = await screen.findByTestId("remote-snapshot-preparing")
+    expect(strip).toHaveTextContent("正在获取远程文件（2）…")
+
+    act(() => {
+      endRemoteSnapshotDone("tab-remote", [])
+    })
+    expect(
+      screen.queryByTestId("remote-snapshot-preparing")
+    ).not.toBeInTheDocument()
+  })
+
+  it("对每个降级项只提示一次", async () => {
+    const { beginRemoteSnapshotPreparing, endRemoteSnapshotDone } =
+      await import("@/lib/remote-snapshot-progress")
+    renderSnapshotInput({ attachmentTabId: "tab-remote" })
+
+    act(() => {
+      endRemoteSnapshotDone("tab-remote", [
+        { uri: "codeg://remote/7/file/a.ts", reason: "too_large" },
+        { uri: "codeg://remote/7/file/logo.png", reason: "binary" },
+      ])
+    })
+    await waitFor(() =>
+      expect(vi.mocked(toast.warning)).toHaveBeenCalledTimes(2)
+    )
+    expect(vi.mocked(toast.warning)).toHaveBeenCalledWith(
+      "远程引用已降级为指针：too_large",
+      expect.objectContaining({ id: expect.stringContaining("a.ts") })
+    )
+
+    // 再来一轮进度变化（含重渲染）不会把同一条提示再打一遍。
+    act(() => {
+      beginRemoteSnapshotPreparing("tab-remote", 1)
+    })
+    act(() => {
+      endRemoteSnapshotDone("tab-remote", [])
+    })
+    expect(vi.mocked(toast.warning)).toHaveBeenCalledTimes(2)
+  })
+
+  it("按连接隔离：别的会话的快照不会显示在本输入框上", async () => {
+    const { beginRemoteSnapshotPreparing } =
+      await import("@/lib/remote-snapshot-progress")
+    act(() => {
+      beginRemoteSnapshotPreparing("tab-other", 3)
+    })
+    renderSnapshotInput({ attachmentTabId: "tab-remote" })
+    expect(
+      screen.queryByTestId("remote-snapshot-preparing")
+    ).not.toBeInTheDocument()
+  })
+
+  it("远程窗口/浏览器不显示该提示（只本机桌面支持）", async () => {
+    const { beginRemoteSnapshotPreparing } =
+      await import("@/lib/remote-snapshot-progress")
+    platform.localDesktop = false
+    try {
+      act(() => {
+        beginRemoteSnapshotPreparing("tab-remote", 1)
+      })
+      renderSnapshotInput({ attachmentTabId: "tab-remote" })
+      expect(
+        screen.queryByTestId("remote-snapshot-preparing")
+      ).not.toBeInTheDocument()
+    } finally {
+      platform.localDesktop = true
+    }
   })
 })

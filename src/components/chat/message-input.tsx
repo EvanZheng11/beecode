@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
@@ -11,6 +19,7 @@ import {
   ClipboardPaste,
   Clock,
   Copy,
+  Loader2,
   MessageSquareText,
   Scissors,
   Send,
@@ -40,6 +49,12 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { imageFilesFromClipboardApi } from "@/lib/clipboard-images"
 import { toErrorMessage } from "@/lib/app-error"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
+import { isLocalDesktop } from "@/lib/platform"
+import {
+  consumeRemoteSnapshotDegraded,
+  getRemoteSnapshotProgress,
+  subscribeRemoteSnapshotProgress,
+} from "@/lib/remote-snapshot-progress"
 import { buildSteerPayload } from "@/lib/prompt-draft"
 import {
   stepComposerHistory,
@@ -330,6 +345,64 @@ function SelectorLoadingChip({ label }: { label: string }) {
     <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
       <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
       <span>{label}</span>
+    </div>
+  )
+}
+
+/** 订阅本会话连接的远程快照进度（`useSyncExternalStore`，无状态时返回同一个空对象）。 */
+function useRemoteSnapshotProgress(tabId: string | null) {
+  const subscribe = useCallback(
+    (cb: () => void) =>
+      tabId ? subscribeRemoteSnapshotProgress(tabId, cb) : () => {},
+    [tabId]
+  )
+  const getSnapshot = useCallback(
+    () => getRemoteSnapshotProgress(tabId ?? ""),
+    [tabId]
+  )
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+/**
+ * 输入框上方的远程文件快照提示（设计 4.1.3.1 / 7.4）。
+ *
+ * 消息里带 `codeg://remote/...` 引用时，后端在真正发送前把内容拉回本机，期间
+ * 这里显示「正在获取远程文件（N）…」；结束后把被降级的引用逐项 toast 一次。
+ * 只在本机桌面窗口显示（远程窗口/浏览器里不存在这类本地连接），也不参与任何
+ * 发送、队列或插话逻辑 —— 发送链路完全由后端负责。
+ */
+function RemoteSnapshotNotice({ tabId }: { tabId: string | null }) {
+  // `remoteSnapshotPreparing` / `remoteSnapshotDegraded` 两个键由 RM02 统一加入
+  // i18n（本分支尚未合入），这里按约定键名调用；键落地后恢复类型化 `t`。
+  const t = useTranslations("Folder.chat.messageInput") as unknown as (
+    key: string,
+    values?: Record<string, string | number>
+  ) => string
+  const progress = useRemoteSnapshotProgress(tabId)
+  const visible = isLocalDesktop() && !!tabId
+
+  // 降级项是「读一次就消费」的一次性队列：重渲染、严格模式下的重复 effect 都
+  // 不会把同一条提示打两遍。
+  useEffect(() => {
+    if (!visible || !tabId) return
+    const items = consumeRemoteSnapshotDegraded(tabId)
+    for (const item of items) {
+      toast.warning(t("remoteSnapshotDegraded", { reason: item.reason }), {
+        id: `remote-snapshot-degraded-${tabId}-${item.uri}`,
+      })
+    }
+  }, [visible, tabId, t, progress])
+
+  if (!visible || progress.preparing <= 0) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="remote-snapshot-preparing"
+      className="flex items-center gap-1.5 px-2 pb-1 text-xs text-muted-foreground"
+    >
+      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+      <span>{t("remoteSnapshotPreparing", { count: progress.preparing })}</span>
     </div>
   )
 }
@@ -2140,6 +2213,8 @@ export function MessageInput({
           below, a size container (`@container`), when this ancestor flips
           between `contents` and a box in either direction, leaving the editor
           0x0 and unable to take input. */}
+      {/* 输入框上方：远程文件快照进度（只在本机桌面窗口出现）。 */}
+      <RemoteSnapshotNotice tabId={attachmentTabId ?? null} />
       <div
         className={cn(
           "block",

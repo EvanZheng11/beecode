@@ -16,7 +16,7 @@
 
 import { useCallback, useMemo, useSyncExternalStore } from "react"
 
-import { type AgentType } from "@/lib/types"
+import { type AgentType, type RemoteDelegationStatus } from "@/lib/types"
 import type { ToolCallState } from "@/lib/adapters/ai-elements-adapter"
 import {
   useConnectionStore,
@@ -30,6 +30,7 @@ import {
   parseDelegationMeta,
   parseInput,
   parseToolOutput,
+  remoteCardStatus,
   resolveDelegationStatus,
   type DelegationCardStatus,
   type ParsedToolOutput,
@@ -78,6 +79,28 @@ export interface DelegationIdentity {
   assistantName: string | null
 }
 
+/**
+ * 远程委派在卡片上的视图：任务在哪台机器、远程状态、远程会话与跳转信息。
+ * 三条来源（实时事件绑定 → 快照 meta → 工具输出/报告）合并成这一份。
+ */
+export interface RemoteDelegationView {
+  /** 保存的远程连接 id（用于跳转/判断连接是否已被删除）。 */
+  connectionId: number
+  connectionName: string
+  runId: string
+  /** 远程会话 id —— 本机不存在该会话，绝不用它查本机记录。 */
+  conversationId: number | null
+  link: string | null
+  worktree: { path: string; branch: string } | null
+  /** 后端远程状态；来源没给就 `null`（交给通用状态解析）。 */
+  status: RemoteDelegationStatus | null
+  /** 远程在等什么（`permission` / `question` / `plan_approval`）。 */
+  blockedOn: string | null
+  resultPreview: string | null
+  errorCode: string | null
+  durationMs: number | null
+}
+
 export interface DelegationCardModel {
   agentType: AgentType | null
   identity: DelegationIdentity
@@ -87,6 +110,8 @@ export interface DelegationCardModel {
   errorCode: string | undefined
   childConversationId: number | null
   childConnectionId: string | null
+  /** 远程委派视图；非远程委派为 `null`。 */
+  remote: RemoteDelegationView | null
   /** False when there's no live binding and the input parsed to neither an
    *  agent type nor a task — nothing useful to draw. Callers render null. */
   hasModel: boolean
@@ -202,15 +227,57 @@ export function useDelegationCardModel(
     errorText,
   ])
 
+  // 远程委派视图：任一来源带 remote 就是远程任务。字段逐项取第一个有值的来源
+  // （实时绑定 → 快照 meta → 工具输出/报告），状态以实时绑定最新。
+  const remote = useMemo<RemoteDelegationView | null>(() => {
+    const live = binding?.remote ?? null
+    const fromMeta = parsedMeta?.remote ?? null
+    const fromOutput = toolOutput?.remote ?? null
+    const base = live ?? fromMeta ?? fromOutput
+    if (!base) return null
+    return {
+      connectionId: base.connectionId,
+      connectionName: base.connectionName,
+      runId: base.runId,
+      conversationId:
+        base.conversationId ??
+        fromMeta?.conversationId ??
+        fromOutput?.conversationId ??
+        null,
+      link: base.link ?? fromMeta?.link ?? fromOutput?.link ?? null,
+      worktree:
+        base.worktree ?? fromMeta?.worktree ?? fromOutput?.worktree ?? null,
+      status: live?.status ?? fromMeta?.status ?? fromOutput?.status ?? null,
+      blockedOn: live?.blockedOn ?? null,
+      resultPreview: live?.resultPreview ?? null,
+      errorCode:
+        live?.errorCode ??
+        parsedMeta?.errorCode ??
+        toolOutput?.errorCode ??
+        null,
+      durationMs: live?.durationMs ?? null,
+    }
+  }, [
+    binding?.remote,
+    parsedMeta?.remote,
+    parsedMeta?.errorCode,
+    toolOutput?.remote,
+    toolOutput?.errorCode,
+  ])
+
   // Resolution order: live binding → persisted snapshot meta → the broker's
   // ack output (the synthetic-id path that emits no binding/meta).
-  const childConnectionId =
-    binding?.childConnectionId ?? parsedMeta?.childConnectionId ?? null
-  const childConversationId =
-    binding?.childConversationId ??
-    parsedMeta?.childConversationId ??
-    toolOutput?.childConversationId ??
-    null
+  // 远程任务没有本机子连接/子会话：两个 id 一律为空，任何「按 child 查本机」的
+  // 路径（加载子会话、订阅子连接、看子会话）都自然落空，不会误开本机会话。
+  const childConnectionId = remote
+    ? null
+    : (binding?.childConnectionId ?? parsedMeta?.childConnectionId ?? null)
+  const childConversationId = remote
+    ? null
+    : (binding?.childConversationId ??
+      parsedMeta?.childConversationId ??
+      toolOutput?.childConversationId ??
+      null)
 
   const childLive = useDelegationChildLive(childConnectionId)
   // Parked on ANY decision — a permission, a question, a plan approval — as
@@ -249,19 +316,25 @@ export function useDelegationCardModel(
     [agentType, assistantId, assistantName]
   )
   const ended = useMemo(() => taskEnding(laterReport), [laterReport])
-  const status = resolveDelegationStatus({
-    binding,
-    parsedMeta,
-    toolOutput,
-    state,
-    errorText,
-    childAwaitingUser,
-    ended,
-  })
+  // 远程状态优先：它区分了本机三态表达不了的「等远程处理 / 无法连接 / 取消未
+  // 确认」。来源没给状态时回落到通用解析（此时 binding/meta 的三态仍有效）。
+  const remoteStatus = remoteCardStatus(remote?.status)
+  const status =
+    remoteStatus ??
+    resolveDelegationStatus({
+      binding,
+      parsedMeta,
+      toolOutput,
+      state,
+      errorText,
+      childAwaitingUser,
+      ended,
+    })
   // The report is the only source for a call refused before any delegation
   // started (`assistant_not_found`, the companion's local refusals): no
   // binding, no meta.
   const errorCode =
+    remote?.errorCode ??
     binding?.errorCode ??
     parsedMeta?.errorCode ??
     toolOutput?.errorCode ??
@@ -282,12 +355,14 @@ export function useDelegationCardModel(
     errorCode,
     childConversationId,
     childConnectionId,
+    remote,
     // Broker-stamped meta alone is proof enough of a delegation — the
     // persisted Cursor shape has empty raw_input and no live binding. So is a
     // report that named the child: a persisted `resume_delegation` result has
     // no binding and no meta until the DB injection runs, but its
     // `agent_type` / `child_conversation_id` already identify the sub-agent.
     hasModel: Boolean(
+      remote ||
       binding ||
       parsed.agentType ||
       parsed.assistantId ||

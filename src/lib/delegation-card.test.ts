@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { ALL_AGENT_TYPES } from "@/lib/types"
 import {
   coerceAssistantId,
+  coerceRemoteStatus,
   isAffirmedResume,
   isCodeModeDelegationCall,
   isCodeModeDelegationInput,
@@ -10,7 +11,9 @@ import {
   parseDelegateTaskId,
   parseDelegationMeta,
   parseInput,
+  parseRemoteTaskInfo,
   parseToolOutput,
+  remoteCardStatus,
   resolveDelegationStatus,
 } from "./delegation-card"
 
@@ -1091,5 +1094,145 @@ describe("resolveDelegationStatus and a later check", () => {
         ended: { status: "ok" },
       })
     ).toBe("waiting")
+  })
+})
+
+describe("远程委派 meta / 报告", () => {
+  const REMOTE = {
+    connection_id: 7,
+    connection_name: "办公室 Mac mini",
+    run_id: "run-abcdef123456",
+    conversation_id: 512,
+    link: "codeg://session/512",
+    worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+  }
+
+  it("reads the remote block off a cold-load meta and keeps the remote status", () => {
+    const parsed = parseDelegationMeta({
+      "codeg.delegation": {
+        status: "blocked",
+        task_id: "task-1",
+        remote: REMOTE,
+      },
+    })
+    // 远程状态 → 本机三态：blocked 仍在进行。
+    expect(parsed?.status).toBe("running")
+    expect(parsed?.remote).toEqual({
+      connectionId: 7,
+      connectionName: "办公室 Mac mini",
+      runId: "run-abcdef123456",
+      conversationId: 512,
+      link: "codeg://session/512",
+      worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+      status: "blocked",
+    })
+  })
+
+  it("never turns a remote meta into a local child", () => {
+    const parsed = parseDelegationMeta({
+      "codeg.delegation": {
+        status: "completed",
+        remote: REMOTE,
+      },
+    })
+    // 远程任务的 child_* 为空 —— 卡片据此不走本机会话查询。
+    expect(parsed?.childConversationId).toBeNull()
+    expect(parsed?.childConnectionId).toBeNull()
+    expect(parsed?.status).toBe("ok")
+  })
+
+  it.each([
+    ["reserving", "running"],
+    ["blocked", "running"],
+    ["unreachable", "running"],
+    ["completed", "ok"],
+    ["failed", "err"],
+    ["canceled", "err"],
+  ])("maps remote status %s to the card's tri-state %s", (remote, expected) => {
+    const parsed = parseDelegationMeta({
+      "codeg.delegation": { status: remote, remote: REMOTE },
+    })
+    expect(parsed?.status).toBe(expected)
+    expect(parsed?.remote?.status).toBe(remote)
+  })
+
+  it("still refuses a meta whose status it does not know", () => {
+    expect(
+      parseDelegationMeta({
+        "codeg.delegation": { status: "who-knows", remote: REMOTE },
+      })
+    ).toBeNull()
+  })
+
+  it("drops a remote block without a connection id or machine name", () => {
+    const parsed = parseDelegationMeta({
+      "codeg.delegation": {
+        status: "running",
+        remote: { connection_id: 0, connection_name: "x", run_id: "r" },
+      },
+    })
+    expect(parsed?.remote).toBeNull()
+    expect(
+      parseRemoteTaskInfo({ connection_id: 3, connection_name: "  " })
+    ).toBeNull()
+  })
+
+  it("reads the remote block off a running ack and a terminal report", () => {
+    const ack = parseToolOutput(
+      JSON.stringify({ status: "running", task_id: "task-1", remote: REMOTE })
+    )
+    expect(ack?.kind).toBe("ack")
+    expect(ack?.remote?.connectionId).toBe(7)
+    expect(ack?.remote?.status).toBe("running")
+
+    const done = parseToolOutput(
+      JSON.stringify({
+        status: "completed",
+        text: "远程已跑完",
+        remote: REMOTE,
+      })
+    )
+    expect(done?.kind).toBe("outcome")
+    expect(done?.remote?.status).toBe("completed")
+    // 远程会话 id 留在 remote 里，本机 child 字段仍为空。
+    expect(done?.childConversationId).toBeNull()
+  })
+
+  it("keeps the remote block through the MCP CallToolResult envelope", () => {
+    const parsed = parseToolOutput(
+      JSON.stringify({
+        content: [],
+        structuredContent: {
+          status: "failed",
+          error_code: "remote_run_lost",
+          remote: REMOTE,
+        },
+      })
+    )
+    expect(parsed).toMatchObject({
+      kind: "outcome",
+      isError: true,
+      errorCode: "remote_run_lost",
+    })
+    expect(parsed?.remote?.connectionId).toBe(7)
+  })
+
+  it.each([
+    ["reserving", "starting"],
+    ["running", "running"],
+    ["blocked", "waiting"],
+    // unreachable 是非终态：等用户「重新同步」，不判死。
+    ["unreachable", "waiting"],
+    ["completed", "ok"],
+    ["failed", "err"],
+    ["canceled", "err"],
+    [null, null],
+  ] as const)("maps remote status %s to card status %s", (status, expected) => {
+    expect(remoteCardStatus(status)).toBe(expected)
+  })
+
+  it("rejects an unknown remote status string rather than guessing", () => {
+    expect(coerceRemoteStatus("teleported")).toBeNull()
+    expect(coerceRemoteStatus(3)).toBeNull()
   })
 })

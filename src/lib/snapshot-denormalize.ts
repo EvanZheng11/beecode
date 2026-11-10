@@ -1,5 +1,6 @@
 import type {
   ActiveDelegationState,
+  ActiveRemoteDelegationState,
   AsyncTaskRecord,
   AvailableCommandInfo,
   ConfigStaleKind,
@@ -117,6 +118,9 @@ export interface SnapshotPatch {
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** 在飞的远程委派，同样只在 attach 处消费于重放种子（`delegation-seed`）。
+   *  缺失（老后端）按 `[]`。 */
+  activeRemoteDelegations: ActiveRemoteDelegationState[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -189,6 +193,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    activeRemoteDelegations: wire.active_remote_delegations ?? [],
   }
 }
 

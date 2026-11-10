@@ -12,7 +12,12 @@
 
 import { extractEmbeddedJsonObject } from "@/lib/embedded-json"
 import { peelMcpResultEnvelope } from "@/lib/mcp-result-envelope"
-import { ALL_AGENT_TYPES, isCustomAgentType, type AgentType } from "@/lib/types"
+import {
+  ALL_AGENT_TYPES,
+  isCustomAgentType,
+  type AgentType,
+  type RemoteDelegationStatus,
+} from "@/lib/types"
 import {
   type DelegationBinding,
   type DelegationStatus,
@@ -113,6 +118,132 @@ export type ParsedMeta = {
    *  broker write and on the historical injection alike. */
   assistantId: number | null
   assistantName: string | null
+  /** 远程委派信息（冷加载来源：`inject_delegation_meta` 把 `remote_delegation`
+   *  行合并进来）。存在时卡片走远程展示分支，且不再按本机子会话展开。 */
+  remote: RemoteCardInfo | null
+}
+
+/**
+ * 卡片侧归一后的远程信息。字段名转成 camelCase，供 UI 直接用；`status` 为后端
+ * 原始远程状态（`RemoteDelegationStatus`）。
+ */
+export interface RemoteCardInfo {
+  connectionId: number
+  connectionName: string
+  runId: string
+  conversationId: number | null
+  link: string | null
+  worktree: { path: string; branch: string } | null
+  status: RemoteDelegationStatus | null
+}
+
+const REMOTE_STATUSES: ReadonlySet<string> = new Set<RemoteDelegationStatus>([
+  "reserving",
+  "running",
+  "blocked",
+  "unreachable",
+  "completed",
+  "failed",
+  "canceled",
+])
+
+/** 后端给的远程状态字符串，认不出就 `null`（不猜）。 */
+export function coerceRemoteStatus(
+  value: unknown
+): RemoteDelegationStatus | null {
+  return typeof value === "string" && REMOTE_STATUSES.has(value)
+    ? (value as RemoteDelegationStatus)
+    : null
+}
+
+/** 正整数的连接 id（远程连接主键），否则 `null`。 */
+function coerceConnectionId(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number.NaN
+  return Number.isInteger(n) && n >= 1 ? n : null
+}
+
+/**
+ * 归一一段远程任务信息（wire 为 snake_case：meta 的 `remote` 字段、事件载荷、
+ * 报告里的 `remote` 都是同一形状）。连接 id 或机器名缺失时返回 `null` —— 没有
+ * 机器名的「远程」卡片既无法展示也无法跳转，不如退回本机渲染。
+ *
+ * `statusOverride` 让调用方带上同一份 meta / 报告里的状态（`remote` 对象本身
+ * 只描述任务身份）。
+ */
+export function parseRemoteTaskInfo(
+  value: unknown,
+  statusOverride?: unknown
+): RemoteCardInfo | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const obj = value as Record<string, unknown>
+  const connectionId = coerceConnectionId(obj.connection_id)
+  const connectionName =
+    typeof obj.connection_name === "string" ? obj.connection_name.trim() : ""
+  if (connectionId === null || !connectionName) return null
+  const conversationId =
+    typeof obj.conversation_id === "number" &&
+    Number.isInteger(obj.conversation_id)
+      ? obj.conversation_id
+      : null
+  const worktree = parseRemoteWorktree(obj.worktree)
+  return {
+    connectionId,
+    connectionName,
+    runId: typeof obj.run_id === "string" ? obj.run_id : "",
+    conversationId,
+    link: typeof obj.link === "string" && obj.link ? obj.link : null,
+    worktree,
+    status:
+      coerceRemoteStatus(statusOverride) ?? coerceRemoteStatus(obj.status),
+  }
+}
+
+function parseRemoteWorktree(
+  value: unknown
+): { path: string; branch: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const obj = value as Record<string, unknown>
+  const path = typeof obj.path === "string" ? obj.path : ""
+  const branch = typeof obj.branch === "string" ? obj.branch : ""
+  return path || branch ? { path, branch } : null
+}
+
+/**
+ * 远程状态 → 卡片状态（`DelegationCardStatus`）。远程独有的中间态映射到既有
+ * 的 UI 状态上，卡片再按 `remote.status` 给出远程专属文案：
+ *   reserving → starting（远程正在 reserve/start）
+ *   running   → running
+ *   blocked   → waiting（远程在等权限/提问，本机只能提示去远程处理）
+ *   unreachable → waiting（非终态，等用户点「重新同步」）
+ *   completed → ok
+ *   failed / canceled → err
+ */
+export function remoteCardStatus(
+  status: RemoteDelegationStatus | null | undefined
+): DelegationCardStatus | null {
+  switch (status) {
+    case "reserving":
+      return "starting"
+    case "running":
+      return "running"
+    case "blocked":
+    case "unreachable":
+      return "waiting"
+    case "completed":
+      return "ok"
+    case "failed":
+    case "canceled":
+      return "err"
+    default:
+      return null
+  }
+}
+
+/** 远程任务是否已结束（终态）。`unreachable` 不是终态。 */
+export function isRemoteTerminal(
+  status: RemoteDelegationStatus | null | undefined
+): boolean {
+  return status === "completed" || status === "failed" || status === "canceled"
 }
 
 /**
@@ -132,10 +263,18 @@ export function parseDelegationMeta(
   if (!inner || typeof inner !== "object" || Array.isArray(inner)) return null
   const obj = inner as Record<string, unknown>
   const rawStatus = obj["status"]
+  // 远程任务的 meta 写的是远程状态（reserving / blocked / unreachable /
+  // canceled …），它们都还带着一个本机三态的含义：只有 completed 才算成功，
+  // failed / canceled 算失败，其余仍在进行（unreachable 非终态）。原有取值一个
+  // 都不变；认不出的字符串仍旧拒绝，避免误解一份陌生 meta。
+  const remoteStatus = coerceRemoteStatus(rawStatus ?? obj["remote_status"])
   let status: DelegationStatus
   switch (rawStatus) {
     case "running":
     case "pending":
+    case "reserving":
+    case "blocked":
+    case "unreachable":
       status = "running"
       break
     case "completed":
@@ -144,6 +283,7 @@ export function parseDelegationMeta(
       break
     case "failed":
     case "err":
+    case "canceled":
       status = "err"
       break
     default:
@@ -167,6 +307,7 @@ export function parseDelegationMeta(
     agentType: coerceAgentType(obj["agent_type"]),
     assistantId: coerceAssistantId(obj["assistant_id"]),
     assistantName: coerceAssistantName(obj["assistant_name"]),
+    remote: parseRemoteTaskInfo(obj["remote"], remoteStatus),
   }
 }
 
@@ -1151,7 +1292,8 @@ export type ParsedToolOutput =
       childConversationId: number | null
       agentType?: AgentType | null
       errorCode?: string | null
-    } & ReportedAssistant)
+    } & ReportedAssistant &
+      ReportedRemote)
   | ({
       kind: "outcome"
       text: string
@@ -1159,13 +1301,20 @@ export type ParsedToolOutput =
       childConversationId: number | null
       agentType?: AgentType | null
       errorCode?: string | null
-    } & ReportedAssistant)
+    } & ReportedAssistant &
+      ReportedRemote)
 
 /** The assistant a broker report names (`DelegationTaskReport.assistant_id` /
  *  `assistant_name`); absent on the text fallbacks. */
 type ReportedAssistant = {
   assistantId?: number | null
   assistantName?: string | null
+}
+
+/** 远程委派信息（`DelegationTaskReport.remote`，字段 snake_case）。运行中的
+ *  ack 与终态报告都带它 —— 这正是实时事件之外的第二个来源。 */
+type ReportedRemote = {
+  remote?: RemoteCardInfo | null
 }
 
 /**
@@ -1321,6 +1470,11 @@ function interpretReport(
     assistantId: coerceAssistantId(obj.assistant_id),
     assistantName: coerceAssistantName(obj.assistant_name),
   }
+  // 远程委派：报告里的 `remote` 描述任务落在哪台机器/哪个 run，报告自身的
+  // `status` 就是它的远程状态（ack 时是 running，终态报告里是终态）。没有远程
+  // 信息时整个字段都不出现，本机报告的形状保持不变。
+  const remoteInfo = parseRemoteTaskInfo(obj.remote, obj.status)
+  const remote: ReportedRemote = remoteInfo ? { remote: remoteInfo } : {}
   // Carried on EVERY variant, not just the failed ones: a refused resume pairs
   // `not_resumable` with the task's real status, so the code is the only thing
   // that distinguishes it from the report of a genuine resume. See
@@ -1338,6 +1492,7 @@ function interpretReport(
           agentType,
           errorCode,
           ...assistant,
+          ...remote,
         }
       case "completed":
         return {
@@ -1348,6 +1503,7 @@ function interpretReport(
           agentType,
           errorCode,
           ...assistant,
+          ...remote,
         }
       case "failed":
       case "canceled": {
@@ -1361,6 +1517,7 @@ function interpretReport(
           agentType,
           errorCode,
           ...assistant,
+          ...remote,
         }
       }
       default:
@@ -1370,6 +1527,7 @@ function interpretReport(
           agentType,
           errorCode,
           ...assistant,
+          ...remote,
         }
     }
   }
@@ -1389,6 +1547,7 @@ function interpretReport(
       agentType,
       errorCode: null,
       ...assistant,
+      ...remote,
     }
   }
   if (kind === "err") {
@@ -1403,6 +1562,7 @@ function interpretReport(
       childConversationId,
       agentType,
       ...assistant,
+      ...remote,
     }
   }
   return null

@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -25,6 +32,30 @@ import { mockTruncateLayout } from "@/test-layout"
 vi.mock("@/hooks/use-delegated-sub-session", () => ({
   useDelegatedSubSession: vi.fn(),
 }))
+
+// 远程委派卡片只经这层前端封装跳转/重新同步，不碰任何 Rust 命令。
+const remoteMocks = vi.hoisted(() => ({
+  openRemoteWorkspace:
+    vi.fn<
+      (id: number, target?: { conversationId?: number | null }) => Promise<void>
+    >(),
+  listRemoteWorkspaceConnections: vi.fn<() => Promise<Array<{ id: number }>>>(),
+  resyncRemoteDelegation:
+    vi.fn<(taskId: string, connectionId?: number | null) => Promise<void>>(),
+}))
+vi.mock("@/lib/remote-workspace", () => remoteMocks)
+const { openRemoteWorkspace: mockOpenRemoteWorkspace } = remoteMocks
+const { listRemoteWorkspaceConnections: mockListRemoteConnections } =
+  remoteMocks
+const { resyncRemoteDelegation: mockResyncRemoteDelegation } = remoteMocks
+
+// 远程卡片只在本机桌面窗口提供跳转/重新同步入口。
+const platformState = vi.hoisted(() => ({ localDesktop: true }))
+vi.mock("@/lib/platform", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/platform")>("@/lib/platform")
+  return { ...actual, isLocalDesktop: () => platformState.localDesktop }
+})
 
 // The row reads the live binding from the delegation hook (mocked above) and
 // whether the child is parked on a decision from the connections store.
@@ -892,5 +923,271 @@ describe("delegation row: the task it was handed", () => {
       })
     )
     expect(toggle()).toBeNull()
+  })
+})
+
+/**
+ * 远程委派卡片（rmdl001004）：三种数据来源都要显示远程机器/状态/结果预览，
+ * 远程会话跳转必须走远程窗口而不是本机子会话，连接删掉后按钮禁用，
+ * `unreachable` 给出「重新同步」入口。
+ *
+ * 这些用例只验证前端契约：`remote_delegation_*` 事件与后端 `remote` 字段由
+ * RM01/RM03 提供（本分支尚未合入），因此全部以 fixture 驱动。
+ */
+describe("delegation row: 远程委派卡片", () => {
+  const REMOTE = {
+    connection_id: 7,
+    connection_name: "办公室 Mac mini",
+    run_id: "run-abcdef123456",
+    conversation_id: 512,
+    link: "codeg://session/512",
+    worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+  }
+
+  // RM02 统一加入的文案键（本分支尚未合入）：测试里补齐，断言才读得懂。
+  const messagesWithRemoteKeys = {
+    ...enMessages,
+    Folder: {
+      ...enMessages.Folder,
+      chat: {
+        ...enMessages.Folder.chat,
+        delegation: {
+          ...enMessages.Folder.chat.delegation,
+          remoteLabel: "Remote · {name}",
+          remoteGoToSession: "Open remote session",
+          remoteHandleThere: "Handle it on the remote machine",
+          remoteCancelUnconfirmed: "Cancel not confirmed by the remote",
+          remoteUnreachable: "Can't reach the remote",
+          remoteResync: "Resync",
+          remoteConnectionDeleted: "Remote connection deleted",
+          remoteOpenFailed: "Couldn't open the remote window",
+          remoteResyncFailed: "Couldn't resync",
+        },
+      },
+    },
+  } as typeof enMessages
+
+  /**
+   * 远程卡片挂载后会异步查一次保存的连接（判断是否已被删除）。等它落地再断言，
+   * 免得 setState 落在 act 之外。
+   */
+  async function renderRemoteRow(part: AdaptedContentPart) {
+    const result = render(
+      <NextIntlClientProvider locale="en" messages={messagesWithRemoteKeys}>
+        <ContentPartsRenderer parts={[part]} role="assistant" />
+      </NextIntlClientProvider>
+    )
+    await act(async () => {})
+    return result
+  }
+
+  function remoteBinding(overrides: Record<string, unknown> = {}) {
+    return bindingOf({
+      status: "running",
+      childConnectionId: null,
+      childConversationId: null,
+      taskId: "task-1",
+      task: "在远端跑 pnpm build",
+      remote: {
+        connectionId: 7,
+        connectionName: "办公室 Mac mini",
+        runId: "run-abcdef123456",
+        conversationId: 512,
+        link: "codeg://session/512",
+        worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+        status: "running",
+        blockedOn: null,
+        resultPreview: null,
+        errorCode: null,
+        durationMs: null,
+        ...overrides,
+      },
+    })
+  }
+
+  beforeEach(async () => {
+    const mod =
+      await import("@/components/message/activity/rows/delegation-rows")
+    mod.resetRemoteConnectionIdsCache()
+    mockOpenRemoteWorkspace.mockReset()
+    mockListRemoteConnections.mockReset()
+    mockResyncRemoteDelegation.mockReset()
+    mockOpenRemoteWorkspace.mockResolvedValue(undefined)
+    mockResyncRemoteDelegation.mockResolvedValue(undefined)
+    mockListRemoteConnections.mockResolvedValue([{ id: 7 }])
+  })
+
+  it("实时来源：显示远程机器、状态与「查看会话」，且不提供本机子会话入口", async () => {
+    bind(remoteBinding())
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+
+    expect(screen.getByTestId("delegation-remote-label")).toHaveTextContent(
+      "Remote · 办公室 Mac mini"
+    )
+    // 本机子会话的两个入口都不该出现：无论「Open conversation」还是子会话抽屉。
+    expect(
+      screen.queryByRole("button", { name: /Open conversation/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId("sub-agent-session-dialog")
+    ).not.toBeInTheDocument()
+
+    const jump = await screen.findByTestId("delegation-remote-jump")
+    fireEvent.click(jump)
+    // 打开/聚焦该连接的远程窗口，并带上远程会话 id 定位。
+    expect(mockOpenRemoteWorkspace).toHaveBeenCalledWith(7, {
+      conversationId: 512,
+    })
+  })
+
+  it("刷新重放来源（快照 meta）：冷加载也能显示远程身份并跳转", async () => {
+    await renderRemoteRow(
+      delegation({
+        input: "{}",
+        state: "output-available",
+        meta: {
+          "codeg.delegation": {
+            status: "completed",
+            task_preview: "在远端跑 pnpm build",
+            task_id: "task-1",
+            remote: REMOTE,
+          },
+        },
+      })
+    )
+
+    expect(screen.getByTestId("delegation-remote-label")).toHaveTextContent(
+      "办公室 Mac mini"
+    )
+    expect(screen.getByText("在远端跑 pnpm build")).toBeInTheDocument()
+    const jump = await screen.findByTestId("delegation-remote-jump")
+    fireEvent.click(jump)
+    expect(mockOpenRemoteWorkspace).toHaveBeenCalledWith(7, {
+      conversationId: 512,
+    })
+  })
+
+  it("工具输出来源：报告里的 remote 同样识别为远程任务", async () => {
+    await renderRemoteRow(
+      delegation({
+        id: "delegation-remote-1",
+        input: "{}",
+        state: "output-available",
+        output: JSON.stringify({
+          status: "completed",
+          text: "构建通过",
+          task_id: "task-1",
+          remote: REMOTE,
+        }),
+      })
+    )
+    expect(screen.getByTestId("delegation-remote-label")).toHaveTextContent(
+      "办公室 Mac mini"
+    )
+    // 本机 child 字段为空 → 不会去查本机会话，也没有本机会话按钮。
+    expect(
+      screen.queryByRole("button", { name: /Open conversation/ })
+    ).not.toBeInTheDocument()
+  })
+
+  it("显示远程结果预览", async () => {
+    bind(remoteBinding({ status: "completed", resultPreview: "构建通过" }))
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(screen.getByText("构建通过")).toBeInTheDocument()
+  })
+
+  it("远程在等权限：提示去远程处理", async () => {
+    bind(remoteBinding({ status: "blocked", blockedOn: "permission" }))
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(
+      await screen.findByTestId("delegation-remote-handle-there")
+    ).toHaveTextContent("Handle it on the remote machine")
+  })
+
+  it("取消可能没被远程确认：明确说明风险", async () => {
+    bind(remoteBinding({ status: "canceled" }))
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(
+      await screen.findByTestId("delegation-remote-cancel-unconfirmed")
+    ).toBeInTheDocument()
+  })
+
+  it("无法连接：给出「重新同步」入口并触发接入点", async () => {
+    bind(remoteBinding({ status: "unreachable" }))
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+
+    expect(
+      await screen.findByTestId("delegation-remote-unreachable")
+    ).toBeInTheDocument()
+    const resync = screen.getByTestId("delegation-remote-resync")
+    // 点击会先置「同步中」，promise 落地后再复位：一起放进 act 里。
+    await act(async () => {
+      fireEvent.click(resync)
+    })
+    expect(mockResyncRemoteDelegation).toHaveBeenCalledWith("task-1", 7)
+  })
+
+  it("连接已被删除：跳转按钮禁用并说明原因", async () => {
+    mockListRemoteConnections.mockResolvedValue([])
+    bind(remoteBinding())
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+
+    const jump = await screen.findByTestId("delegation-remote-jump")
+    await waitFor(() => expect(jump).toBeDisabled())
+    expect(jump).toHaveTextContent("Remote connection deleted")
+    fireEvent.click(jump)
+    expect(mockOpenRemoteWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe("delegation row: 远程跳转的桌面范围", () => {
+  it("浏览器 / 远程窗口里不给跳转与重新同步按钮，但仍说明远程状态", async () => {
+    const rows =
+      await import("@/components/message/activity/rows/delegation-rows")
+    rows.resetRemoteConnectionIdsCache()
+    platformState.localDesktop = false
+    try {
+      bind(
+        bindingOf({
+          status: "running",
+          childConnectionId: null,
+          childConversationId: null,
+          taskId: "task-1",
+          remote: {
+            connectionId: 7,
+            connectionName: "办公室 Mac mini",
+            runId: "run-abcdef123456",
+            conversationId: 512,
+            link: null,
+            worktree: null,
+            status: "unreachable",
+            blockedOn: null,
+            resultPreview: null,
+            errorCode: null,
+            durationMs: null,
+          },
+        })
+      )
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ContentPartsRenderer
+            parts={[delegation({ id: "pt-1", input: "{}" })]}
+            role="assistant"
+          />
+        </NextIntlClientProvider>
+      )
+      // 状态提示仍在，只是没有可点的本机能力。
+      expect(
+        await screen.findByTestId("delegation-remote-unreachable")
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByTestId("delegation-remote-jump")
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId("delegation-remote-resync")
+      ).not.toBeInTheDocument()
+    } finally {
+      platformState.localDesktop = true
+    }
   })
 })
