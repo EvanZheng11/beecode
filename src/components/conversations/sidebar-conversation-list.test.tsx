@@ -551,8 +551,9 @@ describe("SidebarConversationList — 三天自动归档", () => {
     act(() => vi.advanceTimersByTime(MINUTE))
     expect(screen.queryAllByText("conv-11")).toHaveLength(0)
     expect(
-      screen.getByText(enMessages.Folder.sidebar.archivedConversationsHint)
-    ).toBeTruthy()
+      screen.queryByText(enMessages.Folder.sidebar.archivedConversationsHint)
+    ).toBeNull()
+    expect(virtuaCtl.rowKinds).not.toContain("empty")
   })
 
   it("归档会话收到新更新时间后自动回到目录", () => {
@@ -2350,11 +2351,7 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
     expect(text).not.toContain("[ wt-feature ]")
   })
 
-  it("keeps the connector spine continuous through an empty worktree sub-group", () => {
-    // Add a second worktree (folder 3) with NO conversations → it renders the
-    // empty-folder hint. That empty row must still draw the container spine
-    // (ancestor rail) so the vertical connector doesn't break at "no
-    // conversations".
+  it("空 worktree 保留标题，不显示提示或占用虚拟列表行", () => {
     const wtEmpty = {
       ...folder(3, "wt-empty", 1),
       git_branch: "feature-y",
@@ -2366,14 +2363,11 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
     })
     render(wtTree(true))
 
-    const hint = enMessages.Folder.sidebar.emptyFolderHint
-    const hintSpan = Array.from(document.querySelectorAll("span")).find(
-      (s) => s.textContent === hint
-    )
-    expect(hintSpan).toBeTruthy()
-    // The empty row (the hint span's row container) carries an ancestor rail.
-    const row = hintSpan!.closest("div")
-    expect(row?.querySelector("[data-subsession-rail]")).not.toBeNull()
+    expect(document.querySelector('[data-folder-id="3"]')).not.toBeNull()
+    expect(
+      screen.queryByText(enMessages.Folder.sidebar.emptyFolderHint)
+    ).toBeNull()
+    expect(virtuaCtl.rowKinds).not.toContain("empty")
   })
 
   it("keeps the single-status-event budget (1 card, 0 headers) with worktrees on", () => {
@@ -3072,17 +3066,17 @@ describe("SidebarConversationList — folder groups", () => {
     expect(labels).toEqual(["folder:1", "group:7", "folder:5", "folder:9"])
   })
 
-  it("shows the empty hint for a group with no folders", () => {
+  it("空分组只保留标题，不显示提示或占用虚拟列表行", () => {
     useAppWorkspaceStore.setState({
       folders: [],
       allFolders: [],
       folderGroups: [group(7, "Work", 1)],
       conversations: [conv(11, 1)],
     })
-    const { getByText } = render(tree())
-    // A freshly created group is empty and must still render something to
-    // drag into.
-    expect(getByText("No folders in this group")).not.toBeNull()
+    const { getByText, queryByText } = render(tree())
+    expect(getByText("Work")).not.toBeNull()
+    expect(queryByText("No folders in this group")).toBeNull()
+    expect(virtuaCtl.rowKinds).not.toContain("group-empty")
   })
 
   it("collapsing a group hides its members and persists the state", () => {
@@ -3516,11 +3510,32 @@ describe("SidebarConversationList — folder and title search", () => {
       expect(container.querySelector('[data-folder-id="3"]')).not.toBeNull()
       expect(container.querySelector('[data-folder-id="2"]')).toBeNull()
       expect(shownIds(container)).toEqual([])
+      expect(
+        screen.queryByText(enMessages.Folder.sidebar.emptyFolderHint)
+      ).toBeNull()
+      expect(virtuaCtl.rowKinds).not.toContain("empty")
       rerender(search("   "))
       expect(shownIds(container).sort()).toEqual([11, 21, 31, 41])
       expect(container.querySelector('[data-folder-id="2"]')).not.toBeNull()
     }
   )
+
+  it("普通空文件夹及会话全部被完成状态过滤时不显示下级占位行", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [conv(12, 1, { status: "completed" })],
+    })
+    const { container } = render(search(""))
+    expect(container.querySelector('[data-folder-id="1"]')).not.toBeNull()
+    expect(container.querySelector('[data-folder-id="3"]')).not.toBeNull()
+    expect(shownIds(container)).toEqual([])
+    expect(
+      screen.queryByText(enMessages.Folder.sidebar.emptyFolderHint)
+    ).toBeNull()
+    expect(
+      screen.queryByText(enMessages.Folder.sidebar.noUnfinishedConversations)
+    ).toBeNull()
+    expect(virtuaCtl.rowKinds).not.toContain("empty")
+  })
 
   it("intersects folder matches with tags and hides empty tag results", () => {
     const { container, rerender } = render(

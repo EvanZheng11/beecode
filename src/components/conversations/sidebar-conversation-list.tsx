@@ -1641,24 +1641,6 @@ export function SidebarConversationList({
     return map
   }, [conversations, displayChildToParent])
 
-  const autoArchivedFolderIds = useMemo(() => {
-    const ids = new Set<number>()
-    if (!showArchived) {
-      for (const conv of conversations) {
-        if (conversationArchiveReason(conv, now, conversationArchive)) {
-          ids.add(displayChildToParent.get(conv.folder_id) ?? conv.folder_id)
-        }
-      }
-    }
-    return ids
-  }, [
-    conversations,
-    displayChildToParent,
-    showArchived,
-    now,
-    conversationArchive,
-  ])
-
   // Running (`in_progress`) sessions per display group — what the folder header
   // badge shows. Counted off the FULL conversation list rather than `byFolder`
   // on purpose: the badge answers "is there work running in here", so neither
@@ -1782,7 +1764,10 @@ export function SidebarConversationList({
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: filterNarrowed,
         retainedFolderIds,
-      }),
+      }).filter(
+        // 在虚拟化之前移除空提示，避免只隐藏文字却仍占用一行高度。
+        (row) => row.kind !== "empty" && row.kind !== "group-empty"
+      ),
     [
       pinned,
       pinnedExpanded,
@@ -3261,20 +3246,7 @@ export function SidebarConversationList({
         />
       )
     }
-    if (row.kind === "group-empty") {
-      // Folderless hint at the member indent (depth 1), so it reads as being
-      // INSIDE the group rather than as another top-level row.
-      return (
-        <div
-          className="flex h-[2rem] items-center text-xs text-muted-foreground/70"
-          style={{
-            paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${CONV_RAIL_DEPTH_STEP})`,
-          }}
-        >
-          <span className="truncate">{t("folderGroup.empty")}</span>
-        </div>
-      )
-    }
+    if (row.kind === "empty" || row.kind === "group-empty") return null
     if (row.kind === "folder") {
       return folderHeaderElement(row.folderId, {
         dragging: dragging?.kind === "folder" && dragging.id === row.folderId,
@@ -3297,39 +3269,6 @@ export function SidebarConversationList({
         grip: false,
         rootGroup: true,
       })
-    }
-    if (row.kind === "empty") {
-      // A worktree / root sub-group's empty hint is indented one level below
-      // its folder header, exactly where that header's sessions would start —
-      // so its text lines up with them. A plain folder's hint is likewise one
-      // level below its own (depth-0) header. Group membership adds another
-      // level on top, exactly as it does for the header.
-      const nested =
-        showWorktrees &&
-        (childToParent.has(row.folderId) || containerRepoIds.has(row.folderId))
-      const depth = (nested ? 1 : 0) + groupDepth(row.folderId) + 1
-      return (
-        // Full row height (h-[2rem], the fixed virtua item size) so the container
-        // connector spine stays continuous THROUGH an empty sub-group ("no
-        // conversations") instead of breaking at a shorter box. The hint always
-        // sits one level below its folder header, so the ancestor rail runs
-        // through it and keeps that folder's spine going.
-        <div
-          className="relative flex h-[2rem] items-center text-xs text-muted-foreground/70"
-          style={{
-            paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
-          }}
-        >
-          <SubsessionAncestorRails depth={depth} />
-          <span className="relative truncate">
-            {row.totalConversationCount === 0
-              ? t("emptyFolderHint")
-              : autoArchivedFolderIds.has(row.folderId)
-                ? t("archivedConversationsHint")
-                : t("noUnfinishedConversations")}
-          </span>
-        </div>
-      )
     }
     if (row.kind === "chats-empty") {
       // Folderless flat hint — no themeWrap, no conversation rail; align with the
