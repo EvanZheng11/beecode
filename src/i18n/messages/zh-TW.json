@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "mentionGroupRemote": "遠端",
+        "remoteSnapshotPreparing": "正在取得遠端檔案（{count}）…",
+        "remoteSnapshotDegraded": "部分遠端檔案未能取得：{reason}"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "助手 #{id}",
-        "deletedAssistant": "（已刪除）"
+        "deletedAssistant": "（已刪除）",
+        "remoteLabel": "遠端 · {name}",
+        "remoteGoToSession": "檢視遠端工作階段",
+        "remoteHandleThere": "請到遠端處理",
+        "remoteCancelUnconfirmed": "遠端未確認取消",
+        "remoteUnreachable": "無法連線遠端",
+        "remoteResync": "重新同步",
+        "remoteConnectionDeleted": "遠端連線已刪除",
+        "remoteOpenFailed": "無法開啟遠端工作區",
+        "remoteResyncFailed": "重新同步失敗"
       },
       "contentParts": {
         "offset": "位移：{offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "無法開啟遠端工作區",
     "restoreFailed": "無法重新開啟遠端工作區「{name}」",
     "connectionLoadFailed": "無法載入遠端連線：{message}",
-    "connectionExpired": "遠端連線「{name}」已失效。請更新它的 Token，然後重新載入此視窗。"
+    "connectionExpired": "遠端連線「{name}」已失效。請更新它的 Token，然後重新載入此視窗。",
+    "publicHttpWarning": "此位址會透過公網以明文傳送 token（http://），建議改用 https:// 或加密通道。"
+  },
+  "RemoteMention": {
+    "kindFile": "檔案",
+    "kindSession": "工作階段",
+    "kindAssistant": "助手",
+    "kindAgent": "智能體",
+    "offline": "離線",
+    "tokenInvalid": "token 無效",
+    "probing": "檢查中…",
+    "runUnsupported": "遠端不支援執行智能體",
+    "back": "返回",
+    "loading": "載入中…",
+    "retry": "重試",
+    "noConnections": "尚無遠端連線",
+    "empty": "沒有可選項目",
+    "truncated": "結果過多，請輸入更精確的關鍵字",
+    "loadFailed": "載入失敗",
+    "timeout": "載入逾時，請重試",
+    "connectionMissing": "該遠端連線已不存在",
+    "expired": "已失效"
   },
   "ServerFileBrowser": {
     "title": "選擇伺服器檔案",

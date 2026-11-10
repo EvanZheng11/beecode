@@ -1,3 +1,4 @@
+import type { RemoteMentionKind } from "@/lib/remote-mention"
 import type { AgentType } from "@/lib/types"
 
 /** The kinds of inline reference the composer can embed. */
@@ -8,6 +9,7 @@ export type ReferenceKind =
   | "session"
   | "commit"
   | "skill"
+  | "remote"
 
 export const REFERENCE_KINDS: readonly ReferenceKind[] = [
   "file",
@@ -16,6 +18,7 @@ export const REFERENCE_KINDS: readonly ReferenceKind[] = [
   "session",
   "commit",
   "skill",
+  "remote",
 ]
 
 /**
@@ -70,6 +73,27 @@ export interface ReferenceMeta {
    * `/` when absent.
    */
   invocationPrefix?: "/" | "$"
+  /**
+   * remote: which of the four remote resource types the reference points at.
+   * Read by the badge icon; the URI itself carries the same information, so a
+   * reference restored from a transcript (where meta is absent) re-derives it
+   * from `parseRemoteMentionUri`.
+   */
+  remoteKind?: RemoteMentionKind
+  /** remote: local `remote_workspace_connection.id`. */
+  remoteConnectionId?: number
+  /** remote: connection name for the badge label (`机器名:路径`), display only. */
+  remoteConnectionName?: string
+  /** remote: remote `folder.id` (the project the resource lives in). */
+  remoteFolderId?: number
+  /** remote: remote project path, display only — never part of the identity. */
+  remoteFolderPath?: string
+  /**
+   * remote: the connection no longer exists on this device, so the badge reads
+   * as expired. Set by the surfaces that can resolve the connection list (see
+   * `useRemoteMentionConnectionState`); never persisted.
+   */
+  remoteMissing?: boolean
 }
 
 /**

@@ -14,12 +14,14 @@ import { createPortal } from "react-dom"
 
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { MENTION_TAB_KINDS } from "@/lib/mention-panel-prefs"
+import { isLocalDesktop } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 
 import { ReferenceIcon } from "../badges/reference-badge"
 import type { ReferenceAttrs, ReferenceKind } from "../types"
 import type { MentionRenderState } from "./mention-suggestion"
 import { placeAnchoredPopup, readViewport } from "./popup-position"
+import { RemoteNavigator, type RemoteNavigatorHandle } from "./remote-navigator"
 import type {
   ReferenceSearch,
   SuggestionGroup,
@@ -37,6 +39,7 @@ const DEFAULT_TAB_LABELS: Record<ReferenceKind, string> = {
   session: "Sessions",
   commit: "Commits",
   skill: "Skills",
+  remote: "Remote",
 }
 
 // Commit-synchronous in the browser so the panel is positioned before paint (no
@@ -129,6 +132,14 @@ export interface SuggestionPopupProps {
    * `aria-activedescendant`. Must be referentially stable.
    */
   onActiveOptionChange?: (optionId: string | null) => void
+  /**
+   * Whether the "Remote" tab is offered. Defaults to the design's rule
+   * (`isDesktop() && !isRemoteDesktopMode()`, 设计 5.5): a remote-desktop window
+   * runs everything on the far machine, which knows nothing about this device's
+   * connections, and web mode has no connection data at all. Overridable so
+   * tests (and any future host) can pin it.
+   */
+  remoteAvailable?: boolean
 }
 
 /**
@@ -158,13 +169,26 @@ export const SuggestionPopup = forwardRef<
     tabs = MENTION_TAB_KINDS,
     anchorRef,
     onActiveOptionChange,
+    remoteAvailable,
   },
   ref
 ) {
+  // The remote tab only exists where a local connection list does (设计 5.5).
+  const remoteTabAllowed = remoteAvailable ?? isLocalDesktop()
   // Never an empty strip: with no tab there would be no active tab to show,
   // select from or switch away from. (The stored preference can't express
   // this — the file tab is pinned — so it only guards a bad prop.)
-  const tabOrder = tabs.length > 0 ? tabs : MENTION_TAB_KINDS
+  // Memoized: `tabOrder` is a dependency of the fetch effect, so a fresh array
+  // per render would re-run every search.
+  const tabOrder = useMemo<readonly ReferenceKind[]>(() => {
+    const requested: readonly ReferenceKind[] =
+      tabs.length > 0 ? tabs : MENTION_TAB_KINDS
+    const allowed = requested.filter(
+      (kind) => kind !== "remote" || remoteTabAllowed
+    )
+    // Filtering the remote tab out of a one-tab strip would leave nothing.
+    return allowed.length > 0 ? allowed : MENTION_TAB_KINDS
+  }, [tabs, remoteTabAllowed])
   // Results are tagged with the query they answer and the tabs they were fetched
   // for. A tab whose results don't answer the live query (initial mount, or
   // mid-debounce after the query changed) — or that wasn't shown when they were
@@ -197,6 +221,9 @@ export const SuggestionPopup = forwardRef<
   // brings it back exactly as the in-tree `/` menu does.
   const [anchorHidden, setAnchorHidden] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  // The remote tab owns its own four-level navigation, so keys and the active
+  // option id come from it rather than from the flat group list below.
+  const remoteRef = useRef<RemoteNavigatorHandle>(null)
   const fresh = result.query === state.query
   const isLoaded = (kind: ReferenceKind) => fresh && result.kinds.includes(kind)
 
@@ -247,6 +274,9 @@ export const SuggestionPopup = forwardRef<
       ? pinnedTab
       : firstNonEmpty
   const stale = !isLoaded(activeTab)
+  // The remote tab is a nested navigator (connections → projects → kinds →
+  // resources), not a flat group, so it renders and handles keys itself.
+  const remoteActive = activeTab === "remote" && remoteTabAllowed
   const activeGroup = useMemo(
     () => (stale ? null : (groupByKind.get(activeTab) ?? null)),
     [stale, groupByKind, activeTab]
@@ -268,13 +298,23 @@ export const SuggestionPopup = forwardRef<
 
   // Mirror the active option's id to the host (→ editor `aria-activedescendant`).
   // Null while nothing is selectable (loading / no matches in the active tab).
+  // The remote navigator reports its own ids (they name the level), so this
+  // effect stands down while that tab is active — two writers would race.
   useEffect(() => {
+    if (remoteActive) return
     onActiveOptionChange?.(
       stale || flat.length === 0
         ? null
         : mentionOptionId(activeTab, selectedIndex)
     )
-  }, [activeTab, selectedIndex, flat.length, stale, onActiveOptionChange])
+  }, [
+    activeTab,
+    selectedIndex,
+    flat.length,
+    stale,
+    onActiveOptionChange,
+    remoteActive,
+  ])
 
   // Position the panel within the viewport. Measure the rendered panel (a
   // `visibility:hidden` box still has layout), read the *live* anchor — the
@@ -419,6 +459,10 @@ export const SuggestionPopup = forwardRef<
         // a CJK candidate arrives after `compositionend`, so the plugin's
         // `allow` gate has already reopened and only the event itself says so.
         if (isImeCompositionKey(event)) return false
+        // The remote tab first: it owns ↑/↓/Enter/→/←/Backspace/Esc inside its
+        // own levels. Anything it declines (Tab, plain typing) falls through to
+        // the tab strip / editor below.
+        if (remoteActive && remoteRef.current?.onKeyDown(event)) return true
         switch (event.key) {
           case "ArrowDown":
             if (flat.length > 0) {
@@ -468,7 +512,16 @@ export const SuggestionPopup = forwardRef<
         }
       },
     }),
-    [flat, selectedIndex, activeTab, tabOrder, onSelect, onClose, state.range]
+    [
+      flat,
+      selectedIndex,
+      activeTab,
+      tabOrder,
+      onSelect,
+      onClose,
+      state.range,
+      remoteActive,
+    ]
   )
 
   const activeLabel = tabLabels[activeTab]
@@ -571,100 +624,118 @@ export const SuggestionPopup = forwardRef<
             )
           })}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-1">
-          {/* Status text lives *outside* the listbox: a listbox may only own
-              options. (The sr-only live region below announces it to AT.) */}
-          {stale ? (
-            <div className="px-2 py-3 text-sm text-muted-foreground">
-              {loadingLabel}
-            </div>
-          ) : flat.length === 0 ? (
-            <div className="px-2 py-3 text-sm text-muted-foreground">
-              {emptyLabel}
-            </div>
-          ) : null}
-          {/* Always rendered (even empty) so the editor's `aria-controls` target
-              always resolves; holds only option children for the active tab. */}
-          <div
-            id={MENTION_LISTBOX_ID}
-            role="listbox"
-            aria-label={`${listboxLabel}: ${activeLabel}`}
-          >
-            {!stale &&
-              activeGroup?.items.map((item, index) => {
-                const active = index === selectedIndex
-                return (
-                  <button
-                    key={`${activeGroup.kind}:${item.reference.id}`}
-                    type="button"
-                    id={mentionOptionId(activeGroup.kind, index)}
-                    role="option"
-                    aria-selected={active}
-                    data-active={active}
-                    className={cn(
-                      // `text-start`, not `text-left`: the panel portals to
-                      // `body`, so under Arabic (`dir="rtl"`) a physical
-                      // left-align would pin the grown detail's text to the far
-                      // edge of its box — the very void this row layout removes,
-                      // mirrored.
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm",
-                      active
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50"
-                    )}
-                    onMouseDown={(event) => {
-                      // Keep editor focus; insert on click.
-                      event.preventDefault()
-                      onSelect(item.reference, state.range)
-                    }}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                  >
-                    <ReferenceIcon data={item.reference} variant="option" />
-                    {/* Label at its content width (shrinking + truncating only
-                        when the row is too narrow), detail packed right after
-                        it. The panel is as wide as the composer, so a stretched
-                        label used to shove the detail against the far edge —
-                        and a hard cap on the detail truncated it there even
-                        with hundreds of spare pixels beside it. The detail now
-                        takes the slack instead; its basis floor keeps it
-                        readable next to a long label rather than shrinking it
-                        away to nothing. Same reading order as the `/` panel's
-                        skill rows. */}
-                    <span
-                      className="min-w-0 truncate"
-                      title={item.reference.label || item.reference.id}
-                    >
-                      {item.reference.label || item.reference.id}
-                    </span>
-                    {item.detail && (
-                      <span
-                        className="min-w-0 grow basis-24 truncate text-xs text-muted-foreground"
-                        title={item.detail}
-                      >
-                        {item.detail}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-          </div>
-          {truncated && (
-            // aria-hidden: a visual "refine" affordance, not an option — keeps
-            // the listbox owning only options (the live region conveys
-            // truncation to AT). Never enters `flat`, so Enter can't select it.
+        {remoteActive ? (
+          // 远程 tab：连接 → 项目 → 类型 → 资源 的四层导航，自带键盘与 ARIA
+          // （设计 4.1.2.1 / 5.4）。
+          <RemoteNavigator
+            ref={remoteRef}
+            query={state.query}
+            onSelect={onSelect}
+            onClose={onClose}
+            onActiveOptionChange={onActiveOptionChange}
+            range={state.range}
+            listboxLabel={`${listboxLabel}: ${tabLabels.remote}`}
+            listboxId={MENTION_LISTBOX_ID}
+          />
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto p-1">
+            {/* Status text lives *outside* the listbox: a listbox may only own
+                options. (The sr-only live region below announces it to AT.) */}
+            {stale ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">
+                {loadingLabel}
+              </div>
+            ) : flat.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">
+                {emptyLabel}
+              </div>
+            ) : null}
+            {/* Always rendered (even empty) so the editor's `aria-controls`
+                target always resolves; holds only option children for the
+                active tab. */}
             <div
-              aria-hidden
-              className="px-2 py-1 text-xs italic text-muted-foreground"
+              id={MENTION_LISTBOX_ID}
+              role="listbox"
+              aria-label={`${listboxLabel}: ${activeLabel}`}
             >
-              {moreLabel}
+              {!stale &&
+                activeGroup?.items.map((item, index) => {
+                  const active = index === selectedIndex
+                  return (
+                    <button
+                      key={`${activeGroup.kind}:${item.reference.id}`}
+                      type="button"
+                      id={mentionOptionId(activeGroup.kind, index)}
+                      role="option"
+                      aria-selected={active}
+                      data-active={active}
+                      className={cn(
+                        // `text-start`, not `text-left`: the panel portals to
+                        // `body`, so under Arabic (`dir="rtl"`) a physical
+                        // left-align would pin the grown detail's text to the far
+                        // edge of its box — the very void this row layout removes,
+                        // mirrored.
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm",
+                        active
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-accent/50"
+                      )}
+                      onMouseDown={(event) => {
+                        // Keep editor focus; insert on click.
+                        event.preventDefault()
+                        onSelect(item.reference, state.range)
+                      }}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                    >
+                      <ReferenceIcon data={item.reference} variant="option" />
+                      {/* Label at its content width (shrinking + truncating only
+                          when the row is too narrow), detail packed right after
+                          it. The panel is as wide as the composer, so a stretched
+                          label used to shove the detail against the far edge —
+                          and a hard cap on the detail truncated it there even
+                          with hundreds of spare pixels beside it. The detail now
+                          takes the slack instead; its basis floor keeps it
+                          readable next to a long label rather than shrinking it
+                          away to nothing. Same reading order as the `/` panel's
+                          skill rows. */}
+                      <span
+                        className="min-w-0 truncate"
+                        title={item.reference.label || item.reference.id}
+                      >
+                        {item.reference.label || item.reference.id}
+                      </span>
+                      {item.detail && (
+                        <span
+                          className="min-w-0 grow basis-24 truncate text-xs text-muted-foreground"
+                          title={item.detail}
+                        >
+                          {item.detail}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
             </div>
-          )}
-        </div>
+            {truncated && (
+              // aria-hidden: a visual "refine" affordance, not an option — keeps
+              // the listbox owning only options (the live region conveys
+              // truncation to AT). Never enters `flat`, so Enter can't select it.
+              <div
+                aria-hidden
+                className="px-2 py-1 text-xs italic text-muted-foreground"
+              >
+                {moreLabel}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {/* Announce loading / active tab + result count / empty state to screen
-          readers; the listbox keeps no focus, so AT relies on this live region. */}
+          readers; the listbox keeps no focus, so AT relies on this live region.
+          The remote navigator reports its own active option through
+          `aria-activedescendant`, so this region stays quiet for that tab. */}
       <div role="status" aria-live="polite" className="sr-only">
-        {liveStatus}
+        {remoteActive ? "" : liveStatus}
       </div>
     </div>,
     document.body

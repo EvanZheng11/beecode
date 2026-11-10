@@ -3630,7 +3630,10 @@
         "mentionGroupSession": "الجلسات",
         "mentionGroupCommit": "عمليات الإيداع",
         "mentionGroupSkill": "المهارات",
-        "mentionGroupAssistant": "المساعدون"
+        "mentionGroupAssistant": "المساعدون",
+        "mentionGroupRemote": "البعيد",
+        "remoteSnapshotPreparing": "جارٍ جلب الملفات البعيدة ({count})…",
+        "remoteSnapshotDegraded": "تعذّر جلب بعض الملفات البعيدة: {reason}"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3991,7 +3994,16 @@
           }
         },
         "unknownAssistant": "المساعد #{id}",
-        "deletedAssistant": "(محذوف)"
+        "deletedAssistant": "(محذوف)",
+        "remoteLabel": "بعيد · {name}",
+        "remoteGoToSession": "فتح الجلسة البعيدة",
+        "remoteHandleThere": "عالجها على الجهاز البعيد",
+        "remoteCancelUnconfirmed": "لم يؤكد البعيد الإلغاء",
+        "remoteUnreachable": "تعذّر الوصول إلى البعيد",
+        "remoteResync": "إعادة المزامنة",
+        "remoteConnectionDeleted": "تم حذف الاتصال البعيد",
+        "remoteOpenFailed": "تعذّر فتح مساحة العمل البعيدة",
+        "remoteResyncFailed": "تعذّرت إعادة المزامنة"
       },
       "contentParts": {
         "offset": "الإزاحة: {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "تعذّر فتح مساحة العمل البعيدة",
     "restoreFailed": "تعذّرت إعادة فتح مساحة العمل البعيدة \"{name}\"",
     "connectionLoadFailed": "تعذّر تحميل الاتصال البعيد: {message}",
-    "connectionExpired": "انتهت صلاحية الاتصال البعيد \"{name}\". حدّث رمز الوصول الخاص به، ثم أعد تحميل هذه النافذة."
+    "connectionExpired": "انتهت صلاحية الاتصال البعيد \"{name}\". حدّث رمز الوصول الخاص به، ثم أعد تحميل هذه النافذة.",
+    "publicHttpWarning": "يرسل هذا العنوان الرمز عبر الإنترنت العام دون تشفير (http://). استخدم https:// أو نفقًا مشفرًا بدلًا من ذلك."
+  },
+  "RemoteMention": {
+    "kindFile": "الملفات",
+    "kindSession": "الجلسات",
+    "kindAssistant": "المساعدون",
+    "kindAgent": "الوكلاء",
+    "offline": "غير متصل",
+    "tokenInvalid": "الرمز غير صالح",
+    "probing": "جارٍ التحقق…",
+    "runUnsupported": "لا يمكن تشغيل الوكلاء على البعيد",
+    "back": "رجوع",
+    "loading": "جارٍ التحميل…",
+    "retry": "إعادة المحاولة",
+    "noConnections": "لا توجد اتصالات بعيدة",
+    "empty": "لا يوجد ما يُعرض",
+    "truncated": "نتائج كثيرة جدًا — تابع الكتابة لتضييق النطاق",
+    "loadFailed": "تعذّر التحميل",
+    "timeout": "انتهت المهلة — أعد المحاولة",
+    "connectionMissing": "هذا الاتصال البعيد لم يعد موجودًا",
+    "expired": "منتهي الصلاحية"
   },
   "ServerFileBrowser": {
     "title": "اختر ملفًا من الخادم",

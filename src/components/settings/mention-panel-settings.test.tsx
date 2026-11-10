@@ -118,6 +118,7 @@ describe("MentionPanelSettingsSection", () => {
       "file",
       "session",
       "commit",
+      "remote",
     ])
     for (const name of [
       "Agents",
@@ -161,6 +162,7 @@ describe("MentionPanelSettingsSection", () => {
       "file",
       "session",
       "commit",
+      "remote",
     ])
     expect(screen.getByRole("button", { name: "Reset" })).toBeEnabled()
   })
@@ -182,12 +184,20 @@ describe("MentionPanelSettingsSection", () => {
       { kind: "file", visible: true },
       { kind: "session", visible: false },
       { kind: "commit", visible: false },
+      { kind: "remote", visible: true },
     ])
   })
 
   it("saves a dragged order once, on release", () => {
     renderSection()
-    const dragged = ["file", "commit", "agent", "assistant", "session"]
+    const dragged = [
+      "file",
+      "commit",
+      "remote",
+      "agent",
+      "assistant",
+      "session",
+    ]
 
     // Mid-drag the rows follow the pointer, but nothing is written yet — every
     // open composer is subscribed to the stored value.
@@ -204,10 +214,24 @@ describe("MentionPanelSettingsSection", () => {
     renderSection()
     const setItem = vi.spyOn(Storage.prototype, "setItem")
     act(() =>
-      motion.onReorder?.(["file", "agent", "assistant", "session", "commit"])
+      motion.onReorder?.([
+        "file",
+        "agent",
+        "assistant",
+        "session",
+        "commit",
+        "remote",
+      ])
     )
     act(() =>
-      motion.onReorder?.(["agent", "assistant", "file", "session", "commit"])
+      motion.onReorder?.([
+        "agent",
+        "assistant",
+        "file",
+        "session",
+        "commit",
+        "remote",
+      ])
     )
     act(() => motion.dragEnd.get("agent")?.())
     // A press that never moved a row doesn't even report an order.
@@ -219,6 +243,7 @@ describe("MentionPanelSettingsSection", () => {
       "file",
       "session",
       "commit",
+      "remote",
     ])
   })
 
@@ -233,7 +258,14 @@ describe("MentionPanelSettingsSection", () => {
   it("keeps a switch flipped in another window while a drag is in flight", () => {
     renderSection()
     act(() =>
-      motion.onReorder?.(["file", "agent", "assistant", "session", "commit"])
+      motion.onReorder?.([
+        "file",
+        "agent",
+        "assistant",
+        "session",
+        "commit",
+        "remote",
+      ])
     )
     // The Commits tab is hidden elsewhere mid-drag…
     writeElsewhere({
@@ -243,6 +275,7 @@ describe("MentionPanelSettingsSection", () => {
         { kind: "file", visible: true },
         { kind: "session", visible: true },
         { kind: "commit", visible: false },
+        { kind: "remote", visible: true },
       ],
     })
     // …which this list shows straight away, drag or not…
@@ -255,6 +288,7 @@ describe("MentionPanelSettingsSection", () => {
       "assistant",
       "session",
       "commit",
+      "remote",
     ])
 
     // …and the release writes the dragged order without undoing it.
@@ -265,17 +299,26 @@ describe("MentionPanelSettingsSection", () => {
       { kind: "assistant", visible: true },
       { kind: "session", visible: true },
       { kind: "commit", visible: false },
+      { kind: "remote", visible: true },
     ])
   })
 
   it("lets a reorder made elsewhere stand when a drag ends where it started", () => {
     renderSection()
     act(() =>
-      motion.onReorder?.(["file", "agent", "assistant", "session", "commit"])
+      motion.onReorder?.([
+        "file",
+        "agent",
+        "assistant",
+        "session",
+        "commit",
+        "remote",
+      ])
     )
     const elsewhere: MentionPanelPrefs = {
       tabs: [
         { kind: "commit", visible: true },
+        { kind: "remote", visible: true },
         { kind: "session", visible: true },
         { kind: "file", visible: true },
         { kind: "agent", visible: true },
@@ -284,13 +327,21 @@ describe("MentionPanelSettingsSection", () => {
     }
     writeElsewhere(elsewhere)
     act(() =>
-      motion.onReorder?.(["agent", "assistant", "file", "session", "commit"])
+      motion.onReorder?.([
+        "agent",
+        "assistant",
+        "file",
+        "session",
+        "commit",
+        "remote",
+      ])
     )
     act(() => motion.dragEnd.get("file")?.())
     // No net move here, so nothing of this drag's starting order is replayed.
     expect(stored()).toEqual(elsewhere)
     expect(rowNames()).toEqual([
       "commit",
+      "remote",
       "session",
       "file",
       "agent",
@@ -306,7 +357,7 @@ describe("MentionPanelSettingsSection", () => {
     handle.focus()
 
     fireEvent.keyDown(handle, { key: "ArrowDown" })
-    const once = ["assistant", "agent", "file", "session", "commit"]
+    const once = ["assistant", "agent", "file", "session", "commit", "remote"]
     expect(storedKinds()).toEqual(once)
     expect(rowNames()).toEqual(once)
     expect(handle).toHaveFocus()
@@ -314,7 +365,8 @@ describe("MentionPanelSettingsSection", () => {
     fireEvent.keyDown(handle, { key: "ArrowDown" })
     fireEvent.keyDown(handle, { key: "ArrowDown" })
     fireEvent.keyDown(handle, { key: "ArrowDown" })
-    const last = ["assistant", "file", "session", "commit", "agent"]
+    fireEvent.keyDown(handle, { key: "ArrowDown" })
+    const last = ["assistant", "file", "session", "commit", "remote", "agent"]
     expect(rowNames()).toEqual(last)
     expect(handle).toHaveFocus()
 
@@ -328,8 +380,9 @@ describe("MentionPanelSettingsSection", () => {
       "assistant",
       "file",
       "session",
-      "agent",
       "commit",
+      "agent",
+      "remote",
     ])
   })
 
@@ -346,6 +399,7 @@ describe("MentionPanelSettingsSection", () => {
     renderSection()
     expect(rowNames()).toEqual([
       "commit",
+      "remote",
       "file",
       "agent",
       "assistant",
@@ -360,6 +414,7 @@ describe("MentionPanelSettingsSection", () => {
       "file",
       "session",
       "commit",
+      "remote",
     ])
     expect(
       screen.getByRole("switch", { name: "Show the “Agents” tab" })
@@ -391,6 +446,7 @@ describe("MentionPanelSettingsSection", () => {
       "assistant",
       "file",
       "commit",
+      "remote",
     ])
     expect(
       screen.getByRole("switch", { name: "Show the “Agents” tab" })

@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "Sitzungen",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Fähigkeiten",
-        "mentionGroupAssistant": "Assistenten"
+        "mentionGroupAssistant": "Assistenten",
+        "mentionGroupRemote": "Remote",
+        "remoteSnapshotPreparing": "Remote-Dateien werden geladen ({count})…",
+        "remoteSnapshotDegraded": "Einige Remote-Dateien konnten nicht geladen werden: {reason}"
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "Assistent #{id}",
-        "deletedAssistant": "(gelöscht)"
+        "deletedAssistant": "(gelöscht)",
+        "remoteLabel": "Remote · {name}",
+        "remoteGoToSession": "Remote-Sitzung öffnen",
+        "remoteHandleThere": "Auf dem Remote-Rechner bearbeiten",
+        "remoteCancelUnconfirmed": "Das Remote hat den Abbruch nicht bestätigt",
+        "remoteUnreachable": "Remote nicht erreichbar",
+        "remoteResync": "Neu synchronisieren",
+        "remoteConnectionDeleted": "Remote-Verbindung gelöscht",
+        "remoteOpenFailed": "Remote-Arbeitsbereich konnte nicht geöffnet werden",
+        "remoteResyncFailed": "Neu synchronisieren fehlgeschlagen"
       },
       "contentParts": {
         "offset": "Versatz: {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "Remote-Arbeitsbereich konnte nicht geöffnet werden",
     "restoreFailed": "Remote-Arbeitsbereich „{name}“ konnte nicht erneut geöffnet werden",
     "connectionLoadFailed": "Remote-Verbindung konnte nicht geladen werden: {message}",
-    "connectionExpired": "Die Remote-Verbindung „{name}“ ist abgelaufen. Aktualisiere ihr Token und lade dieses Fenster neu."
+    "connectionExpired": "Die Remote-Verbindung „{name}“ ist abgelaufen. Aktualisiere ihr Token und lade dieses Fenster neu.",
+    "publicHttpWarning": "Diese Adresse sendet dein Token unverschlüsselt über das öffentliche Internet (http://). Verwende https:// oder einen verschlüsselten Tunnel."
+  },
+  "RemoteMention": {
+    "kindFile": "Dateien",
+    "kindSession": "Sitzungen",
+    "kindAssistant": "Assistenten",
+    "kindAgent": "Agenten",
+    "offline": "Offline",
+    "tokenInvalid": "Ungültiges Token",
+    "probing": "Wird geprüft…",
+    "runUnsupported": "Dieses Remote kann keine Agenten ausführen",
+    "back": "Zurück",
+    "loading": "Wird geladen…",
+    "retry": "Erneut versuchen",
+    "noConnections": "Keine Remote-Verbindungen",
+    "empty": "Nichts anzuzeigen",
+    "truncated": "Zu viele Ergebnisse – tippe weiter, um einzugrenzen",
+    "loadFailed": "Laden fehlgeschlagen",
+    "timeout": "Zeitüberschreitung – bitte erneut versuchen",
+    "connectionMissing": "Diese Remote-Verbindung existiert nicht mehr",
+    "expired": "abgelaufen"
   },
   "ServerFileBrowser": {
     "title": "Serverdatei auswählen",

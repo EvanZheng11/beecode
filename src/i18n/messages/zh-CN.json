@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "会话",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "mentionGroupRemote": "远端",
+        "remoteSnapshotPreparing": "正在获取远端文件（{count}）…",
+        "remoteSnapshotDegraded": "部分远端文件未能获取：{reason}"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "助手 #{id}",
-        "deletedAssistant": "（已删除）"
+        "deletedAssistant": "（已删除）",
+        "remoteLabel": "远端 · {name}",
+        "remoteGoToSession": "查看远端会话",
+        "remoteHandleThere": "请到远端处理",
+        "remoteCancelUnconfirmed": "远端未确认取消",
+        "remoteUnreachable": "无法连接远端",
+        "remoteResync": "重新同步",
+        "remoteConnectionDeleted": "远端连接已删除",
+        "remoteOpenFailed": "无法打开远端工作区",
+        "remoteResyncFailed": "重新同步失败"
       },
       "contentParts": {
         "offset": "偏移：{offset}",
@@ -5359,7 +5371,28 @@
     "openFailed": "打开远端工作区失败",
     "restoreFailed": "无法重新打开远端工作区“{name}”",
     "connectionLoadFailed": "加载远端连接失败：{message}",
-    "connectionExpired": "远端连接“{name}”已失效。请更新 Token 后重新加载此窗口。"
+    "connectionExpired": "远端连接“{name}”已失效。请更新 Token 后重新加载此窗口。",
+    "publicHttpWarning": "该地址会通过公网以明文发送 token（http://），建议改用 https:// 或加密隧道。"
+  },
+  "RemoteMention": {
+    "kindFile": "文件",
+    "kindSession": "会话",
+    "kindAssistant": "助手",
+    "kindAgent": "智能体",
+    "offline": "离线",
+    "tokenInvalid": "token 无效",
+    "probing": "检查中…",
+    "runUnsupported": "远端不支持运行智能体",
+    "back": "返回",
+    "loading": "加载中…",
+    "retry": "重试",
+    "noConnections": "还没有远端连接",
+    "empty": "没有可选项",
+    "truncated": "结果过多，请输入更精确的关键字",
+    "loadFailed": "加载失败",
+    "timeout": "加载超时，请重试",
+    "connectionMissing": "该远端连接已不存在",
+    "expired": "已失效"
   },
   "BackupSettings": {
     "tabs": {

@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "mentionGroupRemote": "Remote",
+        "remoteSnapshotPreparing": "Fetching remote files ({count})…",
+        "remoteSnapshotDegraded": "Some remote files couldn't be fetched: {reason}"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "Assistant #{id}",
-        "deletedAssistant": "(deleted)"
+        "deletedAssistant": "(deleted)",
+        "remoteLabel": "Remote · {name}",
+        "remoteGoToSession": "Open remote session",
+        "remoteHandleThere": "Handle it on the remote machine",
+        "remoteCancelUnconfirmed": "The remote didn't confirm the cancel",
+        "remoteUnreachable": "Can't reach the remote",
+        "remoteResync": "Resync",
+        "remoteConnectionDeleted": "Remote connection deleted",
+        "remoteOpenFailed": "Couldn't open the remote workspace",
+        "remoteResyncFailed": "Couldn't resync"
       },
       "contentParts": {
         "offset": "Offset: {offset}",
@@ -5359,7 +5371,28 @@
     "openFailed": "Failed to open remote workspace",
     "restoreFailed": "Couldn't reopen remote workspace \"{name}\"",
     "connectionLoadFailed": "Failed to load remote connection: {message}",
-    "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window."
+    "connectionExpired": "Remote connection \"{name}\" is expired. Update its token and reload this window.",
+    "publicHttpWarning": "This address sends your token over the public internet in cleartext (http://). Use https:// or an encrypted tunnel instead."
+  },
+  "RemoteMention": {
+    "kindFile": "Files",
+    "kindSession": "Sessions",
+    "kindAssistant": "Assistants",
+    "kindAgent": "Agents",
+    "offline": "Offline",
+    "tokenInvalid": "Invalid token",
+    "probing": "Checking…",
+    "runUnsupported": "This remote can't run agents",
+    "back": "Back",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "noConnections": "No remote connections",
+    "empty": "Nothing to show",
+    "truncated": "Too many results — keep typing to narrow it down",
+    "loadFailed": "Couldn't load",
+    "timeout": "Timed out — try again",
+    "connectionMissing": "This remote connection no longer exists",
+    "expired": "expired"
   },
   "BackupSettings": {
     "tabs": {
