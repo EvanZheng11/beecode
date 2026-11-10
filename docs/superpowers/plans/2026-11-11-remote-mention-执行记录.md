@@ -16,7 +16,7 @@
 | ID | 状态 | 助手 | worktree 后缀 | 宿主 task_id | 责任范围 |
 | --- | --- | --- | --- | --- | --- |
 | RM01 | 🔄执行中 | 复杂后端开发（3） | gateway | 192f5918-e62d-4e49-81d6-58a965e6ef80 | 网关、查询命令、公共注册 |
-| RM02 | 🔄执行中（第2次） | 默认执行者（2） | reference | 671453e5-42f0-4770-854c-9c461a653c49 | URI、徽标、导航、设置、全部 i18n |
+| RM02 | 🔄执行中（第3次） | 默认执行者（2） | reference | 42bee090-3089-4620-ba0a-82f0c3a9d3d6 | URI、徽标、导航、设置、全部 i18n |
 | RM03 | 🔄执行中（第2次） | 复杂后端开发（3） | snapshot | f9070553-890f-424b-a171-d59c2eff7f4a | 快照、发送边界、快照事件类型 |
 | RM04 | 🔄执行中 | 复杂后端开发（3） | db | c6d50b2e-1f73-4031-9c09-acb03a07989a | 两表、迁移、持久化服务 |
 | RM07 | 🔄执行中 | 复杂后端开发（3） | routes | 996763cb-118a-4f9a-a89a-013725af99f0 | 路由帧、MCP 契约、能力探测 |
@@ -92,6 +92,8 @@ stateDiagram-v2
 - `deja` 已检索 remote-mention/跨机；无可直接沿用的本需求历史结论。
 - `humanizer` 不在可用技能中，未加载；Codegraph 可用定位，但索引更新能力须以实际工具确认，不能虚称已更新。
 - 中断事件：RM01 宿主因 parent canceled 中断，已在原 task_id 恢复；RM02 原宿主 `4a4a6e8d-a37d-4ce8-8e0d-92391ab68bc7`、RM03 原宿主 `253875e2-a6d9-4c79-9ce4-225289ea5476` 均 child_rejected。核对两个 worktree 干净、HEAD 未推进后，保留原逻辑 ID 与 worktree 启动第2次尝试，历史不删除。这不是代码验收失败。
+- RM02 第2次宿主 completed 但回报为空。核对实际现场：已有10个前端修改/新文件、无提交，未见文案和验证证据。按格式不符处理为未验收，保留产物，原逻辑ID第3次（最后一次）派给同助手补齐，不重新从头实现。
+- RM05/listener 已向负责人回报提交 `44ee32d0`；尚未经父级集成和主会话验收，不能标已完成。
 - Codegraph CLI `status` 在任务目录向上解析到原工程索引，不代表任务分支已有独立索引；后续不得误报分支索引已更新。CLI 提供 `sync`，如需更新必须定位任务分支专属索引。
 - 宿主 PATH 未找到 cargo，常见 `/home/andy/.cargo/bin/cargo` 和 `/usr/local/cargo/bin/cargo` 也未发现；已存在本地 Rust 工具链镜像 `codeg-skill-import-toolchain:local`，RM04 正使用其自有容器验证。不能擅自进入其他任务旧容器写构建产物。
 - `docs/superpowers` 被工程忽略，本执行记录暂为任务 worktree 内检查点；需要纳入交付时只定向添加该文件，不修改整体忽略规则。
