@@ -87,13 +87,6 @@ use crate::workspace_transfer::{
 /// this default for that single request.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Upper bound on per-request timeout overrides. Caps how much a caller can
-/// extend the default — protects against a buggy / malicious JS caller
-/// supplying a huge value and locking a Tauri command worker on a hung
-/// remote. 10 minutes is comfortably above every existing override (the
-/// longest today is 70s for `describeAgentOptions`).
-const HTTP_TIMEOUT_MAX: Duration = Duration::from_secs(600);
-
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WS_SEND_TIMEOUT: Duration = Duration::from_secs(8);
 const WS_PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -377,81 +370,12 @@ impl Default for RemoteProxyState {
 #[tauri::command]
 pub async fn remote_http_call(
     db: State<'_, AppDatabase>,
-    proxy: State<'_, Arc<RemoteProxyState>>,
     connection_id: i32,
     command: String,
     args: Option<Value>,
     timeout_ms: Option<u64>,
 ) -> Result<Value, AppCommandError> {
-    let conn = remote_workspace_connection_service::get(&db.conn, connection_id)
-        .await
-        .map_err(AppCommandError::db)?
-        .ok_or_else(|| {
-            AppCommandError::not_found(format!("Remote connection {connection_id} not found"))
-        })?;
-
-    // 监控 REST 路由在远程桌面模式也必须指向远端，而不是本机。
-    let (method, path) = match command.as_str() {
-        "get_resource_monitor_settings" => (reqwest::Method::GET, "resource-monitor/settings"),
-        "set_resource_monitor_enabled" => (reqwest::Method::PUT, "resource-monitor/settings"),
-        "get_resource_monitor_snapshot" => (reqwest::Method::GET, "resource-monitor/snapshot"),
-        "resource_monitor_process_action" => (reqwest::Method::POST, "resource-monitor/action"),
-        _ => (reqwest::Method::POST, command.trim_start_matches('/')),
-    };
-    let url = format!("{}/api/{}", conn.base_url.trim_end_matches('/'), path);
-
-    let body = args.unwrap_or(Value::Object(serde_json::Map::new()));
-    let has_body = method != reqwest::Method::GET;
-    let mut request = proxy
-        .http
-        .request(method, &url)
-        .bearer_auth(conn.token.trim())
-        .headers(conn.headers.to_header_map());
-    if has_body {
-        request = request.json(&body);
-    }
-    // Per-request override beats the client-wide 30s default. Used by the
-    // ACP probe path (`describeAgentOptions`) whose backend deadline is
-    // longer than 30s — without this override, reqwest would abort here
-    // before the backend can return its structured `ProbeTimedOut`.
-    if let Some(ms) = timeout_ms {
-        let requested = Duration::from_millis(ms);
-        request = request.timeout(requested.min(HTTP_TIMEOUT_MAX));
-    }
-    let response = request.send().await.map_err(|e| {
-        AppCommandError::network("Remote HTTP request failed").with_detail(request_error_detail(&e))
-    })?;
-
-    let status = response.status();
-
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(AppCommandError::authentication_failed(
-            "Remote Workspace token is invalid",
-        ));
-    }
-
-    if !status.is_success() {
-        let raw_body = response.text().await.unwrap_or_default();
-        // The remote codeg-server always returns `Json(AppCommandError)`
-        // on errors (see `web/handlers/error.rs::IntoResponse`). Try to
-        // deserialize so the caller sees the original code + i18n hint.
-        if let Ok(structured) = serde_json::from_str::<AppCommandError>(&raw_body) {
-            return Err(structured);
-        }
-        return Err(
-            AppCommandError::network(format!("Remote returned HTTP {status}")).with_detail(
-                if raw_body.is_empty() {
-                    status.canonical_reason().unwrap_or("error").to_string()
-                } else {
-                    raw_body
-                },
-            ),
-        );
-    }
-
-    response.json::<Value>().await.map_err(|e| {
-        AppCommandError::network("Failed to parse remote response").with_detail(e.to_string())
-    })
+    crate::remote_gateway::call_any(&db, connection_id, &command, args, timeout_ms).await
 }
 
 // ─── Multipart upload proxy ───────────────────────────────────────────
