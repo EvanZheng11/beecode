@@ -390,6 +390,162 @@ fn parse_assistant_routes_body(candidate: &str) -> Option<Vec<AssistantRoute>> {
     Some(routes)
 }
 
+const REMOTE_ROUTE_FRAME_KIND: &str = "codeg_internal_remote_routes";
+const REMOTE_ROUTE_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_remote_routes\"";
+const REMOTE_ROUTES_LINE_PREFIX: &str = "Codeg composer remote routing metadata (authoritative): ";
+const MAX_REMOTE_ROUTES: usize = 8;
+
+/// 只包含身份，不把远程绝对路径写进智能体提示词。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteRoute {
+    pub remote_connection_id: i32,
+    pub remote_folder_id: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_assistant_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_agent: Option<String>,
+}
+
+/// 严格解析 5.2 的助手/智能体 URI；不接受额外 query、fragment 或路径。
+pub fn parse_remote_route_uri(uri: &str) -> Option<RemoteRoute> {
+    fn id(raw: &str) -> Option<i32> {
+        if raw.is_empty()
+            || raw.len() > 10
+            || raw.starts_with('0')
+            || !raw.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        raw.parse::<i32>().ok().filter(|n| *n > 0)
+    }
+    let rest = uri.strip_prefix("codeg://remote/")?;
+    let (connection, rest) = rest.split_once('/')?;
+    let (kind, rest) = rest.split_once('/')?;
+    let (target, folder) = rest.split_once("?folder=")?;
+    let mut route = RemoteRoute {
+        remote_connection_id: id(connection)?,
+        remote_folder_id: id(folder)?,
+        remote_assistant_id: None,
+        remote_agent: None,
+    };
+    match kind {
+        "assistant" => route.remote_assistant_id = Some(id(target)?),
+        "agent" => {
+            // encodeURIComponent 的非转义字符及完整 %HH；拒绝 URL 解析器的宽松修复。
+            let bytes = target.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' {
+                    if !bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+                        || !bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+                    {
+                        return None;
+                    }
+                    i += 3;
+                } else if bytes[i].is_ascii_alphanumeric() || b"-_.!~*'()".contains(&bytes[i]) {
+                    i += 1;
+                } else {
+                    return None;
+                }
+            }
+            route.remote_agent = Some(
+                percent_encoding::percent_decode_str(target)
+                    .decode_utf8()
+                    .ok()?
+                    .into_owned(),
+            );
+        }
+        _ => return None,
+    }
+    let value = serde_json::to_value(&route).ok()?;
+    crate::acp::delegation::types::delegation_target_from_args(&value).ok()?;
+    Some(route)
+}
+
+pub(crate) fn append_remote_routes(blocks: &mut Vec<PromptInputBlock>, delegation_enabled: bool) {
+    if !delegation_enabled {
+        return;
+    }
+    static LINKS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\((codeg://remote/[^?\s]+\?folder=[0-9]+)\)")
+            .expect("远程引用正则有效")
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut routes = Vec::new();
+    let descriptor = FrameDescriptor::fresh(REMOTE_ROUTE_FRAME_KIND, 1);
+    for block in blocks.iter() {
+        let PromptInputBlock::Text { text } = block else {
+            continue;
+        };
+        for capture in LINKS.captures_iter(text) {
+            let Some(route) = parse_remote_route_uri(&capture[1]) else {
+                continue;
+            };
+            if !seen.insert(route.clone()) {
+                continue;
+            }
+            routes.push(route);
+            if render_remote_routes_body(&descriptor, &routes).len() + 2 > MAX_ROUTE_FRAME_BYTES {
+                routes.pop();
+            }
+            if routes.len() == MAX_REMOTE_ROUTES {
+                break;
+            }
+        }
+        if routes.len() == MAX_REMOTE_ROUTES {
+            break;
+        }
+    }
+    if !routes.is_empty() {
+        blocks.push(PromptInputBlock::Text {
+            text: format!(
+                "{ROUTE_FRAME_SEPARATOR}{}{ROUTE_FRAME_SEPARATOR}",
+                render_remote_routes_body(&descriptor, &routes)
+            ),
+        });
+    }
+}
+
+fn render_remote_routes_body(descriptor: &FrameDescriptor, routes: &[RemoteRoute]) -> String {
+    let descriptor = serde_json::to_string(descriptor).expect("远程帧描述可序列化");
+    let routes = serde_json::to_string(routes).expect("远程路由可序列化");
+    format!("{descriptor}\n{REMOTE_ROUTES_LINE_PREFIX}{routes}\nWhen you delegate this work, call `delegate_to_agent` from `codeg-mcp` with `remote_connection_id`, `remote_folder_id` and `remote_assistant_id`/`remote_agent` taken from the matching remote route. Do not set `agent_type` or `assistant_id` for a remote route.\n")
+}
+
+/// 与旧帧相同：只有能逐字节重渲染的完整帧才可剥离。
+pub fn parse_remote_routes_body(candidate: &str) -> Option<Vec<RemoteRoute>> {
+    if candidate.len() + 2 > MAX_ROUTE_FRAME_BYTES {
+        return None;
+    }
+    let (line, rest) = candidate.split_once('\n')?;
+    let descriptor: FrameDescriptor = serde_json::from_str(line).ok()?;
+    let routes: Vec<RemoteRoute> = serde_json::from_str(
+        rest.lines()
+            .next()?
+            .strip_prefix(REMOTE_ROUTES_LINE_PREFIX)?,
+    )
+    .ok()?;
+    let mut seen = std::collections::HashSet::new();
+    if !descriptor.is(REMOTE_ROUTE_FRAME_KIND, 1)
+        || routes.is_empty()
+        || routes.len() > MAX_REMOTE_ROUTES
+        || routes.iter().any(|r| {
+            !seen.insert(r.clone())
+                || serde_json::to_value(r)
+                    .ok()
+                    .and_then(|v| {
+                        crate::acp::delegation::types::delegation_target_from_args(&v).ok()
+                    })
+                    .is_none()
+        })
+        || render_remote_routes_body(&descriptor, &routes) != candidate
+    {
+        return None;
+    }
+    Some(routes)
+}
+
 /// The profile line of an assistant brief. `deny_unknown_fields` plus the
 /// byte-exact re-render keep look-alike prose from ever matching.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,12 +635,14 @@ enum FrameKind {
     AgentRoutes,
     AssistantRoutes,
     AssistantBrief,
+    RemoteRoutes,
 }
 
-const FRAME_KINDS: [FrameKind; 3] = [
+const FRAME_KINDS: [FrameKind; 4] = [
     FrameKind::AgentRoutes,
     FrameKind::AssistantRoutes,
     FrameKind::AssistantBrief,
+    FrameKind::RemoteRoutes,
 ];
 
 impl FrameKind {
@@ -495,12 +653,15 @@ impl FrameKind {
             FrameKind::AgentRoutes => ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantRoutes => ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantBrief => ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+            FrameKind::RemoteRoutes => REMOTE_ROUTE_FRAME_BODY_PREFIX,
         }
     }
 
     fn max_bytes(self) -> usize {
         match self {
-            FrameKind::AgentRoutes | FrameKind::AssistantRoutes => MAX_ROUTE_FRAME_BYTES,
+            FrameKind::AgentRoutes | FrameKind::AssistantRoutes | FrameKind::RemoteRoutes => {
+                MAX_ROUTE_FRAME_BYTES
+            }
             FrameKind::AssistantBrief => MAX_ASSISTANT_BRIEF_FRAME_BYTES,
         }
     }
@@ -512,6 +673,7 @@ impl FrameKind {
             FrameKind::AgentRoutes => parse_internal_agent_routes_body(body).is_some(),
             FrameKind::AssistantRoutes => parse_assistant_routes_body(body).is_some(),
             FrameKind::AssistantBrief => parse_assistant_brief_body(body).is_some(),
+            FrameKind::RemoteRoutes => parse_remote_routes_body(body).is_some(),
         }
     }
 }
@@ -1386,6 +1548,93 @@ then [@Reviewer](codeg://assistant/3) again",
             "codeg_internal_assistant_brief",
         );
         assert_eq!(strip_internal_frames(&other_kind), other_kind);
+    }
+
+    #[test]
+    fn remote_routes_round_trip_strip_and_enforce_identity() {
+        let visible = "做 [@远程](codeg://remote/2/agent/custom%3Aworker?folder=4)";
+        let mut blocks = vec![PromptInputBlock::Text {
+            text: visible.into(),
+        }];
+        append_remote_routes(&mut blocks, false);
+        assert_eq!(blocks.len(), 1);
+        append_remote_routes(&mut blocks, true);
+        let frame = text(&blocks[1]);
+        let body = frame.trim_matches(ROUTE_FRAME_SEPARATOR);
+        let routes = parse_remote_routes_body(body).unwrap();
+        assert_eq!(routes[0].remote_agent.as_deref(), Some("custom:worker"));
+        assert_eq!(
+            strip_internal_frames(&format!("{visible}\n{frame}")),
+            visible
+        );
+        assert_eq!(strip_internal_frames(body), "");
+        assert!(frame.len() <= MAX_ROUTE_FRAME_BYTES);
+        let tampered = frame.replace("Do not set", "Please set");
+        assert_eq!(strip_internal_frames(&tampered), tampered);
+        let tampered = frame.replace("\"remote_folder_id\":4", "\"remote_folder_id\":0");
+        assert_eq!(strip_internal_frames(&tampered), tampered);
+        let mut title = format!("标题 {REMOTE_ROUTE_FRAME_BODY_PREFIX},\"ver");
+        cut_at_route_frame_marker(&mut title);
+        assert_eq!(title, "标题");
+    }
+
+    #[test]
+    fn remote_uri_validation_and_route_limits() {
+        for uri in [
+            "codeg://remote/0/assistant/3?folder=4",
+            "codeg://remote/02/assistant/3?folder=4",
+            "codeg://remote/2147483648/assistant/3?folder=4",
+            "codeg://remote/2/assistant/3",
+            "codeg://remote/2/assistant/03?folder=4",
+            "codeg://remote/2/agent/x?folder=4&x=1",
+            "codeg://remote/2/agent/x?folder=4#x",
+            "codeg://remote/2/agent/%ZZ?folder=4",
+            "codeg://remote/2/agent/%FF?folder=4",
+            "codeg://remote/2/agent/%2Froot?folder=4",
+            "codeg://remote/2/agent/x/y?folder=4",
+            "codeg://remote/2/agent/x?folder=04",
+        ] {
+            assert!(parse_remote_route_uri(uri).is_none(), "{uri}");
+        }
+        let mut prompt = String::new();
+        for id in 1..=10 {
+            for _ in 0..2 {
+                prompt.push_str(&format!("[A](codeg://remote/2/assistant/{id}?folder=4) "));
+            }
+        }
+        let mut blocks = vec![PromptInputBlock::Text { text: prompt }];
+        append_remote_routes(&mut blocks, true);
+        let body = text(&blocks[1]).trim_matches(ROUTE_FRAME_SEPARATOR);
+        let routes = parse_remote_routes_body(body).unwrap();
+        assert_eq!(routes.len(), 8);
+        let descriptor = FrameDescriptor::fresh(REMOTE_ROUTE_FRAME_KIND, 1);
+        assert!(parse_remote_routes_body(&render_remote_routes_body(
+            &descriptor,
+            &vec![routes[0].clone(); 2]
+        ))
+        .is_none());
+        assert!(parse_remote_routes_body(&render_remote_routes_body(
+            &descriptor,
+            &vec![routes[0].clone(); 9]
+        ))
+        .is_none());
+        assert!(parse_remote_routes_body(&"x".repeat(MAX_ROUTE_FRAME_BYTES)).is_none());
+        let mut large = String::new();
+        for id in 1..=8 {
+            large.push_str(&format!(
+                "[A](codeg://remote/2/agent/{}?folder={id}) ",
+                "%22".repeat(1024)
+            ));
+        }
+        let mut blocks = vec![PromptInputBlock::Text { text: large }];
+        append_remote_routes(&mut blocks, true);
+        assert!(text(&blocks[1]).len() <= MAX_ROUTE_FRAME_BYTES);
+        assert!(
+            parse_remote_routes_body(text(&blocks[1]).trim_matches(ROUTE_FRAME_SEPARATOR))
+                .unwrap()
+                .len()
+                < 8
+        );
     }
 
     #[test]

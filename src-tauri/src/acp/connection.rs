@@ -41,7 +41,7 @@ use crate::acp::agent_session::AgentSession;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::acp::agent_mentions::{append_agent_routes, append_assistant_routes};
+use crate::acp::agent_mentions::{append_agent_routes, append_assistant_routes, append_remote_routes};
 use crate::acp::background_watch;
 use crate::acp::cursor_ext::{
     CursorAskQuestionRequest, CursorCreatePlanRequest, CursorGenerateImageRequest,
@@ -13205,6 +13205,7 @@ fn prepare_agent_bound_prompt(
 ) -> Vec<ContentBlock> {
     append_agent_routes(&mut blocks, delegation_enabled);
     append_assistant_routes(&mut blocks, delegation_enabled);
+    append_remote_routes(&mut blocks, delegation_enabled);
     blocks.extend(internal_suffix);
     if agent_type == AgentType::Grok {
         blocks = normalize_grok_image_blocks(blocks);
@@ -33846,6 +33847,15 @@ mod tests {
             &unrouted[0],
             ContentBlock::Text(text) if text.text == visible
         ));
+    }
+
+    #[test]
+    fn remote_routes_follow_the_delegation_gate_at_final_boundary() {
+        let blocks = vec![PromptInputBlock::Text { text: "[@B](codeg://remote/2/assistant/3?folder=4)".into() }];
+        let prompt = prepare_agent_bound_prompt(AgentType::Codex, blocks.clone(), true, Vec::new());
+        assert_eq!(prompt.len(), 2);
+        assert!(matches!(&prompt[1], ContentBlock::Text(t) if t.text.contains("codeg_internal_remote_routes")));
+        assert_eq!(prepare_agent_bound_prompt(AgentType::Codex, blocks, false, Vec::new()).len(), 1);
     }
 
     #[test]

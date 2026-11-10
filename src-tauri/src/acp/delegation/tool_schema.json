@@ -5,7 +5,6 @@
     "inputSchema": {
       "type": "object",
       "required": [
-        "agent_type",
         "task"
       ],
       "properties": {
@@ -33,7 +32,7 @@
             "command_code",
             "minimax_code"
           ],
-          "description": "Which local agent runs the sub-task. Pick the one best suited to the work — or, when the user's message names an agent via `@AgentName` / `codeg://agent/<agent_type>`, use that exact `<agent_type>` slug (e.g. `codeg://agent/claude_code` means `claude_code`)."
+          "description": "Required for local delegation unless assistant_id is given; omit for remote delegation. Which local agent runs the sub-task. Pick the one best suited to the work — or, when the user's message names an agent via `@AgentName` / `codeg://agent/<agent_type>`, use that exact `<agent_type>` slug (e.g. `codeg://agent/claude_code` means `claude_code`)."
         },
         "task": {
           "type": "string",
@@ -41,7 +40,27 @@
         },
         "working_dir": {
           "type": "string",
-          "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+          "description": "Absolute path for LOCAL delegation only. Defaults to this session's working directory. For remote delegation use remote_folder_id, never a remote absolute path."
+        },
+        "remote_connection_id": {
+          "type": "integer", "minimum": 1,
+          "description": "保存的远程连接 ID；设置后不得传本机 agent_type 或 assistant_id，必须传 remote_folder_id 及一个远程目标。"
+        },
+        "remote_folder_id": {
+          "type": "integer", "minimum": 1,
+          "description": "远程已登记项目 ID，远程委派必填；不是绝对路径。"
+        },
+        "remote_assistant_id": {
+          "type": "integer", "minimum": 1,
+          "description": "远程助手 ID，与 remote_agent 二选一，不是本机 assistant_id。"
+        },
+        "remote_agent": {
+          "type": "string", "minLength": 1,
+          "description": "远端能力表的智能体 slug，自由字符串，不受本机 agent_type 枚举限制；与 remote_assistant_id 二选一。"
+        },
+        "permissions": {
+          "type": "string", "enum": ["wait", "deny", "reads", "allow", "fail"],
+          "description": "仅远程委派生效，省略时采用设置值。"
         }
       }
     }

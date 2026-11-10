@@ -791,7 +791,11 @@ pub(crate) fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> 
                 let has_assistant_id = args
                     .get("assistant_id")
                     .is_some_and(|v| v.is_number() || v.is_string());
-                if has_task && (has_agent_type || has_assistant_id) {
+                if has_task
+                    && (has_agent_type
+                        || has_assistant_id
+                        || args.contains_key("remote_connection_id"))
+                {
                     return true;
                 }
             }
@@ -1379,8 +1383,44 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
     if code_mode_find_key(code, region, b"assistant_id").is_some() {
         return None;
     }
-    let agent_type_at = code_mode_find_key(code, region, b"agent_type")?;
-    let agent_type = object_string_value(code, agent_type_at)?;
+    let mut args = serde_json::Map::new();
+    let remote_keys: [&[u8]; 4] = [
+        b"remote_connection_id",
+        b"remote_folder_id",
+        b"remote_assistant_id",
+        b"remote_agent",
+    ];
+    let remote = remote_keys
+        .iter()
+        .any(|key| code_mode_find_key(code, region, key).is_some());
+    if remote {
+        if code_mode_find_key(code, region, b"agent_type").is_some() {
+            return None;
+        }
+        for key in remote_keys {
+            if let Some(at) = code_mode_find_key(code, region, key) {
+                let value = if key == b"remote_agent" {
+                    serde_json::Value::String(object_string_value(code, at)?)
+                } else {
+                    let end = code[at..]
+                        .find(|c: char| !c.is_ascii_digit())
+                        .map(|n| at + n)
+                        .unwrap_or(code.len());
+                    if end == at || !value_ends_object_property(code, end) {
+                        return None;
+                    }
+                    serde_json::from_str(&code[at..end]).ok()?
+                };
+                args.insert(std::str::from_utf8(key).ok()?.to_string(), value);
+            }
+        }
+    } else {
+        let at = code_mode_find_key(code, region, b"agent_type")?;
+        args.insert(
+            "agent_type".into(),
+            serde_json::Value::String(object_string_value(code, at)?),
+        );
+    }
     // `working_dir` is OPTIONAL in the key: ABSENT yields `working_dir:
     // None`, but present-and-unreadable (backslash path, template, variable,
     // concatenation) must bail the WHOLE key — the MCP side sees Some(…),
@@ -1391,7 +1431,7 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
     };
     let task_at = code_mode_find_key(code, region, b"task")?;
     let task = object_task_value(code, task_at)?;
-    let args = serde_json::json!({ "agent_type": agent_type });
+    let args = serde_json::Value::Object(args);
     // The same parser the MCP listener dispatches the call with, so this
     // target equals `DelegationRequest::target()` for the same call.
     let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
@@ -1430,7 +1470,16 @@ fn code_mode_single_object_argument(code: &str, open: usize, close: usize) -> bo
 /// SHORTHAND property (or a variable in value position): its value is the
 /// variable's runtime value, and a shorthand AFTER an explicit spelling
 /// overrides it.
-const CODE_MODE_ARG_KEYS: [&[u8]; 4] = [b"agent_type", b"task", b"working_dir", b"assistant_id"];
+const CODE_MODE_ARG_KEYS: [&[u8]; 8] = [
+    b"agent_type",
+    b"task",
+    b"working_dir",
+    b"assistant_id",
+    b"remote_connection_id",
+    b"remote_folder_id",
+    b"remote_assistant_id",
+    b"remote_agent",
+];
 
 /// Conservative pre-pass over the argument region: `false` when the region
 /// contains syntax whose effect the scanner cannot evaluate. Spread
@@ -1905,6 +1954,33 @@ mod delegation_title_tests {
     use super::{extract_delegation_match_key, is_delegation_invocation};
     use crate::acp::delegation::broker::DelegationMatchKey;
     use crate::models::AgentType;
+
+    #[test]
+    fn remote_match_keys_include_connection_folder_and_free_slug() {
+        use crate::acp::delegation::types::delegation_target_from_args;
+        let args = serde_json::json!({"remote_connection_id":2,"remote_folder_id":4,"remote_agent":"custom:only-remote","task":"t"});
+        let expected = DelegationMatchKey {
+            target: delegation_target_from_args(&args).unwrap(),
+            task: "t".into(),
+            working_dir: None,
+        };
+        assert_eq!(
+            extract_delegation_match_key(Some(&args.to_string())),
+            Some(expected.clone())
+        );
+        let code = serde_json::json!({"code":"tools[\"codeg-mcp\"].delegate_to_agent({remote_connection_id:2,remote_folder_id:4,remote_agent:'custom:only-remote',task:`t`})"});
+        assert_eq!(
+            extract_delegation_match_key(Some(&code.to_string())),
+            Some(expected)
+        );
+        let other = serde_json::json!({"remote_connection_id":2,"remote_folder_id":5,"remote_agent":"custom:only-remote","task":"t"});
+        assert_ne!(
+            extract_delegation_match_key(Some(&args.to_string())),
+            extract_delegation_match_key(Some(&other.to_string()))
+        );
+        let mixed = serde_json::json!({"remote_connection_id":2,"remote_folder_id":4,"remote_agent":"x","agent_type":"codex","task":"t"});
+        assert!(extract_delegation_match_key(Some(&mixed.to_string())).is_none());
+    }
 
     #[test]
     fn extract_match_key_pulls_agent_task_and_dir() {
@@ -3929,7 +4005,10 @@ mod tests {
     async fn host_abandoned_status_worker_orders_a_queued_start_before_stop() {
         let db = test_helpers::fresh_in_memory_db().await;
         let folder_id = test_helpers::seed_folder(&db, "/tmp/question-answer-stop").await;
-        let conv = conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None).await.unwrap();
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
         // 模拟 Stop API 已写入 Cancelled，而 lifecycle 的开始事件尚未消费。
         conversation_service::update_status(&db.conn, conv.id, ConversationStatus::Cancelled).await.unwrap();
         let manager = ConnectionManager::new();
@@ -4918,6 +4997,7 @@ mod tests {
             requested_working_dir: None,
             external_handle: None,
             assistant: None,
+            remote: None,
         }
     }
 

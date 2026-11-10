@@ -485,6 +485,48 @@ async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
     Some(resp.outcome.get("assistants").and_then(Value::as_bool) == Some(true))
 }
 
+async fn probe_remote_support(socket_path: &str) -> Option<bool> {
+    let response = tokio::time::timeout(ASSISTANT_PROBE_BUDGET, client_ping(socket_path))
+        .await
+        .ok()?
+        .ok()?;
+    if response.outcome.get("ok").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    Some(
+        response
+            .outcome
+            .get("remote_delegation")
+            .and_then(Value::as_bool)
+            == Some(true),
+    )
+}
+
+/// 远程调用的发送闸门；None 才允许继续交给 listener。
+async fn remote_delegation_preflight(socket: &str, arguments: &Value) -> Option<BrokerResponse> {
+    if !super::types::has_remote_delegation_fields(arguments) {
+        return None;
+    }
+    if let Err(error) = super::types::delegation_target_from_args(arguments) {
+        return Some(local_delegation_refusal(
+            error.code(),
+            "远程委派参数无效或混用了本机目标，未启动任何任务。",
+        ));
+    }
+    // 每次调用重新探测，未知/旧 listener 都拒绝，不允许误在本机执行。
+    match probe_remote_support(socket).await {
+        Some(true) => None,
+        Some(false) => Some(local_delegation_refusal(
+            "remote_delegation_unsupported",
+            "当前 BeeCode listener 不支持远程委派，请重启升级后的 BeeCode；不要改为本机执行。",
+        )),
+        None => Some(local_delegation_refusal(
+            "remote_delegation_support_unknown",
+            "无法确认远程委派能力，本次未发送任务，请稍后重试。",
+        )),
+    }
+}
+
 /// Per-in-flight-call state. The companion stashes one of these per
 /// `tools/call` so a subsequent `notifications/cancelled` for the same
 /// JSON-RPC `id` can wake the round-trip task and trigger a broker-side
@@ -798,7 +840,7 @@ number and leave `agent_type` out. An assistant brings its own agent, options an
 instructions.";
 
 /// Prefix put on `agent_type`'s description once `assistant_id` exists.
-pub(crate) const AGENT_TYPE_UNLESS_ASSISTANT: &str = "Required unless `assistant_id` is given. ";
+pub(crate) const AGENT_TYPE_UNLESS_ASSISTANT: &str = "Required for local delegation unless `assistant_id` is given; never set for remote delegation. ";
 
 /// `assistant_id`'s description, before the roster sentence.
 pub(crate) const ASSISTANT_ID_DESCRIPTION: &str = "Delegate to a user-defined assistant instead \
@@ -915,9 +957,7 @@ async fn build_tools_call_spawn(
             // as invalid — makes this an assistant call, which is forwarded
             // only to a parent known to understand it (see
             // `AssistantSupport`). Agent calls are never held up by the probe.
-            let names_assistant = arguments
-                .get("assistant_id")
-                .is_some_and(|v| !v.is_null());
+            let names_assistant = arguments.get("assistant_id").is_some_and(|v| !v.is_null());
             let support = ctx.assistant_support.clone();
             let req = BrokerRequest {
                 token: ctx.token.clone(),
@@ -927,6 +967,9 @@ async fn build_tools_call_spawn(
                 input: arguments,
             };
             let round_trip = Box::pin(async move {
+                if let Some(refusal) = remote_delegation_preflight(&socket, &req.input).await {
+                    return Ok(refusal);
+                }
                 if names_assistant {
                     match support.resolve(&socket).await {
                         AssistantSupport::Supported => {}
@@ -7399,6 +7442,7 @@ mod tests {
     }
 
     #[test]
+
     fn a_snapshot_renders_its_page_and_a_refusal_renders_its_note() {
         let page = render_browser_snapshot_result(&json!({
             "tabId": "t1",
@@ -7433,7 +7477,6 @@ mod tests {
         // Being refused is not a failed tool call: the turn carries on.
         assert_eq!(refused["isError"], false);
     }
-
 
     // ── computer use ───────────────────────────────────────────────────────
 
@@ -8332,11 +8375,12 @@ mod tests {
         });
         let delegate = delegate_schema(&ctx_on(&sock)).await;
         assert_eq!(delegate, embedded_delegate_schema());
+        assert_eq!(delegate["inputSchema"]["required"], json!(["task"]));
         assert_eq!(
-            delegate["inputSchema"]["required"],
-            json!(["agent_type", "task"])
+            *seen.lock().await,
+            vec!["ping"],
+            "no roster asked of an old parent"
         );
-        assert_eq!(*seen.lock().await, vec!["ping"], "no roster asked of an old parent");
     }
 
     #[cfg(unix)]
@@ -8450,6 +8494,123 @@ mod tests {
             result["structuredContent"]["error_code"],
             "assistant_support_unknown"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_preflight_fails_closed_before_forwarding() {
+        use crate::acp::delegation::transport::BrokerMessage;
+        let args = json!({"remote_connection_id":2,"remote_folder_id":4,"remote_assistant_id":3});
+        for (reply, expected) in [
+            (
+                Some(json!({"ok":true})),
+                Some("remote_delegation_unsupported"),
+            ),
+            (
+                Some(json!({"ok":true,"assistants":true})),
+                Some("remote_delegation_unsupported"),
+            ),
+            (
+                Some(json!({"ok":true,"remote_delegation":false})),
+                Some("remote_delegation_unsupported"),
+            ),
+            (Some(json!({"ok":true,"remote_delegation":true})), None),
+            (
+                Some(json!({"remote_delegation":true})),
+                Some("remote_delegation_support_unknown"),
+            ),
+            (None, Some("remote_delegation_support_unknown")),
+        ] {
+            let dir = tempfile::tempdir_in("/tmp").unwrap();
+            let (socket, seen) = fake_listener(&dir, move |msg| match msg {
+                BrokerMessage::Ping => reply.clone(),
+                _ => panic!("能力探测不能发送 Call"),
+            });
+            let result = remote_delegation_preflight(&socket, &args).await;
+            assert_eq!(
+                result
+                    .as_ref()
+                    .and_then(|r| r.outcome["error_code"].as_str()),
+                expected
+            );
+            assert_eq!(*seen.lock().await, vec!["ping"]);
+        }
+        let mut mixed = args.clone();
+        mixed["assistant_id"] = json!(3);
+        assert_eq!(
+            remote_delegation_preflight("/missing", &mixed)
+                .await
+                .unwrap()
+                .outcome["error_code"],
+            "mixed_local_remote_target"
+        );
+        assert!(
+            remote_delegation_preflight("/missing", &json!({"agent_type":"codex"}))
+                .await
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_calls_require_explicit_listener_capability() {
+        use crate::acp::delegation::transport::BrokerMessage;
+        for capability in [None, Some(false), Some(true)] {
+            let dir = tempfile::tempdir_in("/tmp").unwrap();
+            let (sock, seen) = fake_listener(&dir, move |msg| match msg {
+                BrokerMessage::Ping => {
+                    let mut reply = json!({"ok":true,"assistants":true});
+                    if let Some(value) = capability {
+                        reply["remote_delegation"] = json!(value);
+                    }
+                    Some(reply)
+                }
+                BrokerMessage::Call(req) => {
+                    assert_eq!(req.input["remote_agent"], "custom:remote-only");
+                    assert!(req.input.get("agent_type").is_none());
+                    Some(json!({"status":"running","task_id":"remote"}))
+                }
+                _ => None,
+            });
+            let result = drive_call(&ctx_on(&sock), &assistant_call(json!({"remote_connection_id":2,"remote_folder_id":4,"remote_agent":"custom:remote-only","task":"x"}))).await;
+            if capability == Some(true) {
+                assert_eq!(result["structuredContent"]["status"], "running");
+                assert_eq!(*seen.lock().await, vec!["ping", "call"]);
+            } else {
+                assert_eq!(
+                    result["structuredContent"]["error_code"],
+                    "remote_delegation_unsupported"
+                );
+                assert_eq!(*seen.lock().await, vec!["ping"]);
+            }
+        }
+        let result = drive_call(&ctx(), &assistant_call(json!({"remote_connection_id":2,"remote_folder_id":4,"remote_assistant_id":3,"task":"x"}))).await;
+        assert_eq!(
+            result["structuredContent"]["error_code"],
+            "remote_delegation_support_unknown"
+        );
+        let result = drive_call(&ctx(), &assistant_call(json!({"remote_connection_id":2,"remote_folder_id":4,"remote_assistant_id":3,"agent_type":"codex","task":"x"}))).await;
+        assert_eq!(
+            result["structuredContent"]["error_code"],
+            "mixed_local_remote_target"
+        );
+    }
+
+    #[test]
+    fn remote_schema_has_independent_targets_and_only_requires_task() {
+        let schema: Value = serde_json::from_str(TOOL_SCHEMA_JSON).unwrap();
+        let delegate = &schema[0]["inputSchema"];
+        assert_eq!(delegate["required"], json!(["task"]));
+        for name in [
+            "remote_connection_id",
+            "remote_folder_id",
+            "remote_assistant_id",
+            "remote_agent",
+            "permissions",
+        ] {
+            assert!(delegate["properties"].get(name).is_some(), "{name}");
+        }
+        assert!(delegate["properties"]["remote_agent"].get("enum").is_none());
     }
 
     // -- submit_result (the `result` group) -----------------------------------
