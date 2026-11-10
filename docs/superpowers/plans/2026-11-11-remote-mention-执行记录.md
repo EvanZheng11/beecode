@@ -95,6 +95,15 @@ stateDiagram-v2
 - 审核：RV-SNAPSHOT尝试1、2及RV-DB尝试1均宿主child_rejected，无最终结论，不能视为通过。RV-SNAPSHOT第2次中间调查确认括号URI缺陷，主会话已修；最终独立复验仍缺。RV-DB第2次宿主 `1a2cde0c-8852-4683-8491-77d1ae4c4a27` 正在只读审核。
 - RM05负责人仍waiting，listener/meta孩子已提交，run孩子运行中；不得越过负责人直接夺取孩子结果（主会话查询孩子ID返回unknown所有权限制）。
 
+## 最新验证检查点（04:59）
+
+- 主会话已在 INT 提交 `b9c911aee`：远程窗口新建携带conversationId，已打开窗口通过shell专属事件定位；前端保留remoteConnectionId/remoteWindowId，相关15/15测试通过。Rust侧需要RM05合入后桌面检查。
+- Node22分片回归：`src/lib src/contexts src/hooks src/stores` 321文件/5503测试通过；chat/message/workspace/settings/layout 267文件/3660通过；conversations/files/browser/canvas/providers/connection/shared/ui/ai-elements/tasks/i18n/browser-agent 167文件/2259通过。共11422项，尚不等于整仓最终AC7完成。
+- INT tsc仅剩未修改 `use-connection-lifecycle.locale.test.tsx:63` 基线错误；未顺手修无关测试。
+- 快照Send/FnOnce错误已通过真实cargo check确认消失；当前12项错误都是RM05尚未合入的remote字段构造缺失，待下游合并后重验。
+- RV-SNAPSHOT和RV-DB前两次规划审核均宿主child_rejected，最后第3次改BeeCode codex通道，模型unknown；实际task分别 `6f2af904-985c-47c3-8da7-0b8f9876693e`、`0c645169-96c1-437a-90a9-255bb362e917`，仍执行中，没有结论不标通过。
+- RM05负责人已集成子模块，固定提交 `aedf9d9fc`，其后还有未提交编译修正；其隔离验证副本发现meta Option类型错误正修复；不提前合入不稳定工作文件。
+
 ## 验证与交付门禁
 
 1. 各执行者定向测试、diff 检查、任务分支提交；主会话按 AC 核对，不以 done 代替验收。
