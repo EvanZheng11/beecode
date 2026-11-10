@@ -182,6 +182,15 @@ pub async fn delete_remote_workspace_connection(
     db: tauri::State<'_, AppDatabase>,
     id: i32,
 ) -> Result<(), AppCommandError> {
+    if let Some(state) =
+        app.try_state::<std::sync::Arc<crate::acp::delegation::broker::DelegationBroker>>()
+    {
+        state.cancel_remote_connection(id).await?;
+    } else {
+        return Err(AppCommandError::configuration_invalid(
+            "远程委派状态不可用，无法安全删除连接",
+        ));
+    }
     remote_workspace_connection_service::delete(&db.conn, id)
         .await
         .map_err(AppCommandError::db)?;

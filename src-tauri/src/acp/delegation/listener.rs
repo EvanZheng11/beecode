@@ -43,7 +43,7 @@ use crate::acp::delegation::transport::{
 use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
     delegation_target_from_args, DelegationRequest, DelegationTarget, DelegationTargetError,
-    DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
+    DelegationTaskReport, RemoteDelegationTarget, ResumeDelegationRequest, TaskStatus,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{
@@ -460,7 +460,8 @@ impl DelegationListener {
                 // `assistants: true` is the capability the companion checks
                 // before it forwards an `assistant_id` call — see
                 // `BrokerMessage::Ping`.
-                outcome: serde_json::json!({ "ok": true, "assistants": true }),
+                // 仅在远程请求已接入 prepare + broker 生产分支后声明此能力。
+                outcome: serde_json::json!({ "ok": true, "assistants": true, "remote_delegation": true }),
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -1362,6 +1363,23 @@ impl DelegationListener {
         //    the database: the assistant supplies the agent, its options and
         //    its brief, frozen for this run.
         let (agent_type, assistant) = match delegation_target_from_args(&req.input) {
+            // 必须先识别远程目标，绝不查本机助手，也不让非法远程参数退回本机。
+            Ok(DelegationTarget::Remote { .. }) => {
+                let task = match remote_request_task(&req.input) {
+                    Ok(task) => task,
+                    Err((code, message)) => return report_failed(&code, &message),
+                };
+                let prepared = self
+                    .broker
+                    .prepare_remote_target(parent_conversation_id, &req.input)
+                    .await;
+                let delegation_req =
+                    match remote_delegation_request(req, parent_conversation_id, task, prepared) {
+                        Ok(req) => req,
+                        Err((code, message)) => return report_failed(&code, &message),
+                    };
+                return self.broker.start_delegation(delegation_req).await;
+            }
             Ok(DelegationTarget::Agent(agent_type)) => (agent_type, None),
             Ok(DelegationTarget::Assistant(id)) => match self.broker.resolve_assistant(id).await {
                 Some((agent_type, assistant)) => (agent_type, Some(assistant)),
@@ -1369,6 +1387,18 @@ impl DelegationListener {
             },
             Err(DelegationTargetError::InvalidAssistantId(raw)) => {
                 return self.assistant_not_found(&raw).await;
+            }
+            Err(DelegationTargetError::MixedLocalRemoteTarget) => {
+                return report_failed(
+                    "mixed_local_remote_target",
+                    "远程委派不得同时指定本机 agent_type 或 assistant_id",
+                );
+            }
+            Err(DelegationTargetError::InvalidRemoteTarget(field)) => {
+                return report_failed(
+                    "invalid_remote_target",
+                    &format!("远程委派参数无效：{field}"),
+                );
             }
             Err(DelegationTargetError::InvalidAgentType(raw)) => return invalid_agent_type(&raw),
             Err(DelegationTargetError::Missing) => {
@@ -1406,6 +1436,7 @@ impl DelegationListener {
             requested_working_dir,
             external_handle: req.external_handle,
             assistant,
+            remote: None,
         };
         self.broker.start_delegation(delegation_req).await
     }
@@ -1417,6 +1448,43 @@ impl DelegationListener {
             &assistant_not_found_message(asked, &roster),
         )
     }
+}
+
+/// 远程路径只能由已登记的 folder 换算，不能接受调用方自由指定。
+fn remote_request_task(input: &Value) -> Result<String, (String, String)> {
+    if input.get("working_dir").is_some() || input.get("remote_workspace").is_some() {
+        return Err((
+            "invalid_working_dir".into(),
+            "远程委派只能指定 remote_folder_id，不能指定 working_dir 或 remote_workspace".into(),
+        ));
+    }
+    match input.get("task").and_then(Value::as_str) {
+        Some(task) if !task.trim().is_empty() => Ok(task.to_string()),
+        _ => Err(("invalid_working_dir".into(), "missing or empty task".into())),
+    }
+}
+
+/// 保留 prepare 的授权/目录错误码；只有成功结果才能进入启动分支。
+fn remote_delegation_request(
+    req: BrokerRequest,
+    parent_conversation_id: i32,
+    task: String,
+    prepared: Result<RemoteDelegationTarget, (String, String)>,
+) -> Result<DelegationRequest, (String, String)> {
+    let remote = prepared?;
+    Ok(DelegationRequest {
+        parent_connection_id: req.parent_connection_id,
+        parent_conversation_id,
+        parent_tool_use_id: req.parent_tool_use_id,
+        agent_type: crate::models::AgentType::ClaudeCode,
+        task,
+        working_dir: Some(remote.workspace.clone()),
+        // lifecycle 的匹配键读取原始 working_dir；远程请求禁止传路径，因此为 None。
+        requested_working_dir: None,
+        external_handle: req.external_handle,
+        assistant: None,
+        remote: Some(remote),
+    })
 }
 
 /// Serialize a [`DelegationTaskReport`] into a [`BrokerResponse`] for the wire.
@@ -1846,6 +1914,7 @@ fn report_canceled(message: &str) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1864,6 +1933,7 @@ fn report_failed(error_code: &str, message: &str) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1883,6 +1953,7 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -2819,6 +2890,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                remote: None,
             })
             .await;
         let task_id = ack.task_id.clone().expect("running task carries an id");
@@ -2973,6 +3045,7 @@ mod tests {
                         requested_working_dir: None,
                         external_handle: None,
                         assistant: None,
+                        remote: None,
                     })
                     .await
                     .task_id
@@ -3076,6 +3149,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                remote: None,
             })
             .await;
         let task_id = ack.task_id.clone().unwrap();
@@ -3128,6 +3202,7 @@ mod tests {
                     requested_working_dir: None,
                     external_handle: Some("h-1".into()),
                     assistant: None,
+                    remote: None,
                 };
                 broker.handle_request(req).await
             })
@@ -5459,10 +5534,230 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ping_announces_assistant_support() {
+    async fn ping_announces_assistant_and_remote_support() {
         let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
         let pong = serve(listener, BrokerMessage::Ping).await;
-        assert_eq!(pong, json!({"ok": true, "assistants": true}));
+        assert_eq!(
+            pong,
+            json!({"ok": true, "assistants": true, "remote_delegation": true})
+        );
+    }
+
+    fn remote_input() -> Value {
+        json!({
+            "remote_connection_id": 2,
+            "remote_folder_id": 7,
+            "remote_assistant_id": 3,
+            "task": "review"
+        })
+    }
+
+    #[tokio::test]
+    async fn remote_mixed_targets_never_resolve_or_spawn_a_local_assistant() {
+        let mock = Arc::new(MockSpawner::new());
+        let (listener, _) = assistant_listener(mock.clone()).await;
+        // 3 是可用的本机助手；混用时仍不能解析或启动它，null 字段也算混用。
+        for (key, value) in [
+            ("assistant_id", json!(3)),
+            ("assistant_id", Value::Null),
+            ("agent_type", json!("codex")),
+            ("agent_type", Value::Null),
+        ] {
+            let mut input = remote_input();
+            input[key] = value;
+            let report = serve(listener.clone(), call(input)).await;
+            assert_eq!(report["status"], "failed");
+            assert_eq!(report["error_code"], "mixed_local_remote_target");
+            assert!(report.get("assistant_id").is_none());
+        }
+        assert!(mock.spawn_args.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_invalid_arguments_fail_closed_before_local_execution() {
+        let mock = Arc::new(MockSpawner::new());
+        let (listener, _) = assistant_listener(mock.clone()).await;
+        let mut cases = Vec::new();
+        for key in [
+            "remote_connection_id",
+            "remote_folder_id",
+            "remote_assistant_id",
+        ] {
+            for value in [
+                json!(0),
+                json!(-1),
+                json!(1.5),
+                json!(2147483648_i64),
+                json!("2"),
+                Value::Null,
+            ] {
+                let mut input = remote_input();
+                input[key] = value;
+                cases.push(input);
+            }
+            let mut input = remote_input();
+            input.as_object_mut().unwrap().remove(key);
+            cases.push(input);
+        }
+        let mut both_targets = remote_input();
+        both_targets["remote_agent"] = json!("remote-custom");
+        cases.push(both_targets);
+        for value in [
+            json!(""),
+            json!("remote agent"),
+            json!("../agent"),
+            Value::Null,
+        ] {
+            let mut input = remote_input();
+            input.as_object_mut().unwrap().remove("remote_assistant_id");
+            input["remote_agent"] = value;
+            cases.push(input);
+        }
+        for value in [json!("invalid"), Value::Null, json!(true)] {
+            let mut input = remote_input();
+            input["permissions"] = value;
+            cases.push(input);
+        }
+        for input in cases {
+            let report = serve(listener.clone(), call(input)).await;
+            assert_eq!(report["status"], "failed");
+            assert_eq!(report["error_code"], "invalid_remote_target");
+        }
+        assert!(mock.spawn_args.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_task_and_freeform_paths_are_rejected_before_prepare() {
+        let mock = Arc::new(MockSpawner::new());
+        let (listener, _) = assistant_listener(mock.clone()).await;
+        let mut cases = Vec::new();
+        for value in [json!(""), json!(" \n "), Value::Null, json!(12)] {
+            let mut input = remote_input();
+            input["task"] = value;
+            cases.push(input);
+        }
+        let mut missing_task = remote_input();
+        missing_task.as_object_mut().unwrap().remove("task");
+        cases.push(missing_task);
+        for key in ["working_dir", "remote_workspace"] {
+            for value in [json!("/arbitrary/unregistered"), Value::Null] {
+                let mut input = remote_input();
+                input[key] = value;
+                cases.push(input);
+            }
+        }
+        for input in cases {
+            let report = serve(listener.clone(), call(input)).await;
+            assert_eq!(report["error_code"], "invalid_working_dir");
+        }
+        assert!(mock.spawn_args.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_requests_keep_token_parent_conversation_and_question_gates() {
+        let mock = Arc::new(MockSpawner::new());
+        let (listener, tokens) = assistant_listener(mock.clone()).await;
+        let mut invalid_token = make_request(remote_input()).await;
+        invalid_token.token = "invalid".into();
+        assert_eq!(
+            listener.process(invalid_token).await.status,
+            TaskStatus::Canceled
+        );
+        let mut foreign_parent = make_request(remote_input()).await;
+        foreign_parent.parent_connection_id = "foreign".into();
+        assert_eq!(
+            listener.process(foreign_parent).await.status,
+            TaskStatus::Canceled
+        );
+        let missing_parent = make_listener(listener.broker.clone(), tokens, None);
+        assert_eq!(
+            missing_parent
+                .process(make_request(remote_input()).await)
+                .await
+                .status,
+            TaskStatus::Canceled
+        );
+        let specs = crate::acp::question::parse_questions(&json!({"questions": [{
+            "question": "继续？", "header": "确认", "options": [{"label": "甲"}, {"label": "乙"}]
+        }]}))
+        .unwrap();
+        let _pending = listener
+            .questions
+            .register_question("parent-conn", specs)
+            .await
+            .unwrap();
+        let blocked = listener.process(make_request(remote_input()).await).await;
+        assert_eq!(blocked.status, TaskStatus::Canceled);
+        assert!(blocked.message.unwrap().contains("question"));
+        assert!(mock.spawn_args.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remote_prepare_refusals_are_preserved_without_building_a_request() {
+        // 这里只验证 listener 对 prepare 结果的处理，不冒充授权库/网关联调。
+        for code in [
+            "remote_not_mentioned",
+            "remote_folder_not_found",
+            "remote_unavailable",
+        ] {
+            let refusal = remote_delegation_request(
+                make_request(remote_input()).await,
+                41,
+                "review".into(),
+                Err((code.into(), "远程目标不可用".into())),
+            )
+            .unwrap_err();
+            let report = report_failed(&refusal.0, &refusal.1);
+            assert_eq!(report.status, TaskStatus::Failed);
+            assert_eq!(report.error_code.as_deref(), Some(code));
+            assert_eq!(report.message.as_deref(), Some("远程目标不可用"));
+            assert!(report.task_id.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_prepared_request_uses_only_registered_path_and_remote_identity() {
+        use crate::acp::delegation::types::RemoteTarget;
+        for target in [
+            RemoteTarget::Assistant(3),
+            RemoteTarget::Agent("remote-custom".into()),
+        ] {
+            let mut input = remote_input();
+            if let RemoteTarget::Agent(agent) = &target {
+                input.as_object_mut().unwrap().remove("remote_assistant_id");
+                input["remote_agent"] = json!(agent);
+            }
+            let parsed_target = delegation_target_from_args(&input).unwrap();
+            let task = remote_request_task(&input).unwrap();
+            let mut wire_req = make_request(input).await;
+            wire_req.external_handle = Some("cancel-handle".into());
+            let request = remote_delegation_request(
+                wire_req,
+                41,
+                task,
+                Ok(RemoteDelegationTarget {
+                    connection_id: 2,
+                    folder_id: 7,
+                    workspace: "/registered/remote-project".into(),
+                    target,
+                    permissions: crate::cli_run::PermissionPolicy::Wait,
+                }),
+            )
+            .unwrap();
+            assert_eq!(request.target(), parsed_target);
+            assert_eq!(request.parent_conversation_id, 41);
+            assert_eq!(request.parent_connection_id, "parent-conn");
+            assert_eq!(request.parent_tool_use_id, "pt-1");
+            assert_eq!(request.external_handle.as_deref(), Some("cancel-handle"));
+            assert_eq!(
+                request.working_dir.as_deref(),
+                Some("/registered/remote-project")
+            );
+            assert_eq!(request.requested_working_dir, None);
+            assert_eq!(request.agent_type, AgentType::ClaudeCode);
+            assert!(request.assistant.is_none());
+            assert!(request.remote.is_some());
+        }
     }
 
     #[tokio::test]

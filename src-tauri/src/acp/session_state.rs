@@ -248,6 +248,20 @@ pub struct PendingUserMessage {
     pub blocks: Vec<crate::acp::types::UserMessageBlock>,
 }
 
+/// `SessionState.active_remote_delegations` 的上限。远程任务的终态要留到下一次
+/// attach 重放，但不能无限长；超出先丢最旧的终态条目，运行中的条目不受影响。
+pub const MAX_ACTIVE_REMOTE_DELEGATIONS: usize = 32;
+
+/// 一条远程委派快照条目里的状态字符串（设计 9.3.3 的状态机）。
+fn remote_delegation_status(entry: &serde_json::Value) -> Option<&str> {
+    entry.get("status").and_then(|v| v.as_str())
+}
+
+/// 远程委派的终态只有这三个；`unreachable` 仍在跟踪中（非终态）。
+pub fn is_remote_terminal_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "canceled")
+}
+
 /// 后端权威的会话状态。每个 AgentConnection 持有一个 Arc<RwLock<SessionState>>。
 ///
 /// 字段范围：仅当前 turn 的 in-flight 数据 + 元信息 + 协商出的能力。
@@ -325,6 +339,26 @@ pub struct SessionState {
     /// cumulative growth; completed delegations are recovered from the child's
     /// persisted DB row, not from here. See `ActiveDelegationState`.
     pub active_delegations: BTreeMap<String, ActiveDelegationState>,
+
+    /// 远程委派（跨机执行）的状态表，key 是条目里的 `task_id`。
+    ///
+    /// 与 `active_delegations` 的目的相同——让刷新/重连后 attach 到的客户端还能
+    /// 恢复委派卡片的绑定——但远程任务没有本机子连接，`ActiveDelegationState`
+    /// 的 `child_*` 必填字段表达不了它，所以这里存**不透明 JSON 值**：形状由
+    /// `acp::delegation::meta_writer` 与前端 `ActiveRemoteDelegationState`
+    /// （`remote_delegation_started` 的载荷 + 最新状态）约定，避免与独占
+    /// `acp/types.rs` 的工单争同一个结构体。
+    ///
+    /// 与 `active_delegations` 的**唯一差别**：终态条目**保留**。本机终态的
+    /// 恢复路径是子会话的 DB 行（`inject_delegation_meta`），远程任务的终态只
+    /// 落本机 `remote_delegation` 表，而父工具调用往往已经随回合结束消失
+    /// （`ConnectionManagerMetaWriter::write_meta` 的守卫会跳过那次 meta 写入），
+    /// 于是终态只能靠这份表在快照里重放，否则刷新后卡片会停在 running。
+    /// 用 [`MAX_ACTIVE_REMOTE_DELEGATIONS`] 兜住上限，超出先丢最旧的终态条目。
+    ///
+    /// 与其他 turn 级字段不同，`TurnComplete` 不清空它（远程任务跨回合存活，
+    /// 终态必须能被下一次 attach 看到）。
+    pub active_remote_delegations: Vec<serde_json::Value>,
 
     /// Live user-feedback ("steering") notes for the current turn. Appended by
     /// `FeedbackSubmitted` (a user note while the agent works), flipped to
@@ -909,6 +943,7 @@ impl SessionState {
             question_timed_out: false,
             pending_plan_approval: None,
             active_delegations: BTreeMap::new(),
+            active_remote_delegations: Vec::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
@@ -2535,6 +2570,7 @@ impl SessionState {
             pending_plan_approval: self.pending_plan_approval.clone(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
+            active_remote_delegations: self.active_remote_delegations.clone(),
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
@@ -2558,6 +2594,79 @@ impl SessionState {
             async_tasks: self.async_tasks.values().cloned().collect(),
             goal_actions: self.goal_actions.clone(),
             event_seq: self.event_seq,
+        }
+    }
+
+    /// 记录/更新一条远程委派状态，供快照重放（见
+    /// `SessionState.active_remote_delegations`）。
+    ///
+    /// 由 `DelegationMetaWriter::write_remote_event` 在**写锁内**调用，所以
+    /// 客户端不会两头落空：快照读到的要么已经包含这次更新，要么稍后还会收到
+    /// 同一个 `task_id` 的同名事件（前端按 `task_id` 覆盖写入，重复投递幂等）。
+    ///
+    /// `entry` 就是事件载荷：`task_id` 必需（缺了无处安放，记日志后忽略）；
+    /// 已有同 `task_id` 的条目按字段合并（身份空值不覆盖，阻塞/错误允许清空，`remote` 整体替换），
+    /// 新条目追加在末尾。终态条目**不删**——终态只靠它在刷新后的快照里重放。
+    pub fn upsert_remote_delegation(&mut self, entry: serde_json::Value) {
+        let serde_json::Value::Object(fields) = entry else {
+            tracing::warn!("[ACP][远程委派] 事件载荷不是对象，跳过状态记录");
+            return;
+        };
+        let Some(task_id) = fields
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+        else {
+            tracing::warn!("[ACP][远程委派] 事件缺少 task_id，快照无法重放这次状态");
+            return;
+        };
+
+        // 未提供的身份字段保持不变；显式 null 的阻塞/错误字段则必须清空，
+        // 否则 blocked → running 后刷新仍会显示旧权限请求。
+        let clean: serde_json::Map<String, serde_json::Value> = fields
+            .into_iter()
+            .filter(|(key, v)| {
+                !v.is_null()
+                    || matches!(key.as_str(), "blocked_on" | "error_code" | "error_message")
+            })
+            .collect();
+
+        if let Some(existing) = self
+            .active_remote_delegations
+            .iter_mut()
+            .find(|e| e.get("task_id").and_then(|v| v.as_str()) == Some(task_id.as_str()))
+        {
+            let Some(target) = existing.as_object_mut() else {
+                return;
+            };
+            for (key, value) in clean {
+                // `remote` 是一次完整快照（连接名、run id、远程会话、worktree），
+                // 部分合并会留下前后不一致的组合，因此整体替换。
+                target.insert(key, value);
+            }
+            self.trim_active_remote_delegations();
+            return;
+        }
+
+        self.active_remote_delegations
+            .push(serde_json::Value::Object(clean));
+        self.trim_active_remote_delegations();
+    }
+
+    /// 把远程委派表压回 [`MAX_ACTIVE_REMOTE_DELEGATIONS`]：只丢终态条目，
+    /// 运行中的一律保留（丢了就等于让卡片永远停在 running）。
+    fn trim_active_remote_delegations(&mut self) {
+        while self.active_remote_delegations.len() > MAX_ACTIVE_REMOTE_DELEGATIONS {
+            let Some(index) = self
+                .active_remote_delegations
+                .iter()
+                .position(|e| remote_delegation_status(e).is_some_and(is_remote_terminal_status))
+            else {
+                return;
+            };
+            self.active_remote_delegations.remove(index);
         }
     }
 }
@@ -2650,6 +2759,14 @@ pub struct LiveSessionSnapshot {
     /// doesn't bloat every snapshot with an empty array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_delegations: Vec<ActiveDelegationState>,
+    /// 远程委派（跨机执行）的快照表（见 `SessionState.active_remote_delegations`）。
+    /// 条目是不透明 JSON 值（形状与 `remote_delegation_started` 的载荷一致，另带
+    /// 最新 `status`），由前端 `ActiveRemoteDelegationState` 解读；终态条目也在
+    /// 里面，因为远程任务的终态没有本机子会话行可以回查。`#[serde(default)]` 让
+    /// 旧服务端的快照照常反序列化，`skip_serializing_if` 让无远程委派的会话保持
+    /// 与上线前逐字节一致。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_remote_delegations: Vec<serde_json::Value>,
     /// Live user-feedback notes for the current turn (see `SessionState.feedback`).
     /// `#[serde(default)]` so older server payloads without this field still
     /// deserialize; `skip_serializing_if` keeps the common empty case off the
@@ -5420,6 +5537,147 @@ mod tests {
         let mut s = fresh_state();
         s.apply_event(&delegation_completed("pt-unknown", 7));
         assert!(s.active_delegations.is_empty());
+    }
+
+    // --- active_remote_delegations：远程委派的状态重放（终态保留） ---
+
+    fn remote_started(task_id: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "parent_connection_id": "conn-test",
+            "parent_tool_use_id": format!("pt-{task_id}"),
+            "task_id": task_id,
+            "status": status,
+            "remote": {
+                "connection_id": 3,
+                "connection_name": "构建机",
+                "run_id": "run-1",
+            },
+            "task_preview": "远程跑一遍测试",
+        })
+    }
+
+    #[test]
+    fn remote_delegation_entry_lands_on_snapshot_and_round_trips() {
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(remote_started("task-1", "running"));
+
+        let snap = s.to_snapshot();
+        assert_eq!(snap.active_remote_delegations.len(), 1);
+        // web 客户端从 JSON 快照水合，字段名必须是 snake_case。
+        let json = serde_json::to_string(&snap).unwrap();
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.active_remote_delegations.len(), 1);
+        let entry = &back.active_remote_delegations[0];
+        assert_eq!(entry["task_id"], "task-1");
+        assert_eq!(entry["parent_tool_use_id"], "pt-task-1");
+        assert_eq!(entry["status"], "running");
+        assert_eq!(entry["remote"]["run_id"], "run-1");
+    }
+
+    #[test]
+    fn remote_delegation_update_merges_into_the_existing_entry() {
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(remote_started("task-1", "running"));
+        // updated / completed 的载荷只带 task_id 与结果字段。
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1",
+            "status": "completed",
+            "result_preview": "全部通过",
+            "duration_ms": 4321,
+        }));
+
+        assert_eq!(s.active_remote_delegations.len(), 1, "同 task_id 覆盖而非追加");
+        let entry = &s.active_remote_delegations[0];
+        assert_eq!(entry["status"], "completed");
+        assert_eq!(entry["result_preview"], "全部通过");
+        assert_eq!(entry["duration_ms"], 4321);
+        // started 写入的身份信息必须还在。
+        assert_eq!(entry["remote"]["connection_name"], "构建机");
+        assert_eq!(entry["task_preview"], "远程跑一遍测试");
+    }
+
+    #[test]
+    fn remote_delegation_unblocked_clears_stale_prompt_and_trims_completed_updates() {
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(remote_started("task-1", "blocked"));
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "blocked_on": "permission"
+        }));
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "status": "running", "blocked_on": null
+        }));
+        assert!(s.active_remote_delegations[0]["blocked_on"].is_null());
+        for i in 0..MAX_ACTIVE_REMOTE_DELEGATIONS {
+            s.upsert_remote_delegation(remote_started(&format!("run-{i}"), "running"));
+        }
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "status": "completed"
+        }));
+        assert_eq!(s.active_remote_delegations.len(), MAX_ACTIVE_REMOTE_DELEGATIONS);
+    }
+
+    #[test]
+    fn remote_delegation_terminal_survives_turn_complete() {
+        // 远程终态常常在父回合结束之后才到，此时父工具调用已被清掉、meta 写不
+        // 进去，刷新只能靠快照重放终态——所以终态条目不清。
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(remote_started("task-1", "running"));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1",
+            "status": "canceled",
+            "error_code": "canceled",
+        }));
+
+        let snap = s.to_snapshot();
+        assert_eq!(snap.active_remote_delegations.len(), 1);
+        assert_eq!(snap.active_remote_delegations[0]["status"], "canceled");
+        assert_eq!(
+            snap.active_remote_delegations[0]["error_code"],
+            "canceled"
+        );
+        assert!(snap.active_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn remote_delegation_without_task_id_is_ignored() {
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(serde_json::json!({ "status": "running" }));
+        s.upsert_remote_delegation(serde_json::json!({ "task_id": "   " }));
+        assert!(s.active_remote_delegations.is_empty());
+    }
+
+    #[test]
+    fn remote_delegation_table_is_bounded_but_keeps_running_entries() {
+        // 终态要留到下次 attach 重放，但不能无限增长：超出上限先丢最旧的终态。
+        let mut s = fresh_state();
+        for i in 0..MAX_ACTIVE_REMOTE_DELEGATIONS {
+            s.upsert_remote_delegation(remote_started(&format!("done-{i}"), "completed"));
+        }
+        assert_eq!(s.active_remote_delegations.len(), MAX_ACTIVE_REMOTE_DELEGATIONS);
+
+        s.upsert_remote_delegation(remote_started("fresh", "running"));
+        assert_eq!(s.active_remote_delegations.len(), MAX_ACTIVE_REMOTE_DELEGATIONS);
+        assert!(
+            !s.active_remote_delegations
+                .iter()
+                .any(|e| e["task_id"] == "done-0"),
+            "最旧的终态条目先被丢弃"
+        );
+
+        // 运行中的条目再多也不丢：丢了就是卡片永远停在 running。
+        let mut running_only = fresh_state();
+        for i in 0..(MAX_ACTIVE_REMOTE_DELEGATIONS + 8) {
+            running_only.upsert_remote_delegation(remote_started(&format!("run-{i}"), "running"));
+        }
+        assert_eq!(
+            running_only.active_remote_delegations.len(),
+            MAX_ACTIVE_REMOTE_DELEGATIONS + 8
+        );
     }
 
     #[test]
