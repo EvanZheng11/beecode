@@ -21,6 +21,8 @@ pub mod model_provider;
 pub mod opened_tab;
 pub mod prelude;
 pub mod quick_message;
+pub mod remote_delegation;
+pub mod remote_mention_grant;
 pub mod remote_workspace_connection;
 pub mod token_usage_sync;
 pub mod token_usage_turn;
