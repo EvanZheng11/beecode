@@ -339,6 +339,7 @@ const h = vi.hoisted(() => {
     acpTouchConnection: vi.fn(),
     acpCancel: vi.fn(),
     buildDelegationSeedEnvelopes: vi.fn(() => []),
+    buildRemoteDelegationSeedEnvelopes: vi.fn(() => []),
     denormalizeSnapshot: vi.fn(),
     // Stable across renders so tests can assert on what the error handler
     // routes to the OS notification.
@@ -376,6 +377,7 @@ vi.mock("@/lib/platform", () => ({
 
 vi.mock("@/lib/delegation-seed", () => ({
   buildDelegationSeedEnvelopes: h.buildDelegationSeedEnvelopes,
+  buildRemoteDelegationSeedEnvelopes: h.buildRemoteDelegationSeedEnvelopes,
 }))
 
 vi.mock("@/contexts/active-folder-context", () => ({
@@ -473,6 +475,7 @@ beforeEach(() => {
   h.store = null
   h.eventStreamValue = h.stream
   h.buildDelegationSeedEnvelopes.mockClear()
+  h.buildRemoteDelegationSeedEnvelopes.mockClear()
   h.acpGetAgentStatus.mockReset()
   h.acpFindConnectionForConversation.mockReset()
   h.acpConnect.mockReset()

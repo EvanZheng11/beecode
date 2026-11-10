@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
 
-import { buildDelegationSeedEnvelopes } from "@/lib/delegation-seed"
-import type { ActiveDelegationState } from "@/lib/types"
+import {
+  buildDelegationSeedEnvelopes,
+  buildRemoteDelegationSeedEnvelopes,
+} from "@/lib/delegation-seed"
+import type {
+  ActiveDelegationState,
+  ActiveRemoteDelegationState,
+} from "@/lib/types"
 
 function dele(
   overrides: Partial<ActiveDelegationState> & { parent_tool_use_id: string }
@@ -99,5 +105,127 @@ describe("buildDelegationSeedEnvelopes", () => {
 
   it("returns an empty array for no delegations", () => {
     expect(buildDelegationSeedEnvelopes("p", [], 0)).toEqual([])
+  })
+})
+
+function remoteDele(
+  overrides: Partial<ActiveRemoteDelegationState> & {
+    parent_tool_use_id: string
+    task_id: string
+  }
+): ActiveRemoteDelegationState {
+  return {
+    remote: {
+      connection_id: 7,
+      connection_name: "办公室 Mac mini",
+      run_id: "run-abcdef123456",
+      conversation_id: 512,
+      link: "codeg://session/512",
+      worktree: { path: "/repo/.worktrees/x", branch: "wt/x" },
+    },
+    status: "running",
+    ...overrides,
+  }
+}
+
+describe("buildRemoteDelegationSeedEnvelopes", () => {
+  it("seeds remote_delegation_started with the remote task info, never local child ids", () => {
+    const env = buildRemoteDelegationSeedEnvelopes(
+      "parent-conn",
+      [remoteDele({ parent_tool_use_id: "pt-1", task_id: "task-1" })],
+      42
+    )
+    // 运行中的远程任务：只需 started（状态就是 running，不补 update）。
+    expect(env).toHaveLength(1)
+    expect(env[0]).toMatchObject({
+      seq: 42,
+      connection_id: "parent-conn",
+      type: "remote_delegation_started",
+      parent_connection_id: "parent-conn",
+      parent_tool_use_id: "pt-1",
+      task_id: "task-1",
+      remote: {
+        connection_id: 7,
+        connection_name: "办公室 Mac mini",
+        run_id: "run-abcdef123456",
+        conversation_id: 512,
+      },
+    })
+    // 远程派生的信封里没有本机 child_* 字段 —— 那正是「不误开本机会话」的根据。
+    expect(env[0]).not.toHaveProperty("child_conversation_id")
+    expect(env[0]).not.toHaveProperty("child_connection_id")
+  })
+
+  it("replays a blocked task as a started + updated pair so the card shows it waiting", () => {
+    const env = buildRemoteDelegationSeedEnvelopes(
+      "p",
+      [
+        remoteDele({
+          parent_tool_use_id: "pt-1",
+          task_id: "task-1",
+          status: "blocked",
+          blocked_on: "permission",
+        }),
+      ],
+      7
+    )
+    expect(env.map((e) => e.type)).toEqual([
+      "remote_delegation_started",
+      "remote_delegation_updated",
+    ])
+    expect(env[1]).toMatchObject({
+      task_id: "task-1",
+      status: "blocked",
+      blocked_on: "permission",
+    })
+  })
+
+  it("replays an unreachable task as a started + updated pair (it is not terminal)", () => {
+    const env = buildRemoteDelegationSeedEnvelopes(
+      "p",
+      [
+        remoteDele({
+          parent_tool_use_id: "pt-1",
+          task_id: "task-1",
+          status: "unreachable",
+        }),
+      ],
+      1
+    )
+    expect(env.map((e) => e.type)).toEqual([
+      "remote_delegation_started",
+      "remote_delegation_updated",
+    ])
+    expect(env[1]).toMatchObject({ status: "unreachable" })
+  })
+
+  it("replays a finished task as started + completed with its result preview", () => {
+    const env = buildRemoteDelegationSeedEnvelopes(
+      "p",
+      [
+        remoteDele({
+          parent_tool_use_id: "pt-1",
+          task_id: "task-1",
+          status: "failed",
+          error_code: "remote_run_lost",
+          duration_ms: 1234,
+        }),
+      ],
+      1
+    )
+    expect(env.map((e) => e.type)).toEqual([
+      "remote_delegation_started",
+      "remote_delegation_completed",
+    ])
+    expect(env[1]).toMatchObject({
+      task_id: "task-1",
+      status: "failed",
+      error_code: "remote_run_lost",
+      duration_ms: 1234,
+    })
+  })
+
+  it("returns an empty array when the snapshot carries none", () => {
+    expect(buildRemoteDelegationSeedEnvelopes("p", [], 0)).toEqual([])
   })
 })

@@ -40,7 +40,12 @@ import {
   useState,
 } from "react"
 
-import type { AgentType, EventEnvelope } from "@/lib/types"
+import type {
+  AgentType,
+  EventEnvelope,
+  RemoteDelegationStatus,
+  RemoteTaskInfo,
+} from "@/lib/types"
 import {
   type AcpEventDelivery,
   useAcpActions,
@@ -49,12 +54,78 @@ import {
 
 export type DelegationStatus = "running" | "ok" | "err"
 
+/**
+ * 远程委派在当前卡片上的全部远程信息（跨机执行的任务）。
+ *
+ * `status` 保留后端原始状态（`RemoteDelegationStatus`），卡片据此区分
+ * 「等待远程处理」「无法连接」「取消未确认」等只有远程才有的情形；绑定自身的
+ * `status` 仍是本机三态，供既有状态解析逻辑复用。
+ */
+export interface RemoteDelegationBinding {
+  connectionId: number
+  connectionName: string
+  runId: string
+  /** 远程会话 id：本机不存在该会话，绝不用它查本机记录。 */
+  conversationId: number | null
+  link: string | null
+  worktree: { path: string; branch: string } | null
+  status: RemoteDelegationStatus
+  blockedOn: string | null
+  resultPreview: string | null
+  errorCode: string | null
+  durationMs: number | null
+}
+
+/** 后端远程状态 → 卡片既有三态。远程专属状态在 `remote.status` 里另行保留。 */
+export function remoteStatusToDelegationStatus(
+  status: RemoteDelegationStatus
+): DelegationStatus {
+  switch (status) {
+    case "completed":
+      return "ok"
+    case "failed":
+    case "canceled":
+      return "err"
+    default:
+      // reserving / running / blocked / unreachable：任务仍在远程进行（或仍可
+      // 重新同步），不能提前判死。
+      return "running"
+  }
+}
+
+/** 把事件里的远程信息归一成绑定用结构（防御缺失/异常字段）。 */
+function remoteBindingFrom(
+  remote: RemoteTaskInfo,
+  status: RemoteDelegationStatus,
+  extra?: {
+    blockedOn?: string | null
+    resultPreview?: string | null
+    errorCode?: string | null
+    durationMs?: number | null
+  }
+): RemoteDelegationBinding {
+  return {
+    connectionId: remote.connection_id,
+    connectionName: remote.connection_name,
+    runId: remote.run_id,
+    conversationId: remote.conversation_id ?? null,
+    link: remote.link ?? null,
+    worktree: remote.worktree ?? null,
+    status,
+    blockedOn: extra?.blockedOn ?? null,
+    resultPreview: extra?.resultPreview ?? null,
+    errorCode: extra?.errorCode ?? null,
+    durationMs: extra?.durationMs ?? null,
+  }
+}
 export interface DelegationBinding {
   parentConnectionId: string
   parentToolUseId: string
-  childConnectionId: string
-  childConversationId: number
-  agentType: AgentType
+  /** 本机子连接；远程委派没有本机子连接，为 `null`。 */
+  childConnectionId: string | null
+  /** 本机子会话 id；远程委派为 `null`（远程会话 id 在 `remote.conversationId`）。 */
+  childConversationId: number | null
+  agentType: AgentType | null
   status: DelegationStatus
   errorCode?: string
   /** Bounded task text from `delegation_started`. The card's fallback when
@@ -67,6 +138,8 @@ export interface DelegationBinding {
    *  name when the delegation started; null for a plain agent delegation. */
   assistantId: number | null
   assistantName: string | null
+  /** 远程委派信息。存在时卡片走远程展示/跳转分支，且不按 `child*` 查本机。 */
+  remote?: RemoteDelegationBinding | null
 }
 
 export interface DelegationContextValue {
@@ -121,6 +194,41 @@ export function useOptionalDelegation(): DelegationContextValue | null {
  *  before falling through to the DB-persisted view. */
 const CHILD_DETACH_GRACE_MS = 2_000
 
+/** 暂存的远程任务状态变化（绑定尚未建立时）。`task_id` 唯一，后到覆盖先到。 */
+type PendingRemoteUpdate = {
+  status: RemoteDelegationStatus
+  blockedOn?: string | null
+  resultPreview?: string | null
+  errorCode?: string | null
+  durationMs?: number | null
+}
+
+/** 暂存表上限：超过即丢最旧，避免客户端长时间离线的任务把内存撑大。 */
+const MAX_PENDING_REMOTE_UPDATES = 64
+
+/**
+ * 记一条远程状态变化。同 task id 覆盖合并（后到的字段优先），并把该条移到表尾
+ * ——表按到达顺序淘汰最旧的一条。
+ */
+function stampPendingRemoteUpdate(
+  store: Map<string, PendingRemoteUpdate>,
+  taskId: string,
+  update: PendingRemoteUpdate
+): void {
+  if (!taskId) return
+  const merged: PendingRemoteUpdate = {
+    ...(store.get(taskId) ?? {}),
+    ...update,
+  }
+  store.delete(taskId)
+  store.set(taskId, merged)
+  while (store.size > MAX_PENDING_REMOTE_UPDATES) {
+    const oldest = store.keys().next().value
+    if (oldest === undefined) break
+    store.delete(oldest)
+  }
+}
+
 export function DelegationProvider({ children }: { children: ReactNode }) {
   const { attachDelegationChild, detachDelegationChild } = useAcpActions()
   const [byToolUseId, setByToolUseId] = useState<
@@ -146,6 +254,12 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
   const detachTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>()
   )
+
+  // 远程任务的状态/终态事件只带 `task_id`（没有 parent_tool_use_id，也没有本机
+  // 子连接）。绑定还没建立时（事件乱序、客户端中途挂载后先收到 updated），先按
+  // task id 暂存，等 `remote_delegation_started` 到达时补上；有界（丢弃最旧），
+  // 因为远程任务结束即离开这份表。
+  const pendingRemoteUpdatesRef = useRef(new Map<string, PendingRemoteUpdate>())
 
   const cancelDetachTimer = useCallback((parentToolUseId: string) => {
     const timers = detachTimersRef.current
@@ -246,6 +360,121 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
           detachRef.current(childConnectionId)
         }, CHILD_DETACH_GRACE_MS)
         detachTimersRef.current.set(parentToolUseId, timer)
+        return
+      }
+      // ── 远程委派（跨机执行）────────────────────────────────────────────
+      // 远程任务不在本机起子智能体：没有 child_connection_id /
+      // child_conversation_id，也就没有可 attach 的子连接。绑定里 child* 一律
+      // 为 null，卡片只按 `remote` 展示与跳转。
+      if (envelope.type === "remote_delegation_started") {
+        // 先到的状态事件（updated/completed 只带 task id）在这里补上；同时保留
+        // 同 task 已有绑定的远程状态，避免重放把「无法连接」倒退成「运行中」。
+        const pending = pendingRemoteUpdatesRef.current.get(envelope.task_id)
+        setByToolUseId((prev) => {
+          const existing = prev.get(envelope.parent_tool_use_id)
+          const previousRemote =
+            existing && existing.taskId === envelope.task_id
+              ? (existing.remote ?? null)
+              : null
+          const status = pending?.status ?? previousRemote?.status ?? "running"
+          const terminal =
+            status === "completed" ||
+            status === "failed" ||
+            status === "canceled"
+          const remote: RemoteDelegationBinding = {
+            ...remoteBindingFrom(envelope.remote, status),
+            conversationId:
+              envelope.remote.conversation_id ??
+              previousRemote?.conversationId ??
+              null,
+            link: envelope.remote.link ?? previousRemote?.link ?? null,
+            worktree:
+              envelope.remote.worktree ?? previousRemote?.worktree ?? null,
+            blockedOn: terminal
+              ? null
+              : (pending?.blockedOn ?? previousRemote?.blockedOn ?? null),
+            resultPreview:
+              pending?.resultPreview ?? previousRemote?.resultPreview ?? null,
+            errorCode: pending?.errorCode ?? previousRemote?.errorCode ?? null,
+            durationMs:
+              pending?.durationMs ?? previousRemote?.durationMs ?? null,
+          }
+          const next: DelegationBinding = {
+            parentConnectionId: envelope.parent_connection_id,
+            parentToolUseId: envelope.parent_tool_use_id,
+            childConnectionId: null,
+            childConversationId: null,
+            agentType: envelope.agent_type ?? existing?.agentType ?? null,
+            status: remoteStatusToDelegationStatus(status),
+            errorCode: remote.errorCode ?? undefined,
+            task: envelope.task_preview ?? existing?.task ?? null,
+            taskId: envelope.task_id,
+            assistantId: envelope.assistant_id ?? null,
+            assistantName: envelope.assistant_name ?? null,
+            remote,
+          }
+          const m = new Map(prev)
+          m.set(envelope.parent_tool_use_id, next)
+          return m
+        })
+        pendingRemoteUpdatesRef.current.delete(envelope.task_id)
+        // 同一 parent_tool_use_id 上可能有本机绑定的残留（极少见的重放），
+        // 远程绑定已接管，别再让待执行的 detach 拆掉远程卡片。
+        cancelDetachTimer(envelope.parent_tool_use_id)
+        return
+      }
+      if (
+        envelope.type === "remote_delegation_updated" ||
+        envelope.type === "remote_delegation_completed"
+      ) {
+        const update: PendingRemoteUpdate =
+          envelope.type === "remote_delegation_updated"
+            ? {
+                status: envelope.status,
+                blockedOn: envelope.blocked_on ?? null,
+              }
+            : {
+                status: envelope.status,
+                resultPreview: envelope.result_preview ?? null,
+                errorCode: envelope.error_code ?? null,
+                durationMs: envelope.duration_ms ?? null,
+              }
+        stampPendingRemoteUpdate(
+          pendingRemoteUpdatesRef.current,
+          envelope.task_id,
+          update
+        )
+        setByToolUseId((prev) => {
+          let hit = false
+          const m = new Map(prev)
+          for (const [key, binding] of prev) {
+            if (!binding.remote || binding.taskId !== envelope.task_id) continue
+            hit = true
+            const terminal =
+              update.status === "completed" ||
+              update.status === "failed" ||
+              update.status === "canceled"
+            m.set(key, {
+              ...binding,
+              status: remoteStatusToDelegationStatus(update.status),
+              errorCode: update.errorCode ?? binding.errorCode,
+              remote: {
+                ...binding.remote,
+                status: update.status,
+                blockedOn: terminal
+                  ? null
+                  : (update.blockedOn ?? binding.remote.blockedOn),
+                resultPreview:
+                  update.resultPreview ?? binding.remote.resultPreview,
+                errorCode: update.errorCode ?? binding.remote.errorCode,
+                durationMs: update.durationMs ?? binding.remote.durationMs,
+              },
+            })
+          }
+          // 没命中就原样返回，避免无谓的重渲染；状态留着等 started 到达。
+          return hit ? m : prev
+        })
+        return
       }
     },
     [cancelDetachTimer]
@@ -261,9 +490,11 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
   // also cleaned up by the connections context's own teardown.
   useEffect(() => {
     const timers = detachTimersRef.current
+    const pendingRemote = pendingRemoteUpdatesRef.current
     return () => {
       for (const t of timers.values()) clearTimeout(t)
       timers.clear()
+      pendingRemote.clear()
     }
   }, [])
 

@@ -43,7 +43,15 @@ import {
   openSettingsWindow,
 } from "@/lib/api"
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
-import { buildDelegationSeedEnvelopes } from "@/lib/delegation-seed"
+import {
+  buildDelegationSeedEnvelopes,
+  buildRemoteDelegationSeedEnvelopes,
+} from "@/lib/delegation-seed"
+import {
+  beginRemoteSnapshotPreparing,
+  clearRemoteSnapshotProgress,
+  endRemoteSnapshotDone,
+} from "@/lib/remote-snapshot-progress"
 import {
   isConnectionBusy,
   isConnectionGoneError,
@@ -57,6 +65,7 @@ import type {
   AcpAgentStatus,
   AcpEvent,
   ActiveDelegationState,
+  ActiveRemoteDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
   AvailableCommandInfo,
@@ -4384,7 +4393,11 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         action.type !== "BATCH_TOOL_CALL_UPDATES"
       ) {
         for (const key of prev.keys()) {
-          if (!next.has(key)) discardStreamingKey(key)
+          if (!next.has(key)) {
+            discardStreamingKey(key)
+            // 连接没了，它那次远程快照的进行中提示与计时器也一起走。
+            clearRemoteSnapshotProgress(key)
+          }
         }
       }
 
@@ -6418,6 +6431,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               : null,
           })
           break
+        // 远程文件快照的进行中提示：不写 ConnectionState，只按连接记到输入框
+        // 订阅的小 store 里（`remote-snapshot-progress`）。重放（`quiet`）时不
+        // 打扰用户 —— 那是十分钟前就结束的等待，提示已经没有意义。降级项的
+        // toast 由输入框自己发（它掌握文案与「只提示一次」的消费语义）。
+        case "remote_snapshot_preparing":
+          if (!quiet) beginRemoteSnapshotPreparing(contextKey, e.count)
+          break
+        case "remote_snapshot_done":
+          if (!quiet) endRemoteSnapshotDone(contextKey, e.degraded)
+          break
       }
     },
     [
@@ -6538,13 +6561,22 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     (
       connectionId: string,
       activeDelegations: ActiveDelegationState[],
-      eventSeq: number
+      eventSeq: number,
+      // 在飞的远程委派（远程任务没有本机子连接，走另一组事件）。缺省即空。
+      activeRemoteDelegations: ActiveRemoteDelegationState[] = []
     ) => {
-      const envelopes = buildDelegationSeedEnvelopes(
-        connectionId,
-        activeDelegations,
-        eventSeq
-      )
+      const envelopes = [
+        ...buildDelegationSeedEnvelopes(
+          connectionId,
+          activeDelegations,
+          eventSeq
+        ),
+        ...buildRemoteDelegationSeedEnvelopes(
+          connectionId,
+          activeRemoteDelegations,
+          eventSeq
+        ),
+      ]
       for (const envelope of envelopes) {
         for (const ref of eventSubscribersRef.current) {
           try {
@@ -6665,7 +6697,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           seedDelegationsFromSnapshot(
             patch.connectionId,
             patch.activeDelegations,
-            patch.eventSeq
+            patch.eventSeq,
+            patch.activeRemoteDelegations ?? []
           )
         },
         onReplay: (events) => {
@@ -7253,7 +7286,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         seedDelegationsFromSnapshot(
           patch.connectionId,
           patch.activeDelegations,
-          patch.eventSeq
+          patch.eventSeq,
+          patch.activeRemoteDelegations ?? []
         )
       }
       bindConnectionRoute(connectionId, contextKey)
@@ -7738,7 +7772,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             seedDelegationsFromSnapshot(
               snapshotPatch.connectionId,
               snapshotPatch.activeDelegations,
-              snapshotPatch.eventSeq
+              snapshotPatch.eventSeq,
+              snapshotPatch.activeRemoteDelegations ?? []
             )
           }
 
@@ -8519,7 +8554,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           seedDelegationsFromSnapshot(
             patch.connectionId,
             patch.activeDelegations,
-            patch.eventSeq
+            patch.eventSeq,
+            patch.activeRemoteDelegations ?? []
           )
         }
         bindConnectionRoute(connectionId, connectionId)
