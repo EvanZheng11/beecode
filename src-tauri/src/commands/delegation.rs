@@ -309,6 +309,30 @@ pub async fn notify_delegation_completion(
     }
 }
 
+/// 本机桌面卡片只重新同步已有运行，不重发任务提示词。
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn remote_delegation_resync(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    broker: tauri::State<'_, Arc<DelegationBroker>>,
+    manager: tauri::State<'_, crate::acp::ConnectionManager>,
+    task_id: String,
+    connection_id: Option<i32>,
+) -> Result<crate::acp::delegation::types::DelegationTaskReport, AppCommandError> {
+    let row = crate::db::service::remote_delegation_service::get_by_task_id(&db.conn, &task_id)
+        .await
+        .map_err(AppCommandError::from)?
+        .ok_or_else(|| AppCommandError::not_found("远程任务不存在"))?;
+    if connection_id.is_some() && row.connection_id != connection_id {
+        return Err(AppCommandError::invalid_input("远程任务不属于指定连接"));
+    }
+    let parent_connection = manager
+        .find_connection_by_conversation_id(row.parent_conversation_id)
+        .await
+        .unwrap_or_default();
+    Ok(broker.resync_remote_task(&parent_connection, row.parent_conversation_id, &task_id).await)
+}
+
 // -------- Tauri commands -----------------------------------------------------
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
