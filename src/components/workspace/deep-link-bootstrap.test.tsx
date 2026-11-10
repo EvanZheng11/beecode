@@ -123,6 +123,32 @@ describe("DeepLinkBootstrap", () => {
     expect(h.toastError).not.toHaveBeenCalled()
   })
 
+  it("远程会话定位从远端列表解析且保留连接身份参数", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/workspace?remoteConnectionId=8&remoteWindowId=rw-test&conversationId=42"
+    )
+    useAppWorkspaceStore.setState({
+      foldersHydrated: true,
+      conversationsLoading: false,
+      conversations: [CONVERSATION],
+    })
+    render(<DeepLinkBootstrap />)
+    await waitFor(() =>
+      expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "grok", true)
+    )
+    expect(
+      new URLSearchParams(window.location.search).get("remoteConnectionId")
+    ).toBe("8")
+    expect(
+      new URLSearchParams(window.location.search).get("remoteWindowId")
+    ).toBe("rw-test")
+    expect(
+      new URLSearchParams(window.location.search).has("conversationId")
+    ).toBe(false)
+  })
+
   it("does nothing without deep-link params", async () => {
     window.history.replaceState({}, "", "/workspace")
     act(() => {

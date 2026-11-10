@@ -49,7 +49,15 @@ export function DeepLinkBootstrap() {
 
     const clearUrl = () => {
       try {
-        window.history.replaceState({}, "", "/workspace")
+        const remaining = new URLSearchParams(window.location.search)
+        for (const key of ["folderId", "conversationId", "agent"])
+          remaining.delete(key)
+        const query = remaining.toString()
+        window.history.replaceState(
+          {},
+          "",
+          `/workspace${query ? `?${query}` : ""}`
+        )
       } catch {
         /* ignore */
       }
@@ -57,14 +65,27 @@ export function DeepLinkBootstrap() {
 
     void (async () => {
       try {
-        const folderId = rawFolderId ? Number(rawFolderId) : null
+        let folderId = rawFolderId ? Number(rawFolderId) : null
         const conversationId = rawConversationId
           ? Number(rawConversationId)
           : null
-
+        let agent = rawAgent
+        // 远程卡片只传远端会话 ID；这里的 store 已由远程窗口传输加载，
+        // 只能从该远端会话解析项目和智能体，不查询本机同号会话。
+        if (params.has("remoteConnectionId") && conversationId != null) {
+          const remote = useAppWorkspaceStore
+            .getState()
+            .conversations.find(
+              (conversation) => conversation.id === conversationId
+            )
+          if (remote) {
+            folderId = remote.folder_id
+            agent = remote.agent_type
+          }
+        }
         if (folderId == null || !Number.isFinite(folderId)) return
         if (conversationId == null || !Number.isFinite(conversationId)) return
-        if (!rawAgent) return
+        if (!agent) return
 
         // Read at run time: this effect fires once when hydration completes,
         // and getState() sees exactly the lists as of that moment.
@@ -90,14 +111,14 @@ export function DeepLinkBootstrap() {
             (c) =>
               c.id === conversationId &&
               c.folder_id === folderId &&
-              c.agent_type === rawAgent
+              c.agent_type === agent
           )
         if (!hasConv) {
           toast.error("Linked conversation not found")
           return
         }
 
-        openTab(folderId, conversationId, rawAgent, true)
+        openTab(folderId, conversationId, agent, true)
       } finally {
         clearUrl()
       }
