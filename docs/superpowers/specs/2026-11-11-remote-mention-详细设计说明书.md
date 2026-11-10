@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档状态 | [√] 草稿　[ ] 修订　[ ] 发布 |
 | 文档编号 | BEECODE-SD-REMOTE-MENTION-001 |
-| 版本号 | V0.2 |
+| 版本号 | V0.3 |
 | 编写日期 | 2026-11-11 |
 | 适用代码基线 | `main@14439b32a`（BeeCode 0.42.4） |
 | 保密级别 | 内部 |
@@ -17,6 +17,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 2026-11-11 | V0.1 | 全文 | 初稿 | 主智能体 | 待定 | 待定 |
 | 2 | 2026-11-11 | V0.2 | 4.1.3、4.1.4、4.1.5、5.5、6.5、7.1、7.5、8、9.3、9.4、13 | 独立审核 RV1 提出 4 项阻断、5 项重要问题 | 主智能体 | 规划与审核（RV1） | 待定 |
+| 3 | 2026-11-11 | V0.3 | 4.1.3.1、6.1、8（S5、S10）、9.3.4 | 复核通过；落实两项重要意见：快照开关的传递层级、授权写入时机 | 主智能体 | 规划与审核（RV1 复核） | 待定 |
 
 ### 本文已确认的产品决策
 
@@ -276,7 +277,7 @@ BeeCode 已经支持"远程工作区"：桌面端保存远程连接后，可以�
 | 功能描述 | 消息**真正发给智能体的那一刻**，后端把消息中每个远程文件引用的内容拉回本机，作为内部后缀块追加给智能体。用户消息本身（存库、广播、标题、乐观气泡）只保留 `codeg://remote/...` 链接，不含正文 |
 | 参与用户 | 用户、本机智能体 |
 | 输入 | 发往智能体的 `PromptInputBlock` 列表中的远程文件链接 |
-| 操作序列 | 1）UI 的直接发送和队列自动发出都经 `acp_prompt`（`commands/acp.rs:12126`）→ `send_prompt_linked_with_resume`（`acp/manager.rs:1434`）→ `send_prompt_linked_full`（`:1489`），并带 `remote_snapshot: true`（其他入口为 `false`，见第 8 章 S10）；2）在 `send_prompt_linked_full` 中，紧接现有的 `hydrate_prompt_blocks`（`:1604`，同样是持 `prompt_lock`、通过忙碌检查之后、产生任何副作用之前的异步 IO）调用新的 `remote_snapshot::prepare`，扫描文本块里的 `codeg://remote/<c>/file/...` 与 `.../session/...` 链接（没有就直接返回，行为零变化）；3）并发（最多 4 个）调用远程 `read_workspace_file_base64 {rootPath: 项目路径, path: 相对路径, maxBytes: 262144}`；4）base64 解码，按 UTF-8 严格解码且前 8 KiB 不含 NUL 判定为文本；5）智能体支持 `embedded_context` 时生成 `Resource{uri, mimeType:"text/plain", text}`，不支持时生成等价的文本块（`uri\n<context ref="uri">\n正文\n</context>`，与页面附件的退化方式一致）；6）失败或超限的生成一段说明文本（降级为指针）；7）结果并入 `internal_suffix`，随 `ConnectionCommand::Prompt` 一起交给连接循环 |
+| 操作序列 | 1）UI 的直接发送和队列自动发出都经桌面 `acp_prompt`（`commands/acp.rs:12126`）→ 新入口 `send_prompt_linked_for_ui` → `send_prompt_linked_full`（`acp/manager.rs:1489`），并带 `remote_snapshot: true`（其他入口为 `false`，见第 8 章 S10）；2）在 `send_prompt_linked_full` 中，紧接现有的 `hydrate_prompt_blocks`（`:1604`，同样是持 `prompt_lock`、通过忙碌检查之后、产生任何副作用之前的异步 IO）调用新的 `remote_snapshot::prepare`，扫描文本块里的 `codeg://remote/<c>/file/...` 与 `.../session/...` 链接（没有就直接返回，行为零变化）；3）并发（最多 4 个）调用远程 `read_workspace_file_base64 {rootPath: 项目路径, path: 相对路径, maxBytes: 262144}`；4）base64 解码，按 UTF-8 严格解码且前 8 KiB 不含 NUL 判定为文本；5）智能体支持 `embedded_context`（读连接状态 `SessionState.prompt_capabilities`，`acp/session_state.rs:477`；为空时按不支持处理）时生成 `Resource{uri, mimeType:"text/plain", text}`，不支持时生成等价的文本块（`uri\n<context ref="uri">\n正文\n</context>`，与页面附件的退化方式一致）；6）失败或超限的生成一段说明文本（降级为指针）；7）结果并入 `internal_suffix`，随 `ConnectionCommand::Prompt` 一起交给连接循环 |
 | 扩展及异常 | 超过 256 KiB：降级为指针，正文写"文件 N KiB 超过快照上限，可用 remote_read_file 分段读取"（P3 前写"请用远程智能体处理"）；二进制：降级并说明；404/鉴权失败/超时（整体 30 s）：降级，并发出 `remote_snapshot_degraded` 事件，前端据此 toast；单条消息快照总量超过 1 MiB：按引用顺序装入，后面的降级 |
 | 输出 | 智能体收到的 ACP `EmbeddedResource`（`acp/connection.rs:13152-13176` 把 `PromptInputBlock::Resource` 映射为它），或退化文本块 |
 | 补充说明 | **只用 `read_workspace_file_base64`**：它会先 canonicalize 再判断是否仍在根目录内，并用 `O_NOFOLLOW` 打开，防止软链接逃逸（`commands/folders.rs:5509-5579`）。不使用 `read_file_preview`（不 canonicalize，`ensure_user_navigable_path` 故意放开软链接，`commands/folders.rs:4464`）或 `read_file_base64`（无根目录约束） |
@@ -547,7 +548,7 @@ sequenceDiagram
   U->>FE: 发送（或回复中入队，稍后自动发出）
   FE->>SN: acp_prompt(blocks 含 codeg://remote/... 链接)
   SN-->>FE: 事件 remote_snapshot_preparing
-  SN->>SN: 登记 remote_mention_grant
+  SN->>SN: 收集授权项（会话 id 确定后、send_prompt_inner 前写 remote_mention_grant）
   SN->>GW: call_allowed(read_workspace_file_base64)
   GW->>R: POST read_workspace_file_base64 {rootPath, path, maxBytes}
   R-->>GW: base64
@@ -785,12 +786,12 @@ pub struct RemoteTaskInfo {
 | S2 | 明文 HTTP 经公网 | FRP http 类型不加密 | rmgw001003 提示；文档建议 https/stcp；设置项"禁止经公网明文发送 token"（Q8，默认关） |
 | S3 | 读到项目外文件 | `read_file_base64` 没有根目录约束，`read_file_preview` 不 canonicalize | 只用 `read_workspace_file_base64`；`rootPath` 必须来自远程 `list_all_folder_details`，不接受智能体或前端自由传入 |
 | S4 | 远程委派到任意目录 | `cli_run_start` 会为任意目录自动登记 folder | 参数只接受 `remote_folder_id`，listener 按远程 `list_all_folder_details` 换算为路径（缓存 60 s，未命中时刷新一次）；换算不到就拒绝 |
-| S5 | 智能体自行调用远程委派或远程读 | 智能体可能在用户没有 @ 时也调用带 `remote_connection_id` 的工具 | 默认要求父会话里用户 @ 过该 `(connection_id, folder_id)`，否则拒绝（`remote_not_mentioned`），设置中可放开（Q9）。**记录点**：发送边界（4.1.3.1，`send_prompt_linked_full`）扫描远程链接时，按**父会话 conversation_id** 写入 `remote_mention_grant` 表（9.3.4）。连接 id 在重启、续接后会变，会话 id 不会。**校验点**：listener 在 `process` 中按 `parent_conversation_id`（已由 token 条目与 `listener.rs:1350-1357` 解析得到）查表。**各场景语义**：重启和续接沿用同一会话，授权保留；fork 产生新会话，不继承授权，需要重新 @；排队消息在真正发出时才登记；插话（steer）不经过发送边界，不登记 |
+| S5 | 智能体自行调用远程委派或远程读 | 智能体可能在用户没有 @ 时也调用带 `remote_connection_id` 的工具 | 默认要求父会话里用户 @ 过该 `(connection_id, folder_id)`，否则拒绝（`remote_not_mentioned`），设置中可放开（Q9）。**记录点**：发送边界（4.1.3.1，`send_prompt_linked_full`）扫描远程链接时只**收集** `(connection_id, folder_id)`，不写库（此时还在"无副作用"区间，会话 id 也可能未确定）；等 `send_prompt_linked_full` 解析出 `linked_conversation_id`、并在调用 `send_prompt_inner` 之前，再按**父会话 conversation_id** 写入 `remote_mention_grant` 表（9.3.4）。bind 被拒或 `send_prompt_inner` 前失败时不写；会话 id 为空时不登记。连接 id 在重启、续接后会变，会话 id 不会。**校验点**：listener 在 `process` 中按 `parent_conversation_id`（已由 token 条目与 `listener.rs:1350-1357` 解析得到）查表。**各场景语义**：重启和续接沿用同一会话，授权保留；fork 产生新会话，不继承授权，需要重新 @；排队消息在真正发出时才登记；插话（steer）不经过发送边界，不登记 |
 | S6 | 远程委派深度不可控 | 本机 `compute_depth` 只看本机 `parent_id`（`broker.rs:2704-2733`） | 不传 `caller`，远程会把它当作根运行；远程 cli_run 本身限制嵌套深度（`MAX_DEPTH=1`）。本机把"远程委派"计为深度 +1，并禁止从远程委派的结果里再自动触发远程委派 |
 | S7 | 被劫持或配错的地址骗取 token | — | 每个连接先 `cli_hello` 校验 proof，再发带 token 的请求 |
 | S8 | 日志泄露 | — | 日志只记连接 id、路由名、HTTP 状态、耗时、字节数；不记 token、文件正文、prompt 正文 |
 | S9 | token 进入长驻后台任务 | broker 跟踪协程需要 token | 不在跟踪器里缓存 token，每次请求按连接 id 从数据库读取。删除连接时，先对该连接上未结束的远程任务调用 `cli_run_cancel`，再删除连接（Q10） |
-| S10 | 智能体通过快照读取远程文件 | 快照由用户 @ 的徽标触发，但智能体也可能在回复中写出 `codeg://remote/...` 链接 | 快照只扫描**用户消息**的文本块，智能体输出不会进入发送边界的用户块。快照只在 UI 发送入口开启：`acp_prompt` → `send_prompt_linked_with_resume`（`commands/acp.rs:12126`、`acp/manager.rs:1434`）传入 `remote_snapshot: true`，直接发送和队列自动发出都走这里。聊天渠道、`cli_run`、自动化、委派子会话等其他入口传 `false`，即使文本里出现远程链接也不拉取 |
+| S10 | 智能体通过快照读取远程文件 | 快照由用户 @ 的徽标触发，但智能体也可能在回复中写出 `codeg://remote/...` 链接 | 快照只扫描**用户消息**的文本块，智能体输出不会进入发送边界的用户块。**开关的传递方式**：`send_prompt_linked_full` 新增参数 `remote_snapshot: bool`；新增 UI 专用入口 `send_prompt_linked_for_ui`，传 `true`，由桌面 `acp_prompt`（`commands/acp.rs:12126`）调用。直接发送和队列自动发出都走这个命令。`send_prompt_linked_with_resume`（`acp/manager.rs:1434`）保持原签名并固定传 `false`，它的其他调用方因此全部不做快照：Web 的 `acp_prompt`（`web/handlers/acp.rs:171`，与 5.5"Web 不支持"一致）、聊天渠道（`chat_channel/session_commands.rs:1578`）。`cli_run`、自动化、委派子会话走的 `send_prompt_linked*` 也都是 `false`，即使文本里出现远程链接也不拉取 |
 
 ---
 
@@ -986,7 +987,7 @@ stateDiagram-v2
 
 **表关系**：删除连接时授权一起删除（授权只对存在的连接有意义）；会话外键的规则与 `remote_delegation` 相同。
 
-**写入时机**：发送边界扫描到远程链接时写入，与快照是否成功无关。这部分写入在 P2 实现，P1 只做快照不写库。
+**写入时机**：发送边界扫描到远程链接时先收集，等会话 id 解析出来、`send_prompt_inner` 调用之前写入（详见第 8 章 S5），与快照是否成功无关。这部分写入在 P2 实现，P1 只做快照不写库。
 
 ### 9.4 物理设计
 
