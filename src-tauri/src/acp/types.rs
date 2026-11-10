@@ -377,6 +377,18 @@ pub struct RemoteSnapshotDegraded {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AcpEvent {
     /// 桌面发送正在取远程上下文；连接 ID 位于 EventEnvelope 顶层。
+    RemoteDelegationStarted {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+    RemoteDelegationUpdated {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
+    RemoteDelegationCompleted {
+        #[serde(flatten)]
+        payload: serde_json::Value,
+    },
     RemoteSnapshotPreparing {
         count: usize,
     },

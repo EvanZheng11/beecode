@@ -32,7 +32,7 @@ use std::sync::Arc;
 use crate::acp::delegation::types::RemoteTaskInfo;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::AcpEvent;
-use crate::web::event_bridge::{emit_event, emit_with_state, emit_with_state_gated};
+use crate::web::event_bridge::{emit_with_state, emit_with_state_gated};
 
 /// Top-level key under which delegation state lives on a tool call's
 /// `meta` object. Single source of truth — both the writer and the
@@ -279,13 +279,14 @@ impl DelegationMetaWriter for ConnectionManagerMetaWriter {
                 serde_json::Value::String(parent_connection_id.to_string()),
             );
         }
-        // 同一把写锁内落状态：与 `emit_with_state_built` 一样，先改状态再释放锁
-        // 广播，两者之间不会插进一个"只看到事件、快照里却没有"的窗口。
-        state_arc
-            .write()
-            .await
-            .upsert_remote_delegation(payload.clone());
-        emit_event(&emitter, event_name, &payload);
+        // 统一经 ACP 信封广播并更新快照，前端实时订阅与刷新重放使用同一事件。
+        let event = match event_name {
+            "remote_delegation_started" => AcpEvent::RemoteDelegationStarted { payload },
+            "remote_delegation_updated" => AcpEvent::RemoteDelegationUpdated { payload },
+            "remote_delegation_completed" => AcpEvent::RemoteDelegationCompleted { payload },
+            _ => return,
+        };
+        emit_with_state(&state_arc, &emitter, event).await;
     }
 }
 

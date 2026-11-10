@@ -1795,6 +1795,11 @@ impl SessionState {
                 // window asks.
                 self.async_task_activity_at = Some(Utc::now());
             }
+            AcpEvent::RemoteDelegationStarted { payload }
+            | AcpEvent::RemoteDelegationUpdated { payload }
+            | AcpEvent::RemoteDelegationCompleted { payload } => {
+                self.upsert_remote_delegation(payload.clone());
+            }
             AcpEvent::ClaudeSdkMessage { .. }
             | AcpEvent::ConfigOptionRejected { .. }
             | AcpEvent::SessionLoadFailed { .. }

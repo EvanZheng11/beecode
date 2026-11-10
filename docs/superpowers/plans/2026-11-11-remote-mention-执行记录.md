@@ -104,6 +104,18 @@ stateDiagram-v2
 - RV-SNAPSHOT和RV-DB前两次规划审核均宿主child_rejected，最后第3次改BeeCode codex通道，模型unknown；实际task分别 `6f2af904-985c-47c3-8da7-0b8f9876693e`、`0c645169-96c1-437a-90a9-255bb362e917`，仍执行中，没有结论不标通过。
 - RM05负责人已集成子模块，固定提交 `aedf9d9fc`，其后还有未提交编译修正；其隔离验证副本发现meta Option类型错误正修复；不提前合入不稳定工作文件。
 
+## 暂停交付检查点（05:20）
+
+- RM05稳定提交 `ddbb893ebe37d25c3e451651da047afe1784499c` 已汇入INT。主会话补齐三个ACP远程事件（扁平payload）、meta_writer统一emit_with_state、session_state更新，注册桌面resync命令；连接定位前后端也已接通。
+- 最终INT真实验证：server `cargo check --offline --locked --no-default-features --features server-bin --bin codeg-server`通过；mcp同模式`--features mcp-bin --bin codeg-mcp`通过；`cargo test --offline --locked --no-default-features --features server-bin --lib remote_ -- --test-threads=1` **113/113通过**，包含manager隐私/闸门/grant、DB迁移、远程事件快照。日志分别为 `src-tauri/target/rm-int-{full-check,mcp-check,remote-tests}.log`。full-check当时1个unused import已清理，后续mcp和定向测试无该警告。
+- 前端四个非重叠分片：321/5503 + 267/3660 + 167/2259 + 53/608 = **808文件/12030测试全部通过**。Node22，maxWorkers=6；日志 `/tmp/rm-int-{core-tests,ui-tests,other-tests,final-shard}.log`。整仓一次跑受200秒工具上限中断，改分片完成，没有把中断当通过。
+- 源码lint `eslint src browser-agent`通过；整仓lint只有未修改根目录`demo.js`单引号格式错误。tsc只有未修改locale测试第63行类型基线错误。未把这两个基线问题擅自纳入修改。
+- DB原列数29断言经并发核对已为28，INT远程测试迁移用例通过。
+- 最终独立审核未完成：RV-DB第三次Codex宿主completed但text为空；RV-SNAPSHOT第三次同样为空。两逻辑工单各累计3次均无有效最终结论，已到上限，不换名绕开。中间发现的括号URI已修并测试，但不等于独立复审通过。
+- **交付阻断**：没有有效安全/迁移/并发独立审核；未完成settings覆盖（permissions/require-mentioned/公网明文禁用等）、非git worktree退化说明、删除连接历史null id前端确认；未跑最终桌面feature/clippy门禁/GUI/FRP真实链路。不得标P0～P2完成。
+- 因审核上限与剩余验收，本轮保留隔离现场，不合回main，不删除任务worktree或分支。原工作区应复核仍为 `main@d25de404c`；没有push/发布/真实用户DB操作。
+- 自有临时验证容器已退出（`rm-int-remote-tests` wait返回0且--rm清理），target与各任务依赖缓存保留供恢复；约几十GiB，自有文件目录明确，不碰其他任务资源。
+
 ## 验证与交付门禁
 
 1. 各执行者定向测试、diff 检查、任务分支提交；主会话按 AC 核对，不以 done 代替验收。
