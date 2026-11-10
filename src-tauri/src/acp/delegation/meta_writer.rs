@@ -274,8 +274,10 @@ impl DelegationMetaWriter for ConnectionManagerMetaWriter {
         // 归属由父连接决定，不让载荷里缺字段的连接 id 决定事件落到谁身上。
         let mut payload = payload;
         if let Some(obj) = payload.as_object_mut() {
-            obj.entry("parent_connection_id")
-                .or_insert_with(|| serde_json::Value::String(parent_connection_id.to_string()));
+            obj.insert(
+                "parent_connection_id".into(),
+                serde_json::Value::String(parent_connection_id.to_string()),
+            );
         }
         // 同一把写锁内落状态：与 `emit_with_state_built` 一样，先改状态再释放锁
         // 广播，两者之间不会插进一个"只看到事件、快照里却没有"的窗口。

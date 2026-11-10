@@ -2603,7 +2603,7 @@ impl SessionState {
     /// 同一个 `task_id` 的同名事件（前端按 `task_id` 覆盖写入，重复投递幂等）。
     ///
     /// `entry` 就是事件载荷：`task_id` 必需（缺了无处安放，记日志后忽略）；
-    /// 已有同 `task_id` 的条目按字段合并（空值不覆盖已有值，`remote` 整体替换），
+    /// 已有同 `task_id` 的条目按字段合并（身份空值不覆盖，阻塞/错误允许清空，`remote` 整体替换），
     /// 新条目追加在末尾。终态条目**不删**——终态只靠它在刷新后的快照里重放。
     pub fn upsert_remote_delegation(&mut self, entry: serde_json::Value) {
         let serde_json::Value::Object(fields) = entry else {
@@ -2621,11 +2621,14 @@ impl SessionState {
             return;
         };
 
-        // 只收有值的字段：updated / completed 的载荷不带 remote 与 task_preview，
-        // 让它们覆盖掉 started 写入的身份信息，就等于丢掉了整张卡片。
+        // 未提供的身份字段保持不变；显式 null 的阻塞/错误字段则必须清空，
+        // 否则 blocked → running 后刷新仍会显示旧权限请求。
         let clean: serde_json::Map<String, serde_json::Value> = fields
             .into_iter()
-            .filter(|(_, v)| !v.is_null())
+            .filter(|(key, v)| {
+                !v.is_null()
+                    || matches!(key.as_str(), "blocked_on" | "error_code" | "error_message")
+            })
             .collect();
 
         if let Some(existing) = self
@@ -2641,6 +2644,7 @@ impl SessionState {
                 // 部分合并会留下前后不一致的组合，因此整体替换。
                 target.insert(key, value);
             }
+            self.trim_active_remote_delegations();
             return;
         }
 
@@ -5588,6 +5592,26 @@ mod tests {
         // started 写入的身份信息必须还在。
         assert_eq!(entry["remote"]["connection_name"], "构建机");
         assert_eq!(entry["task_preview"], "远程跑一遍测试");
+    }
+
+    #[test]
+    fn remote_delegation_unblocked_clears_stale_prompt_and_trims_completed_updates() {
+        let mut s = fresh_state();
+        s.upsert_remote_delegation(remote_started("task-1", "blocked"));
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "blocked_on": "permission"
+        }));
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "status": "running", "blocked_on": null
+        }));
+        assert!(s.active_remote_delegations[0]["blocked_on"].is_null());
+        for i in 0..MAX_ACTIVE_REMOTE_DELEGATIONS {
+            s.upsert_remote_delegation(remote_started(&format!("run-{i}"), "running"));
+        }
+        s.upsert_remote_delegation(serde_json::json!({
+            "task_id": "task-1", "status": "completed"
+        }));
+        assert_eq!(s.active_remote_delegations.len(), MAX_ACTIVE_REMOTE_DELEGATIONS);
     }
 
     #[test]

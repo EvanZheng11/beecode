@@ -1996,7 +1996,10 @@ impl DelegationBroker {
                 &row.status,
                 &info,
                 row.error_code.as_deref(),
-                row.result_text.as_deref(),
+                row.result_text
+                    .as_deref()
+                    .map(|s| truncate_on_char_boundary(s, STATUS_PREVIEW_CAP))
+                    .as_deref(),
                 row.duration_ms.and_then(|d| u64::try_from(d).ok()),
                 Some(&row.task_preview),
                 Some(&row.task_id),
@@ -2211,6 +2214,16 @@ impl DelegationBroker {
                         match tracker.find(&row).await {
                             Ok(false) => {
                                 let _terminal = self.remote_terminal.lock().await;
+                                let mut inner = self.pending.inner.lock().await;
+                                // 与正常结果一致：取消 drain 一旦认领，lost 不能抢先结算。
+                                if inner.teardown_pending.contains(&task_id)
+                                    || inner
+                                        .completed
+                                        .get(&task_id)
+                                        .is_some_and(|c| c.status == TaskStatus::Canceled)
+                                {
+                                    return;
+                                }
                                 if tracker
                                     .fail(
                                         &row,
@@ -2220,7 +2233,8 @@ impl DelegationBroker {
                                     .await
                                     == Ok(true)
                                 {
-                                    self.pending.inner.lock().await.running.remove(&task_id);
+                                    inner.running.remove(&task_id);
+                                    drop(inner);
                                     if let Ok(Some(final_row)) = tracker.row(&task_id).await {
                                         self.publish_remote(
                                             &parent,
@@ -2324,6 +2338,74 @@ impl DelegationBroker {
                     .await;
             });
         }
+    }
+
+    /// 供卡片重新同步动作接入。只恢复不可达任务，不重新执行 prompt，也不提供 resume 语义。
+    pub async fn resync_remote_task(
+        &self,
+        parent_connection_id: &str,
+        parent_conversation_id: i32,
+        task_id: &str,
+    ) -> DelegationTaskReport {
+        let Some(tracker) = &self.remote_tracker else {
+            return unknown_report(task_id);
+        };
+        let terminal = self.remote_terminal.lock().await;
+        let Ok(Some(row)) = tracker.row(task_id).await else {
+            return unknown_report(task_id);
+        };
+        if row.parent_conversation_id != parent_conversation_id {
+            return unknown_report(task_id);
+        }
+        if row.status != "unreachable" {
+            return remote_run::report(&row);
+        }
+        let Some(connection) = row.connection_id else {
+            return remote_run::report(&row);
+        };
+        // 在终态锁内变更状态，连续点击只能启动一个跟踪器；取消仍通过同一锁排序。
+        if tracker
+            .progress(&row, "running", None, row.last_event_seq)
+            .await
+            != Ok(true)
+        {
+            return remote_run::report(&row);
+        }
+        self.pending
+            .inner
+            .lock()
+            .await
+            .running
+            .entry(task_id.into())
+            .or_insert_with(|| RunningTask {
+                child: ChildHandle::Remote {
+                    info: remote_run::info(&row),
+                },
+                parent_connection_id: parent_connection_id.into(),
+                parent_tool_use_id: row.parent_tool_use_id.clone(),
+                agent_type: AgentType::ClaudeCode,
+                assistant: None,
+                task_preview: row.task_preview.clone(),
+                task_id: task_id.into(),
+                external_handle: None,
+                started_at: Instant::now(),
+                last_surfaced_block: None,
+            });
+        if let Ok(Some(updated)) = tracker.row(task_id).await {
+            self.publish_remote(parent_connection_id, &updated, "remote_delegation_updated")
+                .await;
+        }
+        drop(terminal);
+        let broker = self.clone();
+        let tracker = tracker.clone();
+        let parent = parent_connection_id.to_string();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            let permit = tracker.acquire(connection).await;
+            broker.track_remote(parent, task_id, permit, true).await;
+        });
+        self.status_from_db(Some(parent_conversation_id), &row.task_id)
+            .await
     }
 
     /// 删除连接前调用；setup 共用连接闸门，先取消全部非终态，再允许删除凭据。
@@ -11298,6 +11380,49 @@ mod tests {
             TaskStatus::Unknown
         );
         assert!(spawner.disconnects.lock().await.is_empty());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_resync_is_parent_scoped_and_only_reconciles_existing_run() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (broker, spawner, db, parent, connection, mock, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("resync-task", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let started = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started("resync-task", &started).await.unwrap();
+        tracker
+            .progress(&row, "unreachable", None, 0)
+            .await
+            .unwrap();
+        mock.calls.lock().await.clear();
+        let denied = broker
+            .resync_remote_task("other", parent + 1, "resync-task")
+            .await;
+        assert_eq!(denied.status, TaskStatus::Unknown);
+        mock.events_mode.store(2, SeqCst);
+        broker
+            .resync_remote_task("parent-conn", parent, "resync-task")
+            .await;
+        let result = broker
+            .get_task_status(
+                "parent-conn",
+                Some(parent),
+                "resync-task",
+                StatusWait::Bounded(2000),
+            )
+            .await;
+        assert_eq!(result.status, TaskStatus::Completed);
+        assert_eq!(result.text.as_deref(), Some("gap补偿结果"));
+        assert!(spawner.spawn_args.lock().await.is_empty());
+        assert!(!mock
+            .calls
+            .lock()
+            .await
+            .iter()
+            .any(|(route, _)| route == "cli_run_start"));
         server.abort();
     }
 
