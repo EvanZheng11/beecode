@@ -1639,8 +1639,8 @@ impl ConnectionManager {
         .await?;
 
         // 快照只进内部后缀；等待时仍持 prompt_lock，尚未置 turn_in_flight。
-        // grants 留给集成方：成功绑定父会话后、send_prompt_inner 前登记。
-        let _remote_snapshot_grants = if remote_snapshot {
+        // 此处只收集授权项，成功绑定父会话后才登记。
+        let remote_snapshot_grants = if remote_snapshot {
             let references = crate::acp::remote_snapshot::collect_remote_references(&blocks);
             if references.is_empty() {
                 Vec::new()
@@ -1932,6 +1932,27 @@ impl ConnectionManager {
         // on the row (touches `updated_at` only).
         let conversation_id_for_status = state_arc.read().await.conversation_id;
         if let Some(cid) = conversation_id_for_status {
+            // 会话绑定已成功；非 UI 入口和插话不会收集授权。连接可能在
+            // 准备期间被删除：登记失败不阻塞已降级的消息，listener 仍因
+            // 查不到授权而拒绝远程访问，不能将此失败解释为放宽校验。
+            for (connection_id, remote_folder_id) in remote_snapshot_grants {
+                if crate::db::service::remote_mention_grant_service::upsert(
+                    &db.conn,
+                    cid,
+                    connection_id,
+                    remote_folder_id,
+                )
+                .await
+                .is_err()
+                {
+                    tracing::warn!(
+                        conversation_id = cid,
+                        connection_id,
+                        remote_folder_id,
+                        "[remote-mention] grant_write_failed; remote access remains denied"
+                    );
+                }
+            }
             conversation_service::update_status(&db.conn, cid, ConversationStatus::InProgress)
                 .await
                 .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -6564,6 +6585,22 @@ mod tests {
         use base64::Engine;
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let folder = crate::db::test_helpers::seed_folder(&db, "/tmp/rm03").await;
+        use sea_orm::{ActiveModelTrait, Set};
+        let remote_connection = crate::db::entities::remote_workspace_connection::ActiveModel {
+            id: Set(1),
+            name: Set("快照测试远程".into()),
+            base_url: Set("https://snapshot.test".into()),
+            token: Set("test-only".into()),
+            headers: Set("[]".into()),
+            sort_order: Set(0),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .unwrap();
+        assert_eq!(remote_connection.id, 1);
         let manager = ConnectionManager::new();
         let mut commands = insert_live_connection(&manager, "rm03-ui", AgentType::Codex, None).await;
         let state = manager.get_state("rm03-ui").await.unwrap();
@@ -6592,7 +6629,16 @@ mod tests {
             }
             _ => panic!("应发送提示词"),
         }
-        assert!(state.read().await.turn_in_flight);
+        let state = state.read().await;
+        assert!(state.turn_in_flight);
+        assert!(crate::db::service::remote_mention_grant_service::is_granted(
+            &db.conn,
+            state.conversation_id.unwrap(),
+            1,
+            2,
+        )
+        .await
+        .unwrap());
     }
 
     #[tokio::test]
@@ -6612,6 +6658,45 @@ mod tests {
                 _ => panic!("应发送提示词"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn remote_snapshot_deleted_connection_degrades_without_grant_or_send_failure() {
+        use crate::acp::remote_snapshot::with_test_gateway;
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/tmp/remote-deleted").await;
+        let manager = ConnectionManager::new();
+        let mut commands =
+            insert_live_connection(&manager, "remote-deleted", AgentType::Codex, None).await;
+        with_test_gateway(
+            |_, _, _| async { Err("read_failed") },
+            manager.send_prompt_linked_for_ui(
+                &db,
+                "remote-deleted",
+                vec![PromptInputBlock::Text {
+                    text: "[已删除连接](codeg://remote/999/file/2/a)".into(),
+                }],
+                Some(folder),
+                None,
+                None,
+                false,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            commands.recv().await.unwrap(),
+            ConnectionCommand::Prompt { .. }
+        ));
+        let state = manager.get_state("remote-deleted").await.unwrap();
+        let conversation_id = state.read().await.conversation_id.unwrap();
+        assert!(crate::db::service::remote_mention_grant_service::list_by_conversation(
+            &db.conn,
+            conversation_id,
+        )
+        .await
+        .unwrap()
+        .is_empty());
     }
 
     /// Put a turn in flight on a connection inserted by
