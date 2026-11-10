@@ -1425,6 +1425,7 @@ impl ConnectionManager {
             client_message_id,
             Vec::new(),
             false,
+            false,
         )
         .await
     }
@@ -1451,6 +1452,34 @@ impl ConnectionManager {
             client_message_id,
             Vec::new(),
             explicit_user_resume,
+            false,
+        )
+        .await
+    }
+
+    /// 仅桌面 acp_prompt 使用；队列在真正出队后也经过此入口。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_for_ui(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        explicit_user_resume: bool,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            Vec::new(),
+            explicit_user_resume,
+            true,
         )
         .await
     }
@@ -1481,6 +1510,7 @@ impl ConnectionManager {
             None,
             internal_suffix,
             false,
+            false,
         )
         .await
     }
@@ -1495,8 +1525,9 @@ impl ConnectionManager {
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
-        internal_suffix: Vec<PromptInputBlock>,
+        mut internal_suffix: Vec<PromptInputBlock>,
         explicit_user_resume: bool,
+        remote_snapshot: bool,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1606,6 +1637,36 @@ impl ConnectionManager {
             &crate::paths::codeg_uploads_root(),
         )
         .await?;
+
+        // 快照只进内部后缀；等待时仍持 prompt_lock，尚未置 turn_in_flight。
+        // grants 留给集成方：成功绑定父会话后、send_prompt_inner 前登记。
+        let _remote_snapshot_grants = if remote_snapshot {
+            let references = crate::acp::remote_snapshot::collect_remote_references(&blocks);
+            if references.is_empty() {
+                Vec::new()
+            } else {
+                let count = references.iter().filter(|reference| {
+                    matches!(reference.target,
+                        crate::acp::remote_snapshot::RemoteTarget::File { .. }
+                        | crate::acp::remote_snapshot::RemoteTarget::Session { .. })
+                }).count();
+                if count > 0 {
+                    emit_with_state(
+                        &state_arc, &emitter, AcpEvent::RemoteSnapshotPreparing { count },
+                    ).await;
+                }
+                let embedded = state_arc.read().await.prompt_capabilities.as_ref()
+                    .is_some_and(|caps| caps.embedded_context);
+                let prepared = crate::acp::remote_snapshot::prepare(db, &references, embedded).await;
+                internal_suffix.extend(prepared.suffix);
+                if count > 0 {
+                    emit_with_state(&state_arc, &emitter, AcpEvent::RemoteSnapshotDone { degraded: prepared.degraded }).await;
+                }
+                prepared.grants
+            }
+        } else {
+            Vec::new()
+        };
 
         // CANCELLATION SHIELD around the first link, same shape and for the same
         // reason as `fork_session` below.
@@ -6495,6 +6556,62 @@ mod tests {
             .await
             .insert(conn_id.to_string(), conn);
         rx
+    }
+
+    #[tokio::test]
+    async fn remote_snapshot_ui_waits_before_gate_and_keeps_user_projection_private() {
+        use crate::acp::remote_snapshot::with_test_gateway;
+        use base64::Engine;
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/tmp/rm03").await;
+        let manager = ConnectionManager::new();
+        let mut commands = insert_live_connection(&manager, "rm03-ui", AgentType::Codex, None).await;
+        let state = manager.get_state("rm03-ui").await.unwrap();
+        let blocks = vec![PromptInputBlock::Text { text: "[文件](codeg://remote/1/file/2/a)".into() }];
+        let original = blocks.clone();
+        let inspect = state.clone();
+        with_test_gateway(move |_, command, _| {
+            let inspect = inspect.clone();
+            async move {
+                let state = inspect.read().await;
+                assert!(!state.turn_in_flight, "远程等待不得提前设置发送闸门");
+                assert!(state.conversation_id.is_none(), "准备阶段不得提前创建会话");
+                tokio::task::yield_now().await;
+                Ok(if command == "list_all_folder_details" {
+                    serde_json::json!([{"id":2,"path":"/remote"}])
+                } else {
+                    serde_json::json!(base64::engine::general_purpose::STANDARD.encode("仅智能体可见正文"))
+                })
+            }
+        }, manager.send_prompt_linked_for_ui(&db, "rm03-ui", blocks, Some(folder), None, None, false)).await.unwrap();
+        match commands.recv().await.unwrap() {
+            ConnectionCommand::Prompt { blocks, internal_suffix, user_message, .. } => {
+                assert_eq!(blocks, original);
+                assert!(serde_json::to_string(&internal_suffix).unwrap().contains("仅智能体可见正文"));
+                assert!(!serde_json::to_string(&user_message).unwrap().contains("仅智能体可见正文"));
+            }
+            _ => panic!("应发送提示词"),
+        }
+        assert!(state.read().await.turn_in_flight);
+    }
+
+    #[tokio::test]
+    async fn remote_snapshot_non_ui_and_no_link_preserve_suffix_without_fetch() {
+        use crate::acp::remote_snapshot::with_test_gateway;
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/tmp/rm03-false").await;
+        for (id, enabled, text) in [("rm03-false", false, "[a](codeg://remote/1/file/2/a)"), ("rm03-empty", true, "普通用户消息")] {
+            let manager = ConnectionManager::new();
+            let mut commands = insert_live_connection(&manager, id, AgentType::Codex, None).await;
+            let suffix = vec![PromptInputBlock::Text { text: "原有内部后缀".into() }];
+            with_test_gateway(|_,_,_| async { panic!("非UI或无链接不得读取远程"); #[allow(unreachable_code)] Ok(serde_json::Value::Null) },
+                manager.send_prompt_linked_full(&db, id, vec![PromptInputBlock::Text { text: text.into() }], Some(folder), None, None, None, suffix.clone(), false, enabled)
+            ).await.unwrap();
+            match commands.recv().await.unwrap() {
+                ConnectionCommand::Prompt { internal_suffix, .. } => assert_eq!(internal_suffix, suffix),
+                _ => panic!("应发送提示词"),
+            }
+        }
     }
 
     /// Put a turn in flight on a connection inserted by

@@ -52,6 +52,7 @@ pub mod provider_models;
 pub mod question;
 pub mod registry;
 pub mod remote_registry;
+pub mod remote_snapshot;
 pub(crate) mod reported_usage;
 pub mod result_tool;
 pub mod scratch_dir;
