@@ -70,6 +70,7 @@ pub mod project_boot;
 pub mod project_trust_directories;
 pub mod question;
 pub mod quick_messages;
+pub mod remote_mention;
 #[cfg(feature = "tauri-runtime")]
 pub mod remote_proxy;
 #[cfg(feature = "tauri-runtime")]

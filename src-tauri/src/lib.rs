@@ -61,6 +61,7 @@ pub mod pets;
 pub mod preferences;
 pub mod process;
 pub mod resource_monitor;
+pub mod remote_gateway;
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod relaunch;
 pub mod runtime_lock;
@@ -2028,6 +2029,12 @@ mod tauri_app {
                 remote_workspace_commands::reorder_remote_workspace_connections,
                 remote_workspace_commands::open_remote_workspace,
                 workspace_windows::take_workspace_restore_failures,
+                crate::commands::remote_mention::remote_mention_probe,
+                crate::commands::remote_mention::remote_mention_list_folders,
+                crate::commands::remote_mention::remote_mention_list_files,
+                crate::commands::remote_mention::remote_mention_list_sessions,
+                crate::commands::remote_mention::remote_mention_list_assistants,
+                crate::commands::remote_mention::remote_mention_list_agents,
                 remote_proxy_commands::remote_http_call,
                 remote_proxy_commands::remote_upload_attachment,
                 remote_proxy_commands::remote_upload_workspace_paths,
