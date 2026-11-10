@@ -363,10 +363,26 @@ pub fn async_task_state_is_terminal(state: &str) -> bool {
     matches!(state, "completed" | "failed" | "stopped")
 }
 
+/// 快照降级只含定位信息与固定原因，不携带远程错误正文。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteSnapshotDegraded {
+    pub uri: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<usize>,
+}
+
 /// Events pushed from Rust backend to frontend via Tauri event system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AcpEvent {
+    /// 桌面发送正在取远程上下文；连接 ID 位于 EventEnvelope 顶层。
+    RemoteSnapshotPreparing {
+        count: usize,
+    },
+    RemoteSnapshotDone {
+        degraded: Vec<RemoteSnapshotDegraded>,
+    },
     /// Agent returned text content (streaming delta)
     ContentDelta {
         text: String,
@@ -2729,6 +2745,27 @@ mod permission_option_tests {
                 Some("reject")
             );
         }
+    }
+
+    #[test]
+    fn remote_snapshot_events_use_local_acp_connection_envelope() {
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "local-acp-id".into(),
+            payload: AcpEvent::RemoteSnapshotDone {
+                degraded: vec![RemoteSnapshotDegraded {
+                    uri: "codeg://remote/7/file/2/a".into(),
+                    reason: "timeout".into(),
+                    bytes: None,
+                }],
+            },
+        };
+        let wire = serde_json::to_value(envelope).unwrap();
+        assert_eq!(wire["connection_id"], "local-acp-id");
+        assert_eq!(wire["type"], "remote_snapshot_done");
+        assert!(wire["degraded"][0].get("bytes").is_none());
+        let preparing = serde_json::to_value(AcpEvent::RemoteSnapshotPreparing { count: 2 }).unwrap();
+        assert_eq!(preparing["type"], "remote_snapshot_preparing");
     }
 
     #[test]

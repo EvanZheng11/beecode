@@ -12134,7 +12134,7 @@ pub async fn acp_prompt(
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
     manager
-        .send_prompt_linked_with_resume(
+        .send_prompt_linked_for_ui(
             &db,
             &connection_id,
             blocks,
