@@ -206,7 +206,11 @@ pub async fn open_remote_workspace(
     app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     id: i32,
+    conversation_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
+    if conversation_id.is_some_and(|value| value <= 0) {
+        return Err(AppCommandError::invalid_input("远程会话 ID 必须为正数"));
+    }
     let connection = remote_workspace_connection_service::get(&db.conn, id)
         .await
         .map_err(AppCommandError::db)?
@@ -214,6 +218,7 @@ pub async fn open_remote_workspace(
 
     let label = WorkspaceWindow::Remote { connection_id: id }.label();
     if app.get_webview_window(&label).is_some() {
+        focus_remote_conversation(&app, &label, conversation_id)?;
         crate::commands::windows::show_and_focus_window(&app, &label);
         return Ok(());
     }
@@ -222,10 +227,11 @@ pub async fn open_remote_workspace(
 
     // An overlapping open / restore may have built it during the health check.
     if app.get_webview_window(&label).is_some() {
+        focus_remote_conversation(&app, &label, conversation_id)?;
         crate::commands::windows::show_and_focus_window(&app, &label);
         return Ok(());
     }
-    build_remote_workspace_window(&app, &connection, true)
+    build_remote_workspace_window_with_target(&app, &connection, true, conversation_id)
 }
 
 /// Build a workspace for a saved connection. Manual opens validate health;
@@ -237,12 +243,37 @@ pub(crate) fn build_remote_workspace_window(
     connection: &RemoteWorkspaceConnectionInfo,
     focus: bool,
 ) -> Result<(), AppCommandError> {
+    build_remote_workspace_window_with_target(app, connection, focus, None)
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn focus_remote_conversation(
+    app: &AppHandle,
+    label: &str,
+    conversation_id: Option<i32>,
+) -> Result<(), AppCommandError> {
+    use tauri::Emitter;
+    if let Some(conversation_id) = conversation_id {
+        app.emit_to(label, "remote-workspace://focus-conversation", conversation_id)
+            .map_err(|error| AppCommandError::window("远程会话定位失败", error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn build_remote_workspace_window_with_target(
+    app: &AppHandle,
+    connection: &RemoteWorkspaceConnectionInfo,
+    focus: bool,
+    conversation_id: Option<i32>,
+) -> Result<(), AppCommandError> {
     let id = connection.id;
     let window = WorkspaceWindow::Remote { connection_id: id };
     let label = window.label();
     let window_instance_id = new_remote_window_instance_id();
+    let target = conversation_id.map(|id| format!("&conversationId={id}")).unwrap_or_default();
     let url = WebviewUrl::App(
-        format!("workspace?remoteConnectionId={id}&remoteWindowId={window_instance_id}").into(),
+        format!("workspace?remoteConnectionId={id}&remoteWindowId={window_instance_id}{target}").into(),
     );
     let builder = WebviewWindowBuilder::new(app, &label, url)
         .title(format!("BeeCode - {}", connection.name))

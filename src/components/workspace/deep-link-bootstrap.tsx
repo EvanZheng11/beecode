@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, useTabActions } from "@/contexts/tab-context"
 import { takePendingDeepLink } from "@/lib/deep-link"
+import { getShellTransport } from "@/lib/transport"
 import type { AgentType } from "@/lib/types"
 
 /**
@@ -171,6 +172,7 @@ export function PetFocusBridge() {
   // slot here would let whichever arrives second erase the first with no way
   // to get it back. Queue them; the last one still ends up focused.
   const pendingRef = useRef<FocusRequest[]>([])
+  const remotePendingRef = useRef<number[]>([])
 
   // Tail of the batches already running. Opening a tab can await a folder
   // load, so without this a request that arrives during that await would be
@@ -179,7 +181,11 @@ export function PetFocusBridge() {
   const runningRef = useRef<Promise<void>>(Promise.resolve())
 
   const attempt = useCallback(() => {
-    if (pendingRef.current.length === 0) return
+    if (
+      pendingRef.current.length === 0 &&
+      remotePendingRef.current.length === 0
+    )
+      return
     if (
       !useAppWorkspaceStore.getState().foldersHydrated ||
       !stateRef.current.tabsHydrated
@@ -188,6 +194,18 @@ export function PetFocusBridge() {
     }
     // Take the whole queue before the async work (mirrors DeepLinkBootstrap)
     // so a later state change can't replay what is already being opened.
+    for (const id of remotePendingRef.current) {
+      const remote = useAppWorkspaceStore
+        .getState()
+        .conversations.find((item) => item.id === id)
+      if (remote)
+        pendingRef.current.push({
+          folderId: remote.folder_id,
+          conversationId: remote.id,
+          agent: remote.agent_type,
+        })
+    }
+    remotePendingRef.current = []
     const requests = pendingRef.current
     pendingRef.current = []
     runningRef.current = runningRef.current
@@ -245,6 +263,22 @@ export function PetFocusBridge() {
       try {
         const { getTransport } = await import("@/lib/transport")
         const transport = getTransport()
+        // 远程窗口的普通事件经远端代理；本机卡片的窗口定位事件必须订阅
+        // shell，避免错向远端请求本地窗口事件。
+        if (
+          new URLSearchParams(window.location.search).has("remoteConnectionId")
+        ) {
+          const offRemote = await getShellTransport().subscribe<number>(
+            "remote-workspace://focus-conversation",
+            (id) => {
+              if (!Number.isInteger(id) || id <= 0) return
+              remotePendingRef.current.push(id)
+              attempt()
+            }
+          )
+          if (cancelled) offRemote()
+          else disposers.push(offRemote)
+        }
 
         const offFocus = await transport.subscribe<{
           folderId?: number
