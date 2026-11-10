@@ -74,6 +74,18 @@ describe("远程引用 URI 与访问提示", () => {
     (url) => expect(isPublicHttpBaseUrl(url)).toBe(true)
   )
 
+  it("括号文件名不会被 Markdown 或后端 URI 扫描截断", () => {
+    const target: RemoteMentionTarget = {
+      connectionId: 1,
+      kind: "file",
+      folderId: 2,
+      target: "src/a(1).ts",
+    }
+    const uri = buildRemoteMentionUri(target)
+    expect(uri).toBe("codeg://remote/1/file/2/src/a%281%29.ts")
+    expect(parseRemoteMentionUri(uri!)).toEqual(target)
+  })
+
   it("只有明确 run 能力可启用远程执行", () => {
     expect(supportsRemoteRun(null)).toBe(false)
     expect(

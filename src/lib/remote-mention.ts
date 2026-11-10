@@ -104,7 +104,12 @@ function encodeRelativePath(path: string): string | null {
   const encoded: string[] = []
   for (const segment of segments) {
     if (!validFileSegment(segment)) return null
-    encoded.push(encodeURIComponent(segment))
+    encoded.push(
+      encodeURIComponent(segment).replace(
+        /[()]/g,
+        (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+      )
+    )
   }
   return encoded.join("/")
 }
@@ -165,7 +170,11 @@ export function buildRemoteMentionUri(
       if (folderId === null) return null
       const slug = target.target
       if (!validRemoteSegment(slug)) return null
-      return `${base}/agent/${encodeURIComponent(slug)}?folder=${folderId}`
+      const encoded = encodeURIComponent(slug).replace(
+        /[()]/g,
+        (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+      )
+      return `${base}/agent/${encoded}?folder=${folderId}`
     }
   }
 }

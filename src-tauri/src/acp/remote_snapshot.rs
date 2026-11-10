@@ -334,7 +334,7 @@ where
     Fut: Future<Output = Result<Value, &'static str>>,
 {
     let deadline = Instant::now() + total_timeout;
-    let mut results = stream::iter(references.iter().enumerate().map(|(index, reference)| {
+    let mut results = stream::iter(references.iter().cloned().enumerate().map(|(index, reference)| {
         let call = &call;
         async move {
             // 路由引用只收集授权，不因文件队列耗尽时间预算而生成快照。
@@ -342,12 +342,12 @@ where
                 reference.target,
                 RemoteTarget::Assistant { .. } | RemoteTarget::Agent { .. }
             ) {
-                return (index, fetch(reference, call).await);
+                return (index, fetch(&reference, call).await);
             }
             let result = if Instant::now() >= deadline {
                 None
             } else {
-                Some(timeout_at(deadline, timeout(item_timeout, fetch(reference, call))).await)
+                Some(timeout_at(deadline, timeout(item_timeout, fetch(&reference, call))).await)
             };
             let fetched = match result {
                 Some(Ok(Ok(fetched))) => fetched,
@@ -535,6 +535,17 @@ mod tests {
             blob: None
         }])
         .is_empty());
+    }
+
+    #[test]
+    fn encoded_parentheses_survive_markdown_reference_scan() {
+        let references = refs("[括号文件](codeg://remote/1/file/2/src/a%281%29.ts)");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].uri, "codeg://remote/1/file/2/src/a%281%29.ts");
+        assert_eq!(references[0].target, RemoteTarget::File {
+            folder_id: 2,
+            path: "src/a(1).ts".into(),
+        });
     }
 
     #[tokio::test]
