@@ -184,6 +184,7 @@ describe("buildReferenceGroups", () => {
       session: "会话",
       commit: "提交",
       skill: "技能",
+      remote: "远端",
     }
     const groups = buildReferenceGroups("", emptySources(), labels)
     expect(itemsOf(groups, "file")).toBeDefined()

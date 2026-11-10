@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "Sessões",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Assistentes"
+        "mentionGroupAssistant": "Assistentes",
+        "mentionGroupRemote": "Remoto",
+        "remoteSnapshotPreparing": "Obtendo arquivos remotos ({count})…",
+        "remoteSnapshotDegraded": "Não foi possível obter alguns arquivos remotos: {reason}"
       },
       "messageQueue": {
         "addToQueue": "Adicionar à fila",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "Assistente #{id}",
-        "deletedAssistant": "(excluído)"
+        "deletedAssistant": "(excluído)",
+        "remoteLabel": "Remoto · {name}",
+        "remoteGoToSession": "Abrir sessão remota",
+        "remoteHandleThere": "Resolva na máquina remota",
+        "remoteCancelUnconfirmed": "O remoto não confirmou o cancelamento",
+        "remoteUnreachable": "Não é possível alcançar o remoto",
+        "remoteResync": "Ressincronizar",
+        "remoteConnectionDeleted": "Conexão remota excluída",
+        "remoteOpenFailed": "Não foi possível abrir o espaço de trabalho remoto",
+        "remoteResyncFailed": "Não foi possível ressincronizar"
       },
       "contentParts": {
         "offset": "Deslocamento: {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "Não foi possível abrir o espaço de trabalho remoto",
     "restoreFailed": "Não foi possível reabrir o espaço de trabalho remoto \"{name}\"",
     "connectionLoadFailed": "Não foi possível carregar a conexão remota: {message}",
-    "connectionExpired": "A conexão remota \"{name}\" expirou. Atualize o token dela e recarregue esta janela."
+    "connectionExpired": "A conexão remota \"{name}\" expirou. Atualize o token dela e recarregue esta janela.",
+    "publicHttpWarning": "Este endereço envia seu token pela internet aberta sem criptografia (http://). Use https:// ou um túnel criptografado."
+  },
+  "RemoteMention": {
+    "kindFile": "Arquivos",
+    "kindSession": "Sessões",
+    "kindAssistant": "Assistentes",
+    "kindAgent": "Agentes",
+    "offline": "Offline",
+    "tokenInvalid": "Token inválido",
+    "probing": "Verificando…",
+    "runUnsupported": "Este remoto não pode executar agentes",
+    "back": "Voltar",
+    "loading": "Carregando…",
+    "retry": "Tentar novamente",
+    "noConnections": "Nenhuma conexão remota",
+    "empty": "Nada para mostrar",
+    "truncated": "Resultados demais — continue digitando para refinar",
+    "loadFailed": "Não foi possível carregar",
+    "timeout": "Tempo esgotado — tente novamente",
+    "connectionMissing": "Esta conexão remota não existe mais",
+    "expired": "expirada"
   },
   "ServerFileBrowser": {
     "title": "Selecionar arquivo do servidor",

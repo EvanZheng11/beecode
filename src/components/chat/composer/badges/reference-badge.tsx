@@ -6,6 +6,7 @@ import {
   GitCommit,
   Hash,
   MessageSquare,
+  MonitorSmartphone,
 } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -101,6 +102,11 @@ export function ReferenceIcon({
       // the editor's expert-replace logic, not the icon).
       icon = <Command className={ICON_CLASS} />
       break
+    case "remote":
+      // 远程引用统一用"另一台机器"的图形：它指向的是别的机器上的资源，
+      // 资源类型由标签文字（`机器名:路径` / `机器名:@助手名`）表达。
+      icon = <MonitorSmartphone className={ICON_CLASS} />
+      break
     default:
       return null
   }
@@ -137,12 +143,21 @@ function badgeColorClass(data: ReferenceAttrs): string {
       return "text-amber-700 dark:text-amber-400"
     case "skill":
       return "text-rose-700 dark:text-rose-400"
+    case "remote":
+      return "text-cyan-700 dark:text-cyan-400"
   }
 }
 
 export interface ReferenceBadgeProps {
   data: ReferenceAttrs
   className?: string
+  /**
+   * Text appended to the badge when the remote connection it points at no
+   * longer exists (设计 4.1.2.3：显示为灰色"已失效"). Supplied by the caller,
+   * which owns the localized string and the connection list; the badge itself
+   * stays presentational. Ignored for non-remote references.
+   */
+  expiredLabel?: string
 }
 
 /**
@@ -150,26 +165,40 @@ export interface ReferenceBadgeProps {
  * the message-transcript rendering (markdown-link → here). Purely visual — no
  * editor coupling.
  */
-export function ReferenceBadge({ data, className }: ReferenceBadgeProps) {
+export function ReferenceBadge({
+  data,
+  className,
+  expiredLabel,
+}: ReferenceBadgeProps) {
+  const expired =
+    data.refType === "remote" &&
+    (data.meta?.remoteMissing === true || Boolean(expiredLabel))
   return (
     <span
       data-reference-badge=""
       data-ref-type={data.refType}
+      data-remote-expired={expired ? "" : undefined}
       title={data.uri ?? data.label}
       // The badge is an inline contentEditable=false atom. `role="img"` makes it
       // a single named unit so `aria-label` is a reliable accessible name (a
       // bare span's aria-label is not), and collapses the decorative icon —
       // including AgentIcon's titled <svg> — into that one name.
       role="img"
-      aria-label={`${data.refType}: ${data.label || data.id}`}
+      aria-label={`${data.refType}: ${data.label || data.id}${
+        expired && expiredLabel ? ` (${expiredLabel})` : ""
+      }`}
       className={cn(
         "inline-flex max-w-[18rem] items-center gap-0.5 align-middle text-[0.85em] font-medium leading-snug",
-        badgeColorClass(data),
+        // 连接已删除：灰色"已失效"，不再按类型着色 —— 它已经不是可用的引用了。
+        expired ? "text-muted-foreground line-through" : badgeColorClass(data),
         className
       )}
     >
       <ReferenceIcon data={data} />
       <span className="truncate">{data.label || data.id}</span>
+      {expired && expiredLabel ? (
+        <span className="shrink-0 text-muted-foreground">({expiredLabel})</span>
+      ) : null}
     </span>
   )
 }

@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "mentionGroupAssistant": "어시스턴트"
+        "mentionGroupAssistant": "어시스턴트",
+        "mentionGroupRemote": "원격",
+        "remoteSnapshotPreparing": "원격 파일 가져오는 중({count})…",
+        "remoteSnapshotDegraded": "일부 원격 파일을 가져오지 못했습니다: {reason}"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "어시스턴트 #{id}",
-        "deletedAssistant": "(삭제됨)"
+        "deletedAssistant": "(삭제됨)",
+        "remoteLabel": "원격 · {name}",
+        "remoteGoToSession": "원격 세션 열기",
+        "remoteHandleThere": "원격에서 처리하세요",
+        "remoteCancelUnconfirmed": "원격이 취소를 확인하지 않았습니다",
+        "remoteUnreachable": "원격에 연결할 수 없습니다",
+        "remoteResync": "다시 동기화",
+        "remoteConnectionDeleted": "원격 연결이 삭제되었습니다",
+        "remoteOpenFailed": "원격 워크스페이스를 열지 못했습니다",
+        "remoteResyncFailed": "다시 동기화하지 못했습니다"
       },
       "contentParts": {
         "offset": "오프셋: {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "원격 워크스페이스를 열지 못했습니다",
     "restoreFailed": "원격 워크스페이스 \"{name}\"을(를) 다시 열 수 없습니다",
     "connectionLoadFailed": "원격 연결을 불러오지 못했습니다: {message}",
-    "connectionExpired": "원격 연결 \"{name}\"이(가) 만료되었습니다. 토큰을 업데이트한 뒤 이 창을 새로고침하세요."
+    "connectionExpired": "원격 연결 \"{name}\"이(가) 만료되었습니다. 토큰을 업데이트한 뒤 이 창을 새로고침하세요.",
+    "publicHttpWarning": "이 주소는 토큰을 공용 인터넷에 평문(http://)으로 전송합니다. https:// 또는 암호화 터널을 사용하세요."
+  },
+  "RemoteMention": {
+    "kindFile": "파일",
+    "kindSession": "세션",
+    "kindAssistant": "어시스턴트",
+    "kindAgent": "에이전트",
+    "offline": "오프라인",
+    "tokenInvalid": "토큰이 유효하지 않습니다",
+    "probing": "확인 중…",
+    "runUnsupported": "원격에서는 에이전트를 실행할 수 없습니다",
+    "back": "뒤로",
+    "loading": "불러오는 중…",
+    "retry": "다시 시도",
+    "noConnections": "원격 연결이 없습니다",
+    "empty": "표시할 항목이 없습니다",
+    "truncated": "결과가 너무 많습니다. 키워드를 좁혀 주세요",
+    "loadFailed": "불러오지 못했습니다",
+    "timeout": "시간이 초과되었습니다. 다시 시도하세요",
+    "connectionMissing": "이 원격 연결은 더 이상 존재하지 않습니다",
+    "expired": "만료됨"
   },
   "ServerFileBrowser": {
     "title": "서버 파일 선택",

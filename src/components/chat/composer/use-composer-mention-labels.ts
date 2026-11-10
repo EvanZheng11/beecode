@@ -34,6 +34,7 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
       session: t("mentionGroupSession"),
       commit: t("mentionGroupCommit"),
       skill: t("mentionGroupSkill"),
+      remote: t("mentionGroupRemote"),
     }),
     [t]
   )

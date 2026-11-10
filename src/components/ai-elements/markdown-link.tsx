@@ -9,6 +9,10 @@ import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badg
 import { parseCodegReferenceUri } from "@/components/chat/composer/reference-uri"
 import { FileReferenceActions } from "@/components/message/file-reference-actions"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
+import {
+  parseRemoteMentionUri,
+  useRemoteMentionConnectionState,
+} from "@/lib/remote-mention"
 import { classifyResourceKind, type ResourceKind } from "@/lib/resource-kind"
 import { cn } from "@/lib/utils"
 import {
@@ -26,6 +30,7 @@ import {
 import { useOpenUrlTarget } from "@/hooks/use-open-url-target"
 import { copyTextToClipboard } from "@/lib/utils"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
 
 const RESOURCE_KIND_ICON: Record<ResourceKind, LucideIcon> = {
   file: FileText,
@@ -74,7 +79,18 @@ export function MarkdownLink({
   const linkSafety = useStreamdownLinkSafety()
   const openUrlTarget = useOpenUrlTarget()
   const tLink = useTranslations("Browser.link")
+  const tRemote = useTranslations("RemoteMention")
   const [modalOpen, setModalOpen] = useState(false)
+  // 远程引用要判断"连接是否还在本机"才能显示灰色"已失效"（设计 4.1.2.3）。
+  // 钩子必须在任何提前 return 之前调用，所以这里单独解析一次 URI；非远程链接
+  // 传 null，钩子不做任何事。
+  const remoteTarget =
+    href && href.toLowerCase().startsWith("codeg:")
+      ? parseRemoteMentionUri(href)
+      : null
+  const remoteConnectionState = useRemoteMentionConnectionState(
+    remoteTarget?.connectionId
+  )
 
   // Deliberately NOT async: `openLinkWithSafety` opens the tab inside this
   // handler's own call stack, because awaiting the (synchronous) safety verdict
@@ -114,7 +130,31 @@ export function MarkdownLink({
   // text is the label.
   if (href.toLowerCase().startsWith("codeg:")) {
     const reference = parseCodegReferenceUri(href, nodeText(children))
-    if (reference) return <ReferenceBadge data={reference} />
+    if (reference) {
+      // 远程引用：连接已被删除时标灰"已失效"，点一下说明原因（没有可跳转的
+      // 目标，所以不是链接而是一段可点击的提示）。
+      if (reference.refType === "remote") {
+        const missing = remoteConnectionState === "missing"
+        if (missing) {
+          return (
+            <button
+              type="button"
+              data-remote-reference-missing=""
+              title={reference.uri ?? reference.label}
+              onClick={() => toast.error(tRemote("connectionMissing"))}
+              className="inline-flex max-w-full appearance-none items-center align-middle leading-none"
+            >
+              <ReferenceBadge
+                data={reference}
+                expiredLabel={tRemote("expired")}
+              />
+            </button>
+          )
+        }
+        return <ReferenceBadge data={reference} />
+      }
+      return <ReferenceBadge data={reference} />
+    }
   }
 
   const kind = classifyResourceKind(href)

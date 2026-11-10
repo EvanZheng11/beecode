@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Compétences",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "mentionGroupRemote": "Distant",
+        "remoteSnapshotPreparing": "Récupération des fichiers distants ({count})…",
+        "remoteSnapshotDegraded": "Certains fichiers distants n’ont pas pu être récupérés : {reason}"
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "Assistant #{id}",
-        "deletedAssistant": "(supprimé)"
+        "deletedAssistant": "(supprimé)",
+        "remoteLabel": "Distant · {name}",
+        "remoteGoToSession": "Ouvrir la session distante",
+        "remoteHandleThere": "Traitez-le sur la machine distante",
+        "remoteCancelUnconfirmed": "Le distant n’a pas confirmé l’annulation",
+        "remoteUnreachable": "Distant injoignable",
+        "remoteResync": "Resynchroniser",
+        "remoteConnectionDeleted": "Connexion distante supprimée",
+        "remoteOpenFailed": "Impossible d’ouvrir l’espace de travail distant",
+        "remoteResyncFailed": "Resynchronisation impossible"
       },
       "contentParts": {
         "offset": "Décalage : {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "Échec de l’ouverture de l’espace de travail distant",
     "restoreFailed": "Impossible de rouvrir l’espace de travail distant « {name} »",
     "connectionLoadFailed": "Échec du chargement de la connexion distante : {message}",
-    "connectionExpired": "La connexion distante « {name} » a expiré. Mettez son jeton à jour, puis rechargez cette fenêtre."
+    "connectionExpired": "La connexion distante « {name} » a expiré. Mettez son jeton à jour, puis rechargez cette fenêtre.",
+    "publicHttpWarning": "Cette adresse envoie votre jeton en clair sur Internet (http://). Utilisez https:// ou un tunnel chiffré."
+  },
+  "RemoteMention": {
+    "kindFile": "Fichiers",
+    "kindSession": "Sessions",
+    "kindAssistant": "Assistants",
+    "kindAgent": "Agents",
+    "offline": "Hors ligne",
+    "tokenInvalid": "Jeton invalide",
+    "probing": "Vérification…",
+    "runUnsupported": "Ce distant ne peut pas exécuter d’agents",
+    "back": "Retour",
+    "loading": "Chargement…",
+    "retry": "Réessayer",
+    "noConnections": "Aucune connexion distante",
+    "empty": "Rien à afficher",
+    "truncated": "Trop de résultats : continuez à taper pour affiner",
+    "loadFailed": "Échec du chargement",
+    "timeout": "Délai dépassé : réessayez",
+    "connectionMissing": "Cette connexion distante n’existe plus",
+    "expired": "expirée"
   },
   "ServerFileBrowser": {
     "title": "Sélectionner un fichier serveur",

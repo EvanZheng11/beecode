@@ -131,7 +131,11 @@ export function referenceToMarkdown(attrs: ReferenceAttrs): string {
     }
     case "file":
     case "session":
-    case "commit": {
+    case "commit":
+    case "remote": {
+      // `remote` 走同一分支：它总是带 URI（`codeg://remote/...`），发送时序列化
+      // 成 `[label](uri)`，URI 逐字节不变 —— 发送边界的快照、远程路由帧和会话
+      // 记录都靠这条链接认出远程引用（设计 4.1.3 / 4.1.4 / 5.2）。
       const text = collapseNewlines(attrs.label || attrs.id)
       return attrs.uri
         ? `[${escapeMarkdownText(text)}](${escapeLinkDestination(attrs.uri)})`

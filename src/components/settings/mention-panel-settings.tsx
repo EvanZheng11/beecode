@@ -27,6 +27,7 @@ import {
   GitCommit,
   GripVertical,
   MessageSquare,
+  MonitorSmartphone,
   RotateCcw,
   UserRound,
   type LucideIcon,
@@ -59,6 +60,8 @@ const TAB_ICONS = {
   file: FileText,
   session: MessageSquare,
   commit: GitCommit,
+  // 远程 tab 与远程徽标同一个"另一台机器"图形（`badges/reference-badge.tsx`）。
+  remote: MonitorSmartphone,
 } as const satisfies Record<MentionTabKind, LucideIcon>
 
 function sameOrder(

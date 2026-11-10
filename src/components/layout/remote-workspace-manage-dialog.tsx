@@ -28,6 +28,7 @@ import {
   updateRemoteWorkspaceConnection,
 } from "@/lib/remote-workspace"
 import { toErrorMessage } from "@/lib/app-error"
+import { isPublicHttpBaseUrl } from "@/lib/remote-mention"
 import type {
   RemoteWorkspaceConnection,
   RemoteWorkspaceHeader,
@@ -564,6 +565,11 @@ export function RemoteWorkspaceManageDialog({
                           updateDraft({ baseUrl: event.target.value })
                         }
                       />
+                      {isPublicHttpBaseUrl(draft.baseUrl) && (
+                        <p role="status" className="text-xs text-tone-warning">
+                          {t("publicHttpWarning")}
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-1.5">
                       <Label

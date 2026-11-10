@@ -24,6 +24,11 @@ const PREFS_EVENT = "codeg:mention-panel-changed"
  * handing a subtask to another agent is what `@` is there for), the user's
  * assistants beside it, then the rest. Skills, commands and experts are not
  * tabs: they come from the `/` and `$` triggers.
+ *
+ * `remote` (跨机 @ 引用) is last: it is an opt-in that only exists in a local
+ * desktop window (see `isLocalDesktop()`), and the panel filters it out
+ * everywhere else. Keeping it in the stored order means the Settings page can
+ * place it like any other tab.
  */
 export const MENTION_TAB_KINDS = [
   "agent",
@@ -31,6 +36,7 @@ export const MENTION_TAB_KINDS = [
   "file",
   "session",
   "commit",
+  "remote",
 ] as const
 
 export type MentionTabKind = (typeof MENTION_TAB_KINDS)[number]

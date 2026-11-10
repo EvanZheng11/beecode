@@ -1,4 +1,9 @@
 import { ALL_AGENT_TYPES, type AgentType } from "@/lib/types"
+import {
+  buildRemoteMentionUri,
+  parseRemoteMentionUri,
+  type RemoteMentionTarget,
+} from "@/lib/remote-mention"
 import { randomUUID } from "@/lib/utils"
 
 import type { ReferenceAttrs } from "./types"
@@ -71,6 +76,47 @@ export function refOfEmbeddedReferenceUri(uri: string): string | null {
 }
 
 /**
+ * Build the badge/reference attrs for a remote target (设计 5.2 的四种 URI).
+ *
+ * `uri` defaults to the canonical rebuild; a caller restoring an existing link
+ * passes the original string instead, so a URI is never rewritten on its way
+ * through a draft or a transcript (往返不丢 URI). `meta` carries the display
+ * hints only — identity stays in the URI, which the backend re-parses.
+ */
+export function remoteMentionReference(
+  target: RemoteMentionTarget,
+  label: string,
+  extras: {
+    uri?: string
+    connectionName?: string
+    folderPath?: string
+    missing?: boolean
+  } = {}
+): ReferenceAttrs {
+  const meta: NonNullable<ReferenceAttrs["meta"]> = {
+    remoteKind: target.kind,
+    remoteConnectionId: target.connectionId,
+  }
+  if (target.folderId !== null) meta.remoteFolderId = target.folderId
+  if (extras.connectionName) meta.remoteConnectionName = extras.connectionName
+  if (extras.folderPath) meta.remoteFolderPath = extras.folderPath
+  if (extras.missing) meta.remoteMissing = true
+  // 徽标文字形如 `机器名:路径` / `机器名:@助手名`；没有连接名时退回资源自身的
+  // 标识（会话/助手是 `#id`，文件与智能体是路径/slug）。
+  const fallback =
+    target.kind === "file" || target.kind === "agent"
+      ? target.target
+      : `#${target.target}`
+  return {
+    refType: "remote",
+    id: target.target,
+    label: label || fallback,
+    uri: extras.uri ?? buildRemoteMentionUri(target),
+    meta,
+  }
+}
+
+/**
  * Parse a composer reference uri (`file://` / `codeg://…`) back into
  * {@link ReferenceAttrs}, or null when it isn't a recognized reference scheme
  * (in which case the caller treats it as a plain link / attachment).
@@ -94,6 +140,11 @@ export function parseCodegReferenceUri(
       meta: { fileKind: "file" },
     }
   }
+
+  // 远程引用（设计 4.1.2.3）：`codeg://remote/...` 解析成 `remote` 徽标，而不是
+  // 落入"不支持的链接"。URI 原样保留，徽标 hover 显示它。
+  const remote = parseRemoteMentionUri(uri)
+  if (remote) return remoteMentionReference(remote, label, { uri })
 
   const agent = uri.match(AGENT_URI)
   if (agent) {

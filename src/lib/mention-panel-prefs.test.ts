@@ -22,6 +22,7 @@ const custom: MentionPanelPrefs = {
   tabs: [
     { kind: "file", visible: true },
     { kind: "commit", visible: true },
+    { kind: "remote", visible: true },
     { kind: "agent", visible: false },
     { kind: "assistant", visible: true },
     { kind: "session", visible: true },
@@ -51,6 +52,7 @@ describe("mention panel preferences", () => {
       "file",
       "session",
       "commit",
+      "remote",
     ])
   })
 
@@ -70,6 +72,7 @@ describe("mention panel preferences", () => {
     expect(visibleMentionTabKinds(loadMentionPanelPrefs())).toEqual([
       "file",
       "commit",
+      "remote",
       "assistant",
       "session",
     ])
@@ -109,6 +112,8 @@ describe("mention panel preferences", () => {
       { kind: "file", visible: true },
       // First occurrence wins.
       { kind: "commit", visible: false },
+      // `remote` joins after its built-in neighbour (commit).
+      { kind: "remote", visible: true },
       // Only an explicit `false` hides a tab.
       { kind: "session", visible: true },
     ])
@@ -140,6 +145,7 @@ describe("mention panel preferences", () => {
       "assistant",
       "session",
       "commit",
+      "remote",
     ])
     expect(parsed.tabs[2]).toEqual({ kind: "assistant", visible: true })
   })
@@ -254,13 +260,26 @@ describe("mention panel preferences", () => {
     it("hands a hook a visible-tab list that only changes with the value", () => {
       const { result } = renderHook(() => useVisibleMentionTabs())
       const first = result.current
-      expect(first).toEqual(["agent", "assistant", "file", "session", "commit"])
+      expect(first).toEqual([
+        "agent",
+        "assistant",
+        "file",
+        "session",
+        "commit",
+        "remote",
+      ])
 
       act(() => writeFromAnotherWindow("unrelated", "x"))
       expect(result.current).toBe(first)
 
       act(() => saveMentionPanelPrefs(custom))
-      expect(result.current).toEqual(["file", "commit", "assistant", "session"])
+      expect(result.current).toEqual([
+        "file",
+        "commit",
+        "remote",
+        "assistant",
+        "session",
+      ])
     })
   })
 })

@@ -49,6 +49,12 @@ export interface ReferenceGroupLabels {
   session: string
   commit: string
   skill: string
+  /**
+   * `remote`（跨机 @ 引用）没有搜索源：它的行由 `RemoteNavigator` 自己按层拉取。
+   * 这里仍要有一项，因为标签表的类型是 `Record<ReferenceKind, string>`，面板的
+   * tab 标题也直接取它。
+   */
+  remote: string
 }
 
 /**
@@ -62,6 +68,7 @@ export const DEFAULT_GROUP_LABELS: ReferenceGroupLabels = {
   session: "Sessions",
   commit: "Commits",
   skill: "Skills",
+  remote: "Remote",
 }
 
 /** Raw, already-loaded data the pure group builder turns into suggestions. */

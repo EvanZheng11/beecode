@@ -3550,7 +3550,10 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "mentionGroupRemote": "リモート",
+        "remoteSnapshotPreparing": "リモートファイルを取得中（{count}）…",
+        "remoteSnapshotDegraded": "一部のリモートファイルを取得できませんでした：{reason}"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3911,7 +3914,16 @@
           }
         },
         "unknownAssistant": "アシスタント #{id}",
-        "deletedAssistant": "（削除済み）"
+        "deletedAssistant": "（削除済み）",
+        "remoteLabel": "リモート · {name}",
+        "remoteGoToSession": "リモートセッションを開く",
+        "remoteHandleThere": "リモート側で処理してください",
+        "remoteCancelUnconfirmed": "リモートがキャンセルを確認していません",
+        "remoteUnreachable": "リモートに接続できません",
+        "remoteResync": "再同期",
+        "remoteConnectionDeleted": "リモート接続が削除されました",
+        "remoteOpenFailed": "リモートワークスペースを開けませんでした",
+        "remoteResyncFailed": "再同期できませんでした"
       },
       "contentParts": {
         "offset": "オフセット: {offset}",
@@ -5339,7 +5351,28 @@
     "openFailed": "リモートワークスペースを開けませんでした",
     "restoreFailed": "リモートワークスペース「{name}」を再度開けませんでした",
     "connectionLoadFailed": "リモート接続を読み込めませんでした: {message}",
-    "connectionExpired": "リモート接続「{name}」の有効期限が切れています。トークンを更新してから、このウィンドウを再読み込みしてください。"
+    "connectionExpired": "リモート接続「{name}」の有効期限が切れています。トークンを更新してから、このウィンドウを再読み込みしてください。",
+    "publicHttpWarning": "このアドレスはトークンを公衆インターネット上に平文（http://）で送信します。https:// か暗号化トンネルを使用してください。"
+  },
+  "RemoteMention": {
+    "kindFile": "ファイル",
+    "kindSession": "セッション",
+    "kindAssistant": "アシスタント",
+    "kindAgent": "エージェント",
+    "offline": "オフライン",
+    "tokenInvalid": "トークンが無効です",
+    "probing": "確認中…",
+    "runUnsupported": "リモートではエージェントを実行できません",
+    "back": "戻る",
+    "loading": "読み込み中…",
+    "retry": "再試行",
+    "noConnections": "リモート接続がありません",
+    "empty": "項目がありません",
+    "truncated": "結果が多すぎます。キーワードを絞り込んでください",
+    "loadFailed": "読み込めませんでした",
+    "timeout": "タイムアウトしました。再試行してください",
+    "connectionMissing": "このリモート接続は存在しません",
+    "expired": "期限切れ"
   },
   "ServerFileBrowser": {
     "title": "サーバーファイルを選択",
