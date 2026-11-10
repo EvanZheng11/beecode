@@ -172,14 +172,14 @@ pub fn build_delegation_stack(
     }) as Arc<dyn ConnectionSpawner>;
     let depth_lookup =
         Arc::new(DbDepthLookup { db: db_arc.clone() }) as Arc<dyn ConversationDepthLookup>;
-    let agent_availability = Arc::new(crate::acp::connection::DbAgentAvailabilityLookup {
-        db: db_arc.clone(),
-    })
-        as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
-    let assistants = Arc::new(crate::acp::delegation::assistants::DbAssistantLookup {
-        db: db_arc.clone(),
-    }) as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
-    let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
+    let agent_availability =
+        Arc::new(crate::acp::connection::DbAgentAvailabilityLookup { db: db_arc.clone() })
+            as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
+    let assistants =
+        Arc::new(crate::acp::delegation::assistants::DbAssistantLookup { db: db_arc.clone() })
+            as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
+    let status_lookup =
+        Arc::new(DbChildStatusLookup { db: db_arc.clone() }) as Arc<dyn ChildStatusLookup>;
     let meta_writer = Arc::new(ConnectionManagerMetaWriter {
         manager: cm_arc.clone(),
     }) as Arc<dyn DelegationMetaWriter>;
@@ -192,14 +192,21 @@ pub fn build_delegation_stack(
     // Tells the parent's LLM the moment a task is terminal, so it doesn't sit on
     // a `get_delegation_status` poll. Shares one dedupe ring with the manual
     // "notify main agent" button.
-    let completion_notifier = Arc::new(CompletionNotifier::new(cm_arc));
+    let completion_notifier = Arc::new(CompletionNotifier::new(cm_arc.clone()));
     let broker = Arc::new(
         DelegationBroker::with_writers(spawner, depth_lookup, meta_writer, event_emitter)
             .with_status_lookup(status_lookup)
             .with_live_reply_lookup(live_reply_lookup)
             .with_assistants(assistants)
-            .with_completion_notifier(completion_notifier),
+            .with_completion_notifier(completion_notifier)
+            .with_remote_db(db_arc)
+            .with_remote_manager(cm_arc),
     );
+    // 数据库迁移完成后恢复；不阻塞应用启动和本机委派栈安装。
+    let recovering = broker.clone();
+    tokio::spawn(async move {
+        recovering.recover_remote_delegations().await;
+    });
     let tokens = Arc::new(TokenRegistry::default());
     let socket_path = default_socket_path(&std::env::temp_dir());
     let feedback = crate::acp::feedback::FeedbackRuntimeConfig::new();
@@ -235,7 +242,15 @@ pub fn build_delegation_stack(
     });
 
     (
-        broker, tokens, socket_path, feedback, ask, sessions, authoring, browser, computer,
+        broker,
+        tokens,
+        socket_path,
+        feedback,
+        ask,
+        sessions,
+        authoring,
+        browser,
+        computer,
     )
 }
 

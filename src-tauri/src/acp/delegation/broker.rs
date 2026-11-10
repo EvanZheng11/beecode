@@ -59,6 +59,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 
+use super::remote_run::{self, RemoteRunTracker};
+use super::types::{RemoteDelegationTarget, RemoteTaskInfo};
+use crate::acp::agent_mentions::render_assistant_brief;
+use crate::acp::delegation::assistants::{AssistantLookup, AssistantRosterEntry, NoAssistants};
 use crate::acp::delegation::event_emitter::{
     notice_from_summary, CompletionNotifier, DelegationEventEmitter, NoopEventEmitter,
     NotifyDelivery, NotifyError,
@@ -68,14 +72,13 @@ use crate::acp::delegation::meta_writer::{
     build_delegation_meta, is_synthetic_parent_tool_use_id, DelegationMetaWriter, NoopMetaWriter,
 };
 use crate::acp::delegation::spawner::{ConnectionSpawner, DelegationLink};
-use crate::acp::agent_mentions::render_assistant_brief;
-use crate::acp::delegation::assistants::{AssistantLookup, AssistantRosterEntry, NoAssistants};
 use crate::acp::delegation::types::{
     AgentDelegationDefaults, AssistantRef, BlockedKind, BlockedOn, DelegationAssistant,
     DelegationError, DelegationOutcome, DelegationProgress, DelegationRequest,
     DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
 use crate::acp::types::DelegationResultSummary;
+use crate::db::service::remote_delegation_service as remote_store;
 use crate::models::AgentType;
 
 /// Default per-parent byte budget for cached completed-task result text. The
@@ -273,9 +276,42 @@ impl Default for DelegationConfig {
 /// signal. A terminal event instead migrates the entry into `completed` (same
 /// lock) and wakes any `get_delegation_status` long-poll via the broker's
 /// `result_notify`.
+#[derive(Clone)]
+enum ChildHandle {
+    Local {
+        connection_id: String,
+        conversation_id: i32,
+    },
+    Remote {
+        info: RemoteTaskInfo,
+    },
+}
+
+impl ChildHandle {
+    fn local_connection(&self) -> Option<&str> {
+        match self {
+            Self::Local { connection_id, .. } => Some(connection_id),
+            Self::Remote { .. } => None,
+        }
+    }
+    fn local_conversation(&self) -> Option<i32> {
+        match self {
+            Self::Local {
+                conversation_id, ..
+            } => Some(*conversation_id),
+            Self::Remote { .. } => None,
+        }
+    }
+    fn remote(&self) -> Option<&RemoteTaskInfo> {
+        match self {
+            Self::Remote { info } => Some(info),
+            _ => None,
+        }
+    }
+}
+
 struct RunningTask {
-    child_connection_id: String,
-    child_conversation_id: i32,
+    child: ChildHandle,
     parent_connection_id: String,
     parent_tool_use_id: String,
     /// Target agent — surfaced in status reports.
@@ -330,7 +366,7 @@ struct SurfacedBlock {
 #[derive(Clone)]
 struct CompletedTask {
     parent_connection_id: String,
-    child_conversation_id: i32,
+    child: ChildHandle,
     agent_type: AgentType,
     assistant: Option<AssistantRef>,
     status: TaskStatus,
@@ -788,7 +824,10 @@ fn build_completed(
     let (status, text, error_code, message) = terminal_fields(outcome);
     CompletedTask {
         parent_connection_id: parent_connection_id.to_string(),
-        child_conversation_id,
+        child: ChildHandle::Local {
+            connection_id: String::new(),
+            conversation_id: child_conversation_id,
+        },
         agent_type,
         assistant: assistant.cloned(),
         status,
@@ -829,19 +868,18 @@ fn drain_and_record_canceled(
     let mut out = Vec::with_capacity(keys.len());
     for k in keys {
         let task = inner.running.remove(&k).expect("key just observed");
-        let outcome = canceled_outcome(task.child_conversation_id, reason);
+        let outcome = canceled_outcome(task.child.local_conversation().unwrap_or(0), reason);
         let duration_ms = task.started_at.elapsed().as_millis() as u64;
-        inner.insert_completed(
-            &k,
-            build_completed(
-                &task.parent_connection_id,
-                task.child_conversation_id,
-                task.agent_type,
-                task.assistant.as_ref(),
-                duration_ms,
-                &outcome,
-            ),
+        let mut completed = build_completed(
+            &task.parent_connection_id,
+            task.child.local_conversation().unwrap_or(0),
+            task.agent_type,
+            task.assistant.as_ref(),
+            duration_ms,
+            &outcome,
         );
+        completed.child = task.child.clone();
+        inner.insert_completed(&k, completed);
         out.push((task, duration_ms));
     }
     out
@@ -906,6 +944,7 @@ fn report_from_outcome(
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -947,6 +986,7 @@ fn running_ack(
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1039,6 +1079,7 @@ fn resume_ack(
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1071,6 +1112,7 @@ fn not_resumable_report(
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1143,7 +1185,7 @@ fn running_report(task_id: &str, task: &RunningTask) -> DelegationTaskReport {
     DelegationTaskReport {
         task_id: Some(task_id.to_string()),
         status: TaskStatus::Running,
-        child_conversation_id: Some(task.child_conversation_id),
+        child_conversation_id: task.child.local_conversation(),
         agent_type: Some(task.agent_type),
         text: None,
         error_code: None,
@@ -1155,6 +1197,7 @@ fn running_report(task_id: &str, task: &RunningTask) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: task.child.remote().cloned(),
     }
     .with_assistant(task.assistant.as_ref())
 }
@@ -1164,7 +1207,7 @@ fn completed_report(task_id: &str, c: &CompletedTask) -> DelegationTaskReport {
     DelegationTaskReport {
         task_id: Some(task_id.to_string()),
         status: c.status,
-        child_conversation_id: Some(c.child_conversation_id),
+        child_conversation_id: c.child.local_conversation(),
         agent_type: Some(c.agent_type),
         text: c.text.clone(),
         error_code: c.error_code.clone(),
@@ -1174,6 +1217,7 @@ fn completed_report(task_id: &str, c: &CompletedTask) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: c.progress.clone(),
+        remote: c.child.remote().cloned(),
     }
     .with_assistant(c.assistant.as_ref())
 }
@@ -1198,6 +1242,7 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
 }
 
@@ -1220,6 +1265,7 @@ fn db_report(task_id: &str, rec: &ChildStatusRecord) -> DelegationTaskReport {
         assistant_id: None,
         assistant_name: None,
         progress: None,
+        remote: None,
     }
     .with_assistant(rec.assistant.as_ref())
 }
@@ -1273,7 +1319,7 @@ fn classify_locked(inner: &PendingInner, parent_connection_id: &str, task_id: &s
     match inner.running.get(task_id) {
         Some(r) if r.parent_connection_id == parent_connection_id => StatusClass::Running {
             report: running_report(task_id, r),
-            child_connection_id: r.child_connection_id.clone(),
+            child_connection_id: r.child.local_connection().unwrap_or("").to_owned(),
         },
         Some(_) => StatusClass::Settled(unknown_report(task_id)),
         None => StatusClass::NotInMemory,
@@ -1576,6 +1622,10 @@ pub struct DelegationBroker {
     /// [`BLOCK_RESURFACE_INTERVAL`] in production. A field only so tests can
     /// shrink it; nothing outside tests ever sets it.
     block_resurface: Duration,
+    remote_tracker: Option<Arc<RemoteRunTracker>>,
+    remote_manager: Option<Arc<crate::acp::manager::ConnectionManager>>,
+    // 远程结果与取消必须串行；HTTP 不持有 pending 锁。
+    remote_terminal: Arc<Mutex<()>>,
 }
 
 /// A child this parent-turn cancel interrupted. Enough for the next prompt
@@ -1653,7 +1703,661 @@ impl DelegationBroker {
             config: Arc::new(Mutex::new(DelegationConfig::default())),
             result_notify: Arc::new(Notify::new()),
             block_resurface: BLOCK_RESURFACE_INTERVAL,
+            remote_tracker: None,
+            remote_manager: None,
+            remote_terminal: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// 生产必须注入同一 DB；未配置时远程请求失败关闭，不回落本机。
+    pub fn with_remote_db(mut self, db: Arc<crate::db::AppDatabase>) -> Self {
+        self.remote_tracker = Some(Arc::new(RemoteRunTracker::new(db)));
+        self
+    }
+
+    pub fn with_remote_manager(
+        mut self,
+        manager: Arc<crate::acp::manager::ConnectionManager>,
+    ) -> Self {
+        self.remote_manager = Some(manager);
+        self
+    }
+
+    pub async fn prepare_remote_target(
+        &self,
+        parent_conversation_id: i32,
+        input: &serde_json::Value,
+    ) -> Result<RemoteDelegationTarget, (String, String)> {
+        let tracker = self
+            .remote_tracker
+            .as_ref()
+            .ok_or_else(|| remote_run::err("remote_unavailable", "远程委派尚未配置数据库"))?;
+        tracker.prepare(parent_conversation_id, input).await
+    }
+
+    async fn bind_owned_remote_tasks(
+        &self,
+        parent_connection: &str,
+        parent_conversation: Option<i32>,
+    ) {
+        let (Some(tracker), Some(parent)) = (&self.remote_tracker, parent_conversation) else {
+            return;
+        };
+        if let Ok(rows) = remote_store::list_by_parent_conversation(&tracker.db.conn, parent).await
+        {
+            let mut inner = self.pending.inner.lock().await;
+            for row in rows {
+                if let Some(task) = inner.running.get_mut(&row.task_id) {
+                    if task.child.remote().is_some() {
+                        task.parent_connection_id = parent_connection.into();
+                    }
+                }
+            }
+        }
+    }
+
+    async fn remote_setup_canceled(&self, req: &DelegationRequest, inflight: u64) -> bool {
+        if self.take_inflight_cancel(inflight).await {
+            return true;
+        }
+        if let Some(handle) = req.external_handle.as_deref() {
+            if self.take_pre_canceled_handle(handle).await {
+                self.drop_inflight(inflight).await;
+                return true;
+            }
+        }
+        false
+    }
+
+    async fn start_remote_delegation(
+        &self,
+        req: DelegationRequest,
+        inflight: u64,
+    ) -> DelegationTaskReport {
+        let Some(tracker) = &self.remote_tracker else {
+            self.drop_inflight(inflight).await;
+            let mut report = unknown_report("");
+            report.status = TaskStatus::Failed;
+            report.error_code = Some("remote_unavailable".into());
+            report.message = Some("远程委派尚未配置数据库".into());
+            return report;
+        };
+        let target = req.remote.as_ref().expect("远程分支已检查目标");
+        // 排队期间依旧保留 inflight，获得许可后再次检查取消。删除连接与整个 setup 串行。
+        let acquiring = tracker.acquire(target.connection_id);
+        tokio::pin!(acquiring);
+        let permit = loop {
+            let notified = self.result_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.remote_setup_canceled(&req, inflight).await {
+                return report_err(
+                    req.agent_type,
+                    DelegationError::Canceled {
+                        reason: "parent canceled while queued".into(),
+                    },
+                    None,
+                );
+            }
+            tokio::select! {
+                permit = &mut acquiring => break permit,
+                _ = &mut notified => {}
+            }
+        };
+        let gate = tracker.gate(target.connection_id).await;
+        let deleting = gate.lock().await;
+        if *deleting || self.remote_setup_canceled(&req, inflight).await {
+            self.drop_inflight(inflight).await;
+            return report_err(
+                req.agent_type,
+                DelegationError::Canceled {
+                    reason: "parent canceled or connection deleted".into(),
+                },
+                None,
+            );
+        }
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let row = match tracker.create(&task_id, &req).await {
+            Ok(row) => row,
+            Err((code, message)) => {
+                self.drop_inflight(inflight).await;
+                let mut report = unknown_report(&task_id);
+                report.status = TaskStatus::Failed;
+                report.error_code = Some(code);
+                report.message = Some(message);
+                return report;
+            }
+        };
+        let outcome: Result<(), remote_run::RemoteError> = async {
+            let mut retried_reserve = false;
+            let caps = crate::remote_gateway::hello(&tracker.db, target.connection_id)
+                .await
+                .map_err(remote_run::gateway_error)?;
+            let mut worktree = caps.capabilities.iter().any(|c| c == "worktree");
+            let mut run = tracker.reserve(&row).await?;
+            loop {
+                // 检查点 #2：每次 reserve（包括 409 重试）后都检查，撤销最新预留。
+                if self.remote_setup_canceled(&req, inflight).await {
+                    let current = tracker.row(&task_id).await?.unwrap_or_else(|| row.clone());
+                    tracker.cancel(&current, "interrupt").await?;
+                    return Ok(());
+                }
+                match tracker.start(&row, &req, &run, worktree).await {
+                    Ok(response) => {
+                        tracker.mark_started(&task_id, &response).await?;
+                        // 检查点 #3：start 后以及登记 running 时都检查，关闭取消窗口。
+                        if self.remote_setup_canceled(&req, inflight).await {
+                            let current =
+                                tracker.row(&task_id).await?.unwrap_or_else(|| row.clone());
+                            tracker.cancel(&current, "interrupt").await?;
+                            return Ok(());
+                        }
+                        return Ok(());
+                    }
+                    Err((code, _)) if code == "run_not_reserved" && !retried_reserve => {
+                        retried_reserve = true;
+                        run = tracker.reserve(&row).await?;
+                    }
+                    Err((code, _)) if code == "not_a_git_repository" && worktree => {
+                        // 远端会把 launch 失败的 run 结算；必须换预留，不能对旧 run 重试。
+                        worktree = false;
+                        run = tracker.reserve(&row).await?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        .await;
+        if let Err((code, message)) = outcome {
+            if let Ok(Some(current)) = tracker.row(&task_id).await {
+                if let (Some(id), Some(run)) = (current.connection_id, current.run_id.as_deref()) {
+                    let _ = tracker.cancel_run(id, run, "interrupt").await;
+                }
+                let _ = tracker.fail(&current, &code, &message).await;
+            }
+        }
+        let current = match tracker.row(&task_id).await {
+            Ok(Some(current)) => current,
+            _ => {
+                self.drop_inflight(inflight).await;
+                let mut report = remote_run::report(&row);
+                report.status = TaskStatus::Failed;
+                report.error_code = Some("remote_persistence_failed".into());
+                return report;
+            }
+        };
+        let parked = {
+            let mut inner = self.pending.inner.lock().await;
+            let canceled = inner.inflight_canceled_at(inflight).is_some();
+            inner.deregister_inflight(inflight);
+            if current.status == "running" && !canceled {
+                inner.running.insert(
+                    task_id.clone(),
+                    RunningTask {
+                        child: ChildHandle::Remote {
+                            info: remote_run::info(&current),
+                        },
+                        parent_connection_id: req.parent_connection_id.clone(),
+                        parent_tool_use_id: req.parent_tool_use_id.clone(),
+                        agent_type: req.agent_type,
+                        assistant: None,
+                        task_preview: current.task_preview.clone(),
+                        task_id: task_id.clone(),
+                        external_handle: req.external_handle.clone(),
+                        started_at: Instant::now(),
+                        last_surfaced_block: None,
+                    },
+                );
+                true
+            } else {
+                false
+            }
+        };
+        if !parked && current.status == "running" {
+            let _ = tracker.cancel(&current, "interrupt").await;
+        }
+        drop(deleting);
+        if parked {
+            {
+                let _terminal = self.remote_terminal.lock().await;
+                if let Ok(Some(row)) = tracker.row(&task_id).await {
+                    if remote_store::NON_TERMINAL_STATUSES.contains(&row.status.as_str()) {
+                        self.publish_remote(
+                            &req.parent_connection_id,
+                            &row,
+                            "remote_delegation_started",
+                        )
+                        .await;
+                    }
+                }
+            }
+            // 外部取消可能落在最后一个检查与登记之间：注册后再消费一次预取消。
+            if let Some(handle) = req.external_handle.as_deref() {
+                if self.take_pre_canceled_handle(handle).await {
+                    self.cancel_by_external_handle(handle, "canceled during start".into())
+                        .await;
+                }
+            }
+            let broker = self.clone();
+            let parent = req.parent_connection_id.clone();
+            let tracked_id = task_id.clone();
+            tokio::spawn(async move {
+                broker.track_remote(parent, tracked_id, permit, false).await;
+            });
+        } else {
+            let final_row = tracker
+                .row(&task_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(current.clone());
+            self.publish_remote(
+                &req.parent_connection_id,
+                &final_row,
+                "remote_delegation_completed",
+            )
+            .await;
+        }
+        self.status_from_db(Some(req.parent_conversation_id), &task_id)
+            .await
+    }
+
+    async fn publish_remote(
+        &self,
+        parent: &str,
+        row: &crate::db::entities::remote_delegation::Model,
+        event: &str,
+    ) {
+        let live_parent = if let Some(manager) = &self.remote_manager {
+            manager
+                .find_connection_by_conversation_id(row.parent_conversation_id)
+                .await
+        } else {
+            None
+        };
+        let parent = live_parent.as_deref().unwrap_or(parent);
+        if !parent.is_empty() {
+            if let Some(task) = self
+                .pending
+                .inner
+                .lock()
+                .await
+                .running
+                .get_mut(&row.task_id)
+            {
+                task.parent_connection_id = parent.into();
+            }
+        }
+        let info = remote_run::info(row);
+        self.write_meta_if_real(
+            parent,
+            &row.parent_tool_use_id,
+            crate::acp::delegation::meta_writer::build_remote_delegation_meta(
+                &row.status,
+                &info,
+                row.error_code.as_deref(),
+                row.result_text.as_deref(),
+                row.duration_ms.and_then(|d| u64::try_from(d).ok()),
+                Some(&row.task_preview),
+                Some(&row.task_id),
+            ),
+        )
+        .await;
+        self.meta_writer.write_remote_event(parent, event, serde_json::json!({
+            "parent_connection_id":parent, "parent_conversation_id":row.parent_conversation_id,
+            "parent_tool_use_id":row.parent_tool_use_id, "task_id":row.task_id, "remote":info,
+            "status":row.status, "blocked_on":row.blocked_on, "error_code":row.error_code,
+            "result_preview":row.result_text.as_deref().map(|s| truncate_on_char_boundary(s, STATUS_PREVIEW_CAP)),
+            "duration_ms":row.duration_ms, "task_preview":row.task_preview,
+        })).await;
+        self.result_notify.notify_waiters();
+    }
+
+    async fn cancel_remote_task(&self, task: &RunningTask, reason: &str) {
+        let Some(tracker) = &self.remote_tracker else {
+            return;
+        };
+        let _terminal = self.remote_terminal.lock().await;
+        if let Ok(Some(row)) = tracker.row(&task.task_id).await {
+            let _ = tracker.cancel(&row, reason).await;
+            if let Ok(Some(row)) = tracker.row(&task.task_id).await {
+                // drain 已占据取消顺序；落库后的错误确认信息同步到缓存。
+                if let Some(cached) = self
+                    .pending
+                    .inner
+                    .lock()
+                    .await
+                    .completed
+                    .get_mut(&task.task_id)
+                {
+                    cached.child = ChildHandle::Remote {
+                        info: remote_run::info(&row),
+                    };
+                    cached.error_code = row.error_code.clone();
+                    cached.message = row.error_message.clone();
+                }
+                self.publish_remote(
+                    &task.parent_connection_id,
+                    &row,
+                    "remote_delegation_completed",
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn finish_remote_result(
+        &self,
+        parent: &str,
+        row: &crate::db::entities::remote_delegation::Model,
+        result: &crate::cli_run::wire::RunResult,
+        cursor: i64,
+    ) -> bool {
+        let Some(tracker) = &self.remote_tracker else {
+            return false;
+        };
+        let _terminal = self.remote_terminal.lock().await;
+        // 取消 drain 先发生时，结果不得抢在慢 HTTP cancel 前落库。
+        let mut inner = self.pending.inner.lock().await;
+        if inner.teardown_pending.contains(&row.task_id)
+            || inner
+                .completed
+                .get(&row.task_id)
+                .is_some_and(|c| c.status == TaskStatus::Canceled)
+        {
+            return false;
+        }
+        let (status, update) = remote_run::result_update(result, cursor);
+        // 只在这次短 DB 条件更新期间持 pending，保证取消 drain 与终态入库的顺序一致。
+        let settled = tracker.settle(row, status, update).await;
+        if matches!(settled, Ok(true)) {
+            inner.running.remove(&row.task_id);
+        }
+        drop(inner);
+        match settled {
+            Ok(true) => {
+                if let Ok(Some(final_row)) = tracker.row(&row.task_id).await {
+                    self.publish_remote(parent, &final_row, "remote_delegation_completed")
+                        .await;
+                }
+                true
+            }
+            Ok(false) => true,
+            Err(_) => false,
+        }
+    }
+
+    async fn track_remote(
+        &self,
+        parent: String,
+        task_id: String,
+        _permit: tokio::sync::OwnedSemaphorePermit,
+        mut reconcile: bool,
+    ) {
+        use crate::cli_run::wire::{EventBody, PermissionVerdict, QuestionVerdict};
+        let Some(tracker) = &self.remote_tracker else {
+            return;
+        };
+        let mut retry = remote_run::RetryWindow::new();
+        loop {
+            let row = match tracker.row(&task_id).await {
+                Ok(Some(row)) => row,
+                _ => return,
+            };
+            if remote_store::TERMINAL_STATUSES.contains(&row.status.as_str()) {
+                return;
+            }
+            let parent = self
+                .pending
+                .inner
+                .lock()
+                .await
+                .running
+                .get(&task_id)
+                .map(|t| t.parent_connection_id.clone())
+                .unwrap_or_else(|| parent.clone());
+            let response: Result<(), remote_run::RemoteError> = async {
+                if reconcile {
+                    let state = tracker.get(&row).await?;
+                    if let Some(result) = state.result {
+                        if self
+                            .finish_remote_result(&parent, &row, &result, row.last_event_seq)
+                            .await
+                        {
+                            return Ok(());
+                        }
+                        return Err(remote_run::err("remote_persistence_failed", "结果落库失败"));
+                    }
+                    reconcile = false;
+                }
+                let batch = tracker.events(&row).await?;
+                let cursor = i64::try_from(batch.next)
+                    .map_err(|_| remote_run::err("remote_protocol_error", "事件游标超出范围"))?;
+                let mut blocked = row.blocked_on.clone();
+                for event in batch.events {
+                    match event.body {
+                        EventBody::Result(result) => {
+                            if self
+                                .finish_remote_result(&parent, &row, &result, cursor)
+                                .await
+                            {
+                                return Ok(());
+                            }
+                            return Err(remote_run::err(
+                                "remote_persistence_failed",
+                                "结果落库失败",
+                            ));
+                        }
+                        EventBody::Permission { decision, .. } => {
+                            if decision == PermissionVerdict::Waiting {
+                                blocked = Some("permission".into());
+                            } else if blocked.as_deref() == Some("permission") {
+                                blocked = None;
+                            }
+                        }
+                        EventBody::Question { decision, .. } => {
+                            if decision == QuestionVerdict::Waiting {
+                                blocked = Some("question".into());
+                            } else if blocked.as_deref() == Some("question") {
+                                blocked = None;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if batch.gap || batch.done {
+                    let state = tracker.get(&row).await?;
+                    if let Some(result) = state.result {
+                        if self
+                            .finish_remote_result(&parent, &row, &result, cursor)
+                            .await
+                        {
+                            return Ok(());
+                        }
+                        return Err(remote_run::err("remote_persistence_failed", "结果落库失败"));
+                    }
+                }
+                let status = if blocked.is_some() {
+                    "blocked"
+                } else {
+                    "running"
+                };
+                tracker
+                    .progress(
+                        &row,
+                        status,
+                        blocked.as_deref(),
+                        cursor.max(row.last_event_seq),
+                    )
+                    .await?;
+                if row.status != status || row.blocked_on != blocked {
+                    let _terminal = self.remote_terminal.lock().await;
+                    if let Ok(Some(updated)) = tracker.row(&task_id).await {
+                        if remote_store::NON_TERMINAL_STATUSES.contains(&updated.status.as_str()) {
+                            self.publish_remote(&parent, &updated, "remote_delegation_updated")
+                                .await;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            .await;
+            match response {
+                Ok(()) => {
+                    retry.reset();
+                }
+                Err((code, _)) => {
+                    if code == "run_not_found" {
+                        match tracker.find(&row).await {
+                            Ok(false) => {
+                                let _terminal = self.remote_terminal.lock().await;
+                                if tracker
+                                    .fail(
+                                        &row,
+                                        "remote_run_lost",
+                                        "远程结果已过期，请去远程会话查看",
+                                    )
+                                    .await
+                                    == Ok(true)
+                                {
+                                    self.pending.inner.lock().await.running.remove(&task_id);
+                                    if let Ok(Some(final_row)) = tracker.row(&task_id).await {
+                                        self.publish_remote(
+                                            &parent,
+                                            &final_row,
+                                            "remote_delegation_completed",
+                                        )
+                                        .await;
+                                    }
+                                }
+                                return;
+                            }
+                            Ok(true) => {
+                                reconcile = true;
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    let delay = retry.failure(Instant::now());
+                    if delay.is_none() {
+                        let _ = tracker
+                            .progress(&row, "unreachable", None, row.last_event_seq)
+                            .await;
+                        if let Ok(Some(updated)) = tracker.row(&task_id).await {
+                            self.publish_remote(&parent, &updated, "remote_delegation_updated")
+                                .await;
+                        }
+                        return; // 非终态，保留 running 与 DB，重启或手动同步可再跟踪。
+                    }
+                    tracing::warn!(
+                        "[remote-delegation] connection_id={:?} error_code={} retry_secs={}",
+                        row.connection_id,
+                        code,
+                        delay.map(|d| d.as_secs()).unwrap_or(30)
+                    );
+                    tokio::time::sleep(delay.unwrap_or(Duration::from_secs(30))).await;
+                }
+            }
+        }
+    }
+
+    /// 由启动 hook 调用。reserving 永不重发 start，其他状态先 get 再恢复游标。
+    pub async fn recover_remote_delegations(&self) {
+        let Some(tracker) = &self.remote_tracker else {
+            return;
+        };
+        let _ = remote_store::cleanup_settled(&tracker.db.conn, chrono::Utc::now()).await;
+        let rows = match remote_store::list_for_recovery(&tracker.db.conn).await {
+            Ok(rows) => rows,
+            Err(_) => {
+                tracing::warn!("[remote-delegation] error_code=remote_recovery_query_failed");
+                return;
+            }
+        };
+        for row in rows {
+            if !tracker.existed_at_startup(&row) {
+                continue;
+            }
+            if row.status == "reserving" {
+                if let (Some(id), Some(run)) = (row.connection_id, row.run_id.as_deref()) {
+                    let _ = tracker.cancel_run(id, run, "interrupt").await;
+                }
+                let _ = tracker
+                    .fail(
+                        &row,
+                        "interrupted_before_start",
+                        "本机重启时运行尚未确认启动，已撤销预留",
+                    )
+                    .await;
+                continue;
+            }
+            let Some(connection) = row.connection_id else {
+                continue;
+            };
+            self.pending
+                .inner
+                .lock()
+                .await
+                .running
+                .entry(row.task_id.clone())
+                .or_insert_with(|| RunningTask {
+                    child: ChildHandle::Remote {
+                        info: remote_run::info(&row),
+                    },
+                    parent_connection_id: String::new(),
+                    parent_tool_use_id: row.parent_tool_use_id.clone(),
+                    agent_type: AgentType::ClaudeCode,
+                    assistant: None,
+                    task_preview: row.task_preview.clone(),
+                    task_id: row.task_id.clone(),
+                    external_handle: None,
+                    started_at: Instant::now(),
+                    last_surfaced_block: None,
+                });
+            let broker = self.clone();
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                let permit = tracker.acquire(connection).await;
+                // 重启后没有父 ACP connection；DB 父会话归属仍用于 status 与冷加载。
+                broker
+                    .track_remote(String::new(), row.task_id, permit, true)
+                    .await;
+            });
+        }
+    }
+
+    /// 删除连接前调用；setup 共用连接闸门，先取消全部非终态，再允许删除凭据。
+    pub async fn cancel_remote_connection(
+        &self,
+        connection: i32,
+    ) -> Result<(), crate::app_error::AppCommandError> {
+        let Some(tracker) = &self.remote_tracker else {
+            return Ok(());
+        };
+        let gate = tracker.gate(connection).await;
+        let mut deleting = gate.lock().await;
+        *deleting = true;
+        let rows = remote_store::list_unsettled_by_connection(&tracker.db.conn, connection)
+            .await
+            .map_err(crate::app_error::AppCommandError::db)?;
+        for row in rows {
+            let _terminal = self.remote_terminal.lock().await;
+            tracker.cancel(&row, "user").await.map_err(|_| {
+                crate::app_error::AppCommandError::configuration_invalid("远程取消状态落库失败")
+            })?;
+            let task = self.pending.inner.lock().await.running.remove(&row.task_id);
+            if let Ok(Some(updated)) = tracker.row(&row.task_id).await {
+                self.publish_remote(
+                    task.as_ref()
+                        .map(|t| t.parent_connection_id.as_str())
+                        .unwrap_or(""),
+                    &updated,
+                    "remote_delegation_completed",
+                )
+                .await;
+            }
+        }
+        Ok(())
     }
 
     /// Replace the DB status fallback used by `get_delegation_status` /
@@ -2653,13 +3357,32 @@ impl DelegationBroker {
                 raw_input.insert("task".into(), serde_json::Value::String(req.task.clone()));
                 // The target as the call named it: an assistant call's
                 // arguments carry its id, not the agent it resolved to.
-                match &req.assistant {
-                    Some(a) => {
-                        raw_input.insert("assistant_id".into(), serde_json::Value::from(a.id));
+                if let Some(remote) = &req.remote {
+                    raw_input.insert(
+                        "remote_connection_id".into(),
+                        serde_json::json!(remote.connection_id),
+                    );
+                    raw_input.insert(
+                        "remote_folder_id".into(),
+                        serde_json::json!(remote.folder_id),
+                    );
+                    match &remote.target {
+                        super::types::RemoteTarget::Assistant(id) => {
+                            raw_input.insert("remote_assistant_id".into(), serde_json::json!(id));
+                        }
+                        super::types::RemoteTarget::Agent(slug) => {
+                            raw_input.insert("remote_agent".into(), serde_json::json!(slug));
+                        }
                     }
-                    None => {
-                        if let Ok(at) = serde_json::to_value(req.agent_type) {
-                            raw_input.insert("agent_type".into(), at);
+                } else {
+                    match &req.assistant {
+                        Some(a) => {
+                            raw_input.insert("assistant_id".into(), serde_json::Value::from(a.id));
+                        }
+                        None => {
+                            if let Ok(at) = serde_json::to_value(req.agent_type) {
+                                raw_input.insert("agent_type".into(), at);
+                            }
                         }
                     }
                 }
@@ -2755,6 +3478,9 @@ impl DelegationBroker {
                 None,
             );
         }
+        if req.remote.is_some() {
+            return self.start_remote_delegation(req, inflight_id).await;
+        }
         let child_connection_id = match self
             .spawner
             .spawn(
@@ -2808,13 +3534,12 @@ impl DelegationBroker {
             parent_conversation_id: req.parent_conversation_id,
             parent_tool_use_id: req.parent_tool_use_id.clone(),
             delegation_call_id: call_id.clone(),
-            assistant: req
-                .assistant
-                .as_ref()
-                .map(|a| crate::acp::delegation::spawner::AssistantLink {
+            assistant: req.assistant.as_ref().map(|a| {
+                crate::acp::delegation::spawner::AssistantLink {
                     id: a.id,
                     snapshot: a.run_snapshot(),
-                }),
+                }
+            }),
         };
         // The assistant's standing instructions ride the child's first prompt
         // as a trailing internal frame (see `render_assistant_brief`).
@@ -3023,8 +3748,10 @@ impl DelegationBroker {
                     inner.running.insert(
                         call_id.clone(),
                         RunningTask {
-                            child_connection_id: child_connection_id.clone(),
-                            child_conversation_id,
+                            child: ChildHandle::Local {
+                                connection_id: child_connection_id.clone(),
+                                conversation_id: child_conversation_id,
+                            },
                             parent_connection_id: req.parent_connection_id.clone(),
                             parent_tool_use_id: req.parent_tool_use_id.clone(),
                             agent_type: req.agent_type,
@@ -3216,6 +3943,17 @@ impl DelegationBroker {
     /// the `call_id` is no longer reserved the call was already resolved by
     /// another terminal path, so the buffer is skipped (silent no-op).
     pub async fn complete_call(&self, call_id: &str, outcome: DelegationOutcome) {
+        if self
+            .pending
+            .inner
+            .lock()
+            .await
+            .running
+            .get(call_id)
+            .is_some_and(|t| t.child.remote().is_some())
+        {
+            return;
+        }
         // What the child got through, for the finished report. Read with the
         // pending lock released — the child's `SessionState` lock never nests
         // inside it (see the live-reply lock-ordering note) — and before the
@@ -3226,7 +3964,7 @@ impl DelegationBroker {
             inner
                 .running
                 .get(call_id)
-                .map(|task| task.child_connection_id.clone())
+                .and_then(|task| task.child.local_connection().map(str::to_owned))
         };
         let progress = match &child_connection_id {
             Some(child) => self.live_reply_lookup.progress(child).await,
@@ -3241,7 +3979,7 @@ impl DelegationBroker {
                     let duration_ms = task.started_at.elapsed().as_millis() as u64;
                     let mut completed = build_completed(
                         &task.parent_connection_id,
-                        task.child_conversation_id,
+                        task.child.local_conversation().unwrap_or(0),
                         task.agent_type,
                         task.assistant.as_ref(),
                         duration_ms,
@@ -3278,8 +4016,10 @@ impl DelegationBroker {
             self.finalize_delegation(
                 &task.parent_connection_id,
                 &task.parent_tool_use_id,
-                &task.child_connection_id,
-                task.child_conversation_id,
+                task.child
+                    .local_connection()
+                    .expect("本机路径不接受远程任务"),
+                task.child.local_conversation().unwrap_or(0),
                 task.agent_type,
                 task.assistant.as_ref(),
                 duration_ms,
@@ -3565,6 +4305,7 @@ impl DelegationBroker {
             // the next checkpoint instead of proceeding to spawn the child.
             self.buffer_pre_canceled_handle(external_handle.to_string())
                 .await;
+            self.result_notify.notify_waiters();
             return;
         }
         for (task, duration_ms) in drained {
@@ -3598,7 +4339,7 @@ impl DelegationBroker {
             let keys: Vec<String> = inner
                 .running
                 .iter()
-                .filter(|(_, v)| v.child_connection_id == child_connection_id)
+                .filter(|(_, v)| v.child.local_connection() == Some(child_connection_id))
                 .map(|(k, _)| k.clone())
                 .collect();
             if keys.is_empty() {
@@ -3620,7 +4361,8 @@ impl DelegationBroker {
         for (task, duration_ms) in drained {
             // The child already disconnected/errored — disconnect-only teardown
             // (no spawner `cancel`, there's no live turn to interrupt).
-            self.teardown_canceled_child(&task, duration_ms, false).await;
+            self.teardown_canceled_child(&task, duration_ms, false)
+                .await;
         }
         self.result_notify.notify_waiters();
     }
@@ -3661,9 +4403,10 @@ impl DelegationBroker {
             .await;
         let interrupted = drained
             .iter()
+            .filter(|(task, _)| task.child.remote().is_none())
             .map(|(task, _)| InterruptedDelegation {
                 task_id: task.task_id.clone(),
-                child_conversation_id: task.child_conversation_id,
+                child_conversation_id: task.child.local_conversation().unwrap_or(0),
                 task_preview: task.task_preview.clone(),
             })
             .collect();
@@ -3697,6 +4440,13 @@ impl DelegationBroker {
         parent_connection_id: &str,
         keep_consumed: bool,
     ) -> Vec<(RunningTask, u64)> {
+        if let Some(manager) = &self.remote_manager {
+            if let Some(state) = manager.get_state(parent_connection_id).await {
+                let parent = state.read().await.conversation_id;
+                self.bind_owned_remote_tasks(parent_connection_id, parent)
+                    .await;
+            }
+        }
         // Also drain any tool_call ids captured ahead of an MCP round-trip that
         // never arrived — keeps the map bounded across parent reconnects.
         // Teardown drops the whole bucket; a turn cancel keeps `consumed` so a
@@ -3737,6 +4487,9 @@ impl DelegationBroker {
                     .map(|k| {
                         let task = inner.running.remove(&k).expect("key just observed");
                         let duration_ms = task.started_at.elapsed().as_millis() as u64;
+                        if task.child.remote().is_some() {
+                            inner.teardown_pending.insert(task.task_id.clone());
+                        }
                         (task, duration_ms)
                     })
                     .collect();
@@ -3786,13 +4539,21 @@ impl DelegationBroker {
         duration_ms: u64,
         cancel_turn: bool,
     ) {
+        if task.child.remote().is_some() {
+            self.cancel_remote_task(task, "interrupt").await;
+            return;
+        }
         self.write_meta_if_real(
             &task.parent_connection_id,
             &task.parent_tool_use_id,
             build_delegation_meta(
                 "failed",
-                Some(&task.child_connection_id),
-                Some(task.child_conversation_id),
+                Some(
+                    task.child
+                        .local_connection()
+                        .expect("本机路径不接受远程任务"),
+                ),
+                Some(task.child.local_conversation().unwrap_or(0)),
                 Some("canceled"),
                 None,
                 Some(duration_ms),
@@ -3805,8 +4566,10 @@ impl DelegationBroker {
         self.emit_completed_if_real(
             &task.parent_connection_id,
             &task.parent_tool_use_id,
-            &task.child_connection_id,
-            task.child_conversation_id,
+            task.child
+                .local_connection()
+                .expect("本机路径不接受远程任务"),
+            task.child.local_conversation().unwrap_or(0),
             task.agent_type,
             task.assistant.as_ref(),
             DelegationResultSummary::Err {
@@ -3816,9 +4579,23 @@ impl DelegationBroker {
         )
         .await;
         if cancel_turn {
-            let _ = self.spawner.cancel(&task.child_connection_id).await;
+            let _ = self
+                .spawner
+                .cancel(
+                    task.child
+                        .local_connection()
+                        .expect("本机路径不接受远程任务"),
+                )
+                .await;
         }
-        let _ = self.spawner.disconnect(&task.child_connection_id).await;
+        let _ = self
+            .spawner
+            .disconnect(
+                task.child
+                    .local_connection()
+                    .expect("本机路径不接受远程任务"),
+            )
+            .await;
     }
 
     /// Backs the `get_delegation_status` tool for a single task id — a thin
@@ -3884,6 +4661,18 @@ impl DelegationBroker {
     ) -> Vec<DelegationTaskReport> {
         if task_ids.is_empty() {
             return Vec::new();
+        }
+        // 重启/续接后 ACP connection 会变化，只能在 DB 证明父会话归属后绑定。
+        if let (Some(tracker), Some(parent)) = (&self.remote_tracker, parent_conversation_id) {
+            for id in task_ids {
+                if let Ok(Some(row)) = tracker.row(id).await {
+                    if row.parent_conversation_id == parent {
+                        if let Some(task) = self.pending.inner.lock().await.running.get_mut(id) {
+                            task.parent_connection_id = parent_connection_id.into();
+                        }
+                    }
+                }
+            }
         }
         // A bounded wait gets a single fixed deadline; Immediate and Infinite
         // carry none — Immediate returns on the first pass, Infinite parks on
@@ -3997,10 +4786,23 @@ impl DelegationBroker {
         let mut out = Vec::with_capacity(classes.len());
         for class in classes {
             let blocked = match class {
+                StatusClass::Running { report, .. } if report.remote.is_some() => {
+                    match (&self.remote_tracker, report.task_id.as_deref()) {
+                        (Some(tracker), Some(id)) => tracker
+                            .row(id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|row| remote_run::report(&row).blocked_on),
+                        _ => None,
+                    }
+                }
                 StatusClass::Running {
                     child_connection_id,
                     ..
-                } => self.live_reply_lookup.blocked_on(child_connection_id).await,
+                } if !child_connection_id.is_empty() => {
+                    self.live_reply_lookup.blocked_on(child_connection_id).await
+                }
                 _ => None,
             };
             out.push(blocked);
@@ -4085,6 +4887,10 @@ impl DelegationBroker {
                     mut report,
                     child_connection_id,
                 } => {
+                    if report.remote.is_some() {
+                        out.push(self.status_from_db(parent_conversation_id, id).await);
+                        continue;
+                    }
                     match blocked {
                         // A blocked child's last reply is stale by definition —
                         // it is what it said BEFORE it stopped — so the block
@@ -4146,6 +4952,8 @@ impl DelegationBroker {
         parent_conversation_id: Option<i32>,
         task_id: &str,
     ) -> DelegationTaskReport {
+        self.bind_owned_remote_tasks(parent_connection_id, parent_conversation_id)
+            .await;
         let drained = {
             let mut inner = self.pending.inner.lock().await;
             if let Some(c) = inner.completed.get(task_id) {
@@ -4172,17 +4980,48 @@ impl DelegationBroker {
                 // A turn is in flight → cancel + disconnect. Reuse the duration
                 // captured at drain time for both the teardown meta and the
                 // report, so all three (completed-cache, meta, report) agree.
+                if task.child.remote().is_some() {
+                    self.cancel_remote_task(&task, "user").await;
+                    self.result_notify.notify_waiters();
+                    return self.status_from_db(parent_conversation_id, task_id).await;
+                }
                 self.teardown_canceled_child(&task, duration_ms, true).await;
                 self.result_notify.notify_waiters();
                 report_from_outcome(
                     Some(task_id.to_string()),
                     Some(task.agent_type),
-                    &canceled_outcome(task.child_conversation_id, "canceled by request"),
+                    &canceled_outcome(
+                        task.child.local_conversation().unwrap_or(0),
+                        "canceled by request",
+                    ),
                     Some(duration_ms),
                 )
                 .with_assistant(task.assistant.as_ref())
             }
-            None => self.status_from_db(parent_conversation_id, task_id).await,
+            None => {
+                // 重启后任务可能尚在恢复队列或已停止在 unreachable；仍须能通过 DB 取消。
+                if let Some(tracker) = &self.remote_tracker {
+                    let _terminal = self.remote_terminal.lock().await;
+                    if let Ok(Some(row)) = tracker.row(task_id).await {
+                        if Some(row.parent_conversation_id) != parent_conversation_id {
+                            return unknown_report(task_id);
+                        }
+                        if remote_store::NON_TERMINAL_STATUSES.contains(&row.status.as_str()) {
+                            let _ = tracker.cancel(&row, "user").await;
+                            if let Ok(Some(updated)) = tracker.row(task_id).await {
+                                self.publish_remote(
+                                    parent_connection_id,
+                                    &updated,
+                                    "remote_delegation_completed",
+                                )
+                                .await;
+                            }
+                        }
+                        return self.status_from_db(parent_conversation_id, task_id).await;
+                    }
+                }
+                self.status_from_db(parent_conversation_id, task_id).await
+            }
         }
     }
 
@@ -4194,6 +5033,15 @@ impl DelegationBroker {
         parent_conversation_id: Option<i32>,
         task_id: &str,
     ) -> DelegationTaskReport {
+        if let Some(tracker) = &self.remote_tracker {
+            if let Ok(Some(row)) = tracker.row(task_id).await {
+                return if Some(row.parent_conversation_id) == parent_conversation_id {
+                    remote_run::report(&row)
+                } else {
+                    unknown_report(task_id)
+                };
+            }
+        }
         match self.status_lookup.find_by_call_id(task_id).await {
             Some(rec)
                 if parent_conversation_id.is_some() && rec.parent_id == parent_conversation_id =>
@@ -4245,6 +5093,17 @@ impl DelegationBroker {
         )
     )]
     pub async fn resume_delegation(&self, req: ResumeDelegationRequest) -> DelegationTaskReport {
+        if let Some(tracker) = &self.remote_tracker {
+            if let Ok(Some(row)) = tracker.row(&req.task_id).await {
+                if row.parent_conversation_id != req.parent_conversation_id {
+                    return unknown_report(&req.task_id);
+                }
+                let mut report = remote_run::report(&row);
+                report.error_code = Some("not_resumable".into());
+                report.message = Some("远程 cli_run 不支持续作；请重新委派新任务".into());
+                return report;
+            }
+        }
         // Same parent-cancel coverage contract as `start_delegation`: register
         // the in-flight setup FIRST so a parent cancel landing anywhere from
         // here to park reaches it; deregistered on every exit path.
@@ -4322,7 +5181,7 @@ impl DelegationBroker {
                     // before the Canceled arm's mutable `resuming` claim.
                     let (status, child_conversation_id, agent_type, assistant) = (
                         c.status,
-                        c.child_conversation_id,
+                        c.child.local_conversation().unwrap_or(0),
                         c.agent_type,
                         c.assistant.clone(),
                     );
@@ -4332,50 +5191,62 @@ impl DelegationBroker {
                             if inner.resuming.insert(req.task_id.clone()) {
                                 MemGate::Proceed { claimed: true }
                             } else {
-                                MemGate::Refuse(Box::new(not_resumable_report(
-                                    &req.task_id,
-                                    status,
-                                    Some(child_conversation_id),
-                                    Some(agent_type),
-                                    "a resume of this task is already in progress.",
-                                ).with_assistant(assistant.as_ref())))
+                                MemGate::Refuse(Box::new(
+                                    not_resumable_report(
+                                        &req.task_id,
+                                        status,
+                                        Some(child_conversation_id),
+                                        Some(agent_type),
+                                        "a resume of this task is already in progress.",
+                                    )
+                                    .with_assistant(assistant.as_ref()),
+                                ))
                             }
                         }
-                        TaskStatus::Completed => MemGate::Refuse(Box::new(not_resumable_report(
-                            &req.task_id,
-                            status,
-                            Some(child_conversation_id),
-                            Some(agent_type),
-                            "the task already completed — resume only applies to a \
+                        TaskStatus::Completed => MemGate::Refuse(Box::new(
+                            not_resumable_report(
+                                &req.task_id,
+                                status,
+                                Some(child_conversation_id),
+                                Some(agent_type),
+                                "the task already completed — resume only applies to a \
                              canceled or interrupted task. Start a new \
                              delegate_to_agent call for follow-up work.",
-                        ).with_assistant(assistant.as_ref()))),
-                        _ => MemGate::Refuse(Box::new(not_resumable_report(
-                            &req.task_id,
-                            status,
-                            Some(child_conversation_id),
-                            Some(agent_type),
-                            "the task ended in failure rather than being \
+                            )
+                            .with_assistant(assistant.as_ref()),
+                        )),
+                        _ => MemGate::Refuse(Box::new(
+                            not_resumable_report(
+                                &req.task_id,
+                                status,
+                                Some(child_conversation_id),
+                                Some(agent_type),
+                                "the task ended in failure rather than being \
                              interrupted — resume only applies to a canceled or \
                              interrupted task. Start a new delegate_to_agent call \
                              to retry it.",
-                        ).with_assistant(assistant.as_ref()))),
+                            )
+                            .with_assistant(assistant.as_ref()),
+                        )),
                     }
                 }
             } else if let Some(r) = inner.running.get(&req.task_id) {
                 if r.parent_connection_id != req.parent_connection_id {
                     MemGate::Refuse(Box::new(unknown_report(&req.task_id)))
                 } else {
-                    MemGate::Refuse(Box::new(not_resumable_report(
-                        &req.task_id,
-                        TaskStatus::Running,
-                        Some(r.child_conversation_id),
-                        Some(r.agent_type),
-                        "the task is still running — resume only applies to a \
+                    MemGate::Refuse(Box::new(
+                        not_resumable_report(
+                            &req.task_id,
+                            TaskStatus::Running,
+                            Some(r.child.local_conversation().unwrap_or(0)),
+                            Some(r.agent_type),
+                            "the task is still running — resume only applies to a \
                          canceled or interrupted task. Poll it with \
                          get_delegation_status (or stop it with cancel_delegation) \
                          instead.",
-                    ).with_assistant(r.assistant.as_ref())))
+                        )
+                        .with_assistant(r.assistant.as_ref()),
+                    ))
                 }
             } else {
                 let claimed = inner.resuming.insert(req.task_id.clone());
@@ -4848,8 +5719,10 @@ impl DelegationBroker {
                     inner.running.insert(
                         call_id.clone(),
                         RunningTask {
-                            child_connection_id: child_connection_id.clone(),
-                            child_conversation_id: ctx.child_conversation_id,
+                            child: ChildHandle::Local {
+                                connection_id: child_connection_id.clone(),
+                                conversation_id: ctx.child_conversation_id,
+                            },
                             parent_connection_id: req.parent_connection_id.clone(),
                             parent_tool_use_id: parent_tool_use_id.clone(),
                             agent_type: ctx.agent_type,
@@ -4941,10 +5814,8 @@ impl DelegationBroker {
                 let canceled_duration_ms = {
                     let mut inner = self.pending.inner.lock().await;
                     if inner.running.remove(&call_id).is_some() {
-                        let outcome = canceled_outcome(
-                            ctx.child_conversation_id,
-                            "canceled before await",
-                        );
+                        let outcome =
+                            canceled_outcome(ctx.child_conversation_id, "canceled before await");
                         let duration_ms = started_at.elapsed().as_millis() as u64;
                         inner.insert_completed(
                             &call_id,
@@ -5252,6 +6123,7 @@ mod tests {
     use super::*;
     use crate::acp::delegation::spawner::{mock::MockSpawner, ResumedSpawn, SpawnerError};
     use crate::acp::delegation::types::DelegationSuccess;
+    use crate::db::service::remote_delegation_service as remote_store;
     use crate::models::AgentType;
 
     /// 测试专用的实时回复查询器：将每次 `blocked_on` 探测停在门闩上，
@@ -5336,6 +6208,7 @@ mod tests {
             requested_working_dir: None,
             external_handle: None,
             assistant: None,
+            remote: None,
         }
     }
 
@@ -5898,7 +6771,10 @@ mod tests {
         let first = broker
             .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Infinite)
             .await;
-        assert_eq!(first.blocked_on.map(|b| b.request_id).as_deref(), Some("req-1"));
+        assert_eq!(
+            first.blocked_on.map(|b| b.request_id).as_deref(),
+            Some("req-1")
+        );
 
         // Same prompt, still unanswered: a bounded wait now runs to its deadline
         // rather than returning immediately.
@@ -5924,7 +6800,10 @@ mod tests {
             started.elapsed() < Duration::from_millis(2_000),
             "a NEW blocking prompt must wake the wait"
         );
-        assert_eq!(third.blocked_on.map(|b| b.request_id).as_deref(), Some("req-2"));
+        assert_eq!(
+            third.blocked_on.map(|b| b.request_id).as_deref(),
+            Some("req-2")
+        );
     }
 
     /// The delivery-failure valve: marking a block reported is not proof the
@@ -8153,7 +9032,9 @@ mod tests {
                 "parent-conn",
                 "tc-keyed".into(),
                 Some(DelegationMatchKey {
-                    target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::ClaudeCode),
+                    target: crate::acp::delegation::types::DelegationTarget::Agent(
+                        AgentType::ClaudeCode,
+                    ),
                     task: "do x".into(),
                     working_dir: None,
                 }),
@@ -10052,7 +10933,10 @@ mod tests {
                 // The event labels the card even when the parent tool call's
                 // raw_input never carried the arguments (identity-less hosts).
                 assert_eq!(task_preview, "do x");
-                assert!(!task_id.is_empty(), "broker-minted task id must ride the event");
+                assert!(
+                    !task_id.is_empty(),
+                    "broker-minted task id must ride the event"
+                );
             }
             other => panic!("expected DelegationStarted, got {other:?}"),
         }
@@ -10189,12 +11073,509 @@ mod tests {
         assert!(std::str::from_utf8(multibyte.as_bytes()).is_ok());
     }
 
+    // -- 远程真实 HTTP 协议与独立内存 DB ------------------------------------
+    #[derive(Clone, Default)]
+    struct RemoteMock {
+        calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+        finish: Arc<std::sync::atomic::AtomicBool>,
+        conflict: Arc<std::sync::atomic::AtomicBool>,
+        cancel_fails: Arc<std::sync::atomic::AtomicBool>,
+        reserve_count: Arc<std::sync::atomic::AtomicUsize>,
+        gate_route: Arc<Mutex<Option<String>>>,
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        events_mode: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    async fn remote_http(
+        axum::extract::State(mock): axum::extract::State<RemoteMock>,
+        axum::extract::Path(route): axum::extract::Path<String>,
+        axum::Json(args): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        use serde_json::json;
+        use std::sync::atomic::Ordering::SeqCst;
+        mock.calls.lock().await.push((route.clone(), args.clone()));
+        if mock.gate_route.lock().await.as_deref() == Some(route.as_str()) {
+            mock.entered.notify_one();
+            mock.release.notified().await;
+        }
+        if route == "cli_hello" {
+            return axum::Json(json!({"proof":crate::cli_run::hello::proof("rm05-test", args["nonce"].as_str().unwrap(), None),
+                "runtime":"server","build":"release","version":"0.42.4","apiVersion":1,"capabilities":["run","worktree"]})).into_response();
+        }
+        let value = match route.as_str() {
+            "list_all_folder_details" => json!([{"id":7,"path":"/registered"}]),
+            "cli_run_reserve" => {
+                json!({"runId":format!("abcdef01-{}",mock.reserve_count.fetch_add(1,SeqCst)),"expiresInMs":600000})
+            }
+            "cli_run_start" if mock.conflict.swap(false, SeqCst) => {
+                return (axum::http::StatusCode::CONFLICT, axum::Json(json!({"subtype":"error_usage","error":{"code":"run_not_reserved","message":"expired"}}))).into_response();
+            }
+            "cli_run_start" => json!({"runId":args["runId"],"conversationId":999999,"folderId":7,
+                "connectionId":"not-local","agent":"codex","link":"codeg://session/999999"}),
+            "cli_run_events" if mock.events_mode.load(SeqCst) == 1 => {
+                return (axum::http::StatusCode::NOT_FOUND, axum::Json(json!({"subtype":"error_usage","error":{"code":"run_not_found","message":"expired"}}))).into_response();
+            }
+            "cli_run_events" if mock.events_mode.load(SeqCst) == 2 => {
+                json!({"events":[],"next":3,"gap":true,"done":false})
+            }
+            "cli_run_events" => {
+                assert_eq!(args["waitMs"], 20000);
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                if mock.finish.load(SeqCst) {
+                    json!({"events":[{"v":1,"seq":2,"run_id":args["runId"],"type":"result",
+                        "subtype":"success","is_error":false,"result":"远程结果","session_id":null,
+                        "stop_reason":"end_turn","duration_ms":12,"conversation_id":999999,"link":null}],"next":2,"done":true,"gap":false})
+                } else {
+                    json!({"events":[{"v":1,"seq":1,"run_id":args["runId"],"type":"permission",
+                        "request_id":"remote-perm","conversation_id":999999,"tool":"test","decision":"waiting"}],"next":1,"done":false,"gap":false})
+                }
+            }
+            "cli_run_cancel" if mock.cancel_fails.load(SeqCst) => {
+                return (axum::http::StatusCode::BAD_GATEWAY, axum::Json(json!({"subtype":"error_runtime_unavailable","error":{"code":"offline","message":"offline"}}))).into_response();
+            }
+            "cli_run_cancel" => json!({}),
+            "cli_run_get" if mock.events_mode.load(SeqCst) == 2 => {
+                json!({"state":"settled","result":{
+                "subtype":"success","is_error":false,"result":"gap补偿结果","session_id":null,
+                "stop_reason":null,"duration_ms":1,"conversation_id":999999,"link":null}})
+            }
+            "cli_run_get" => json!({"state":"running"}),
+            "cli_run_find" => json!({"runs":[]}),
+            _ => panic!("非白名单调用 {route}"),
+        };
+        axum::Json(value).into_response()
+    }
+
+    async fn remote_fixture() -> (
+        DelegationBroker,
+        Arc<MockSpawner>,
+        Arc<crate::db::AppDatabase>,
+        i32,
+        i32,
+        RemoteMock,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+        let db = Arc::new(fresh_in_memory_db().await);
+        let folder = seed_folder(&db, "/tmp/rm05-test").await;
+        let parent = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let mock = RemoteMock::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let router = axum::Router::new()
+            .route("/api/{route}", axum::routing::post(remote_http))
+            .with_state(mock.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let connection = crate::db::service::remote_workspace_connection_service::create(
+            &db.conn,
+            "远程测试",
+            &url,
+            "rm05-test",
+            &[],
+        )
+        .await
+        .unwrap()
+        .id;
+        let spawner = Arc::new(MockSpawner::new());
+        let broker =
+            DelegationBroker::new(spawner.clone(), shallow_lookup()).with_remote_db(db.clone());
+        enable_delegation(&broker).await;
+        (broker, spawner, db, parent, connection, mock, server)
+    }
+
+    async fn remote_request(
+        broker: &DelegationBroker,
+        db: &crate::db::AppDatabase,
+        parent: i32,
+        connection: i32,
+    ) -> DelegationRequest {
+        crate::db::service::remote_mention_grant_service::upsert(&db.conn, parent, connection, 7)
+            .await
+            .unwrap();
+        let mut req = request(parent, "remote-tool");
+        req.external_handle = Some("remote-external".into());
+        req.remote = Some(broker.prepare_remote_target(parent,&serde_json::json!({"remote_connection_id":connection,"remote_folder_id":7,"remote_agent":"custom:remote"})).await.unwrap());
+        req
+    }
+
+    #[tokio::test]
+    async fn remote_authorization_path_and_validation_fail_closed() {
+        let (broker, _, db, parent, connection, mock, server) = remote_fixture().await;
+        let valid = serde_json::json!({"remote_connection_id":connection,"remote_folder_id":7,"remote_agent":"codex"});
+        assert_eq!(
+            broker
+                .prepare_remote_target(parent, &valid)
+                .await
+                .unwrap_err()
+                .0,
+            "remote_not_mentioned"
+        );
+        assert!(mock.calls.lock().await.is_empty());
+        let _ = remote_request(&broker, &db, parent, connection).await;
+        let mut mixed = valid.clone();
+        mixed["agent_type"] = serde_json::json!("codex");
+        assert_eq!(
+            broker
+                .prepare_remote_target(parent, &mixed)
+                .await
+                .unwrap_err()
+                .0,
+            "mixed_local_remote_target"
+        );
+        for (key, value) in [
+            ("working_dir", serde_json::json!("/escape")),
+            ("remote_folder_id", serde_json::json!(0)),
+            ("permissions", serde_json::json!("root")),
+        ] {
+            let mut input = valid.clone();
+            input[key] = value;
+            assert!(broker.prepare_remote_target(parent, &input).await.is_err());
+        }
+        let list_count = mock
+            .calls
+            .lock()
+            .await
+            .iter()
+            .filter(|(r, _)| r == "list_all_folder_details")
+            .count();
+        assert_eq!(list_count, 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_reserve_conflict_block_result_and_db_fallback() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (broker, spawner, db, parent, connection, mock, server) = remote_fixture().await;
+        mock.conflict.store(true, SeqCst);
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let ack = broker.start_delegation(req).await;
+        let id = ack.task_id.unwrap();
+        assert_eq!(ack.status, TaskStatus::Running);
+        assert!(ack.child_conversation_id.is_none());
+        assert!(ack.remote.is_some());
+        assert!(spawner.spawn_args.lock().await.is_empty());
+        assert_eq!(mock.reserve_count.load(SeqCst), 2);
+        let blocked = tokio::time::timeout(
+            Duration::from_secs(3),
+            broker.get_task_status("parent-conn", Some(parent), &id, StatusWait::Infinite),
+        )
+        .await
+        .unwrap();
+        assert!(blocked.blocked_on.is_some());
+        mock.finish.store(true, SeqCst);
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let r = broker
+                    .get_task_status("parent-conn", Some(parent), &id, StatusWait::Immediate)
+                    .await;
+                if r.status == TaskStatus::Completed {
+                    break r;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.text.as_deref(), Some("远程结果"));
+        assert_eq!(
+            remote_store::get_by_task_id(&db.conn, &id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_event_seq,
+            2
+        );
+        assert_eq!(
+            broker.status_from_db(Some(parent), &id).await.status,
+            TaskStatus::Completed
+        );
+        assert_eq!(
+            broker.status_from_db(Some(parent + 100), &id).await.status,
+            TaskStatus::Unknown
+        );
+        assert!(spawner.disconnects.lock().await.is_empty());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_four_cancel_entries_never_touch_local_spawner() {
+        for entry in 0..4 {
+            let (broker, spawner, db, parent, connection, mock, server) = remote_fixture().await;
+            let req = remote_request(&broker, &db, parent, connection).await;
+            let id = broker.start_delegation(req).await.task_id.unwrap();
+            match entry {
+                0 => {
+                    broker
+                        .cancel_task_by_id("parent-conn", Some(parent), &id)
+                        .await;
+                }
+                1 => broker.cancel_by_parent("parent-conn").await,
+                2 => {
+                    let cancel = broker.cancel_by_parent_turn("parent-conn").await;
+                    assert!(cancel.interrupted.is_empty());
+                    let _ = cancel.done.await;
+                }
+                _ => {
+                    broker
+                        .cancel_by_external_handle("remote-external", "cancel".into())
+                        .await
+                }
+            }
+            let row = remote_store::get_by_task_id(&db.conn, &id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.status, "canceled", "入口 {entry}");
+            assert!(mock
+                .calls
+                .lock()
+                .await
+                .iter()
+                .any(|(r, _)| r == "cli_run_cancel"));
+            assert!(spawner.cancels.lock().await.is_empty());
+            assert!(spawner.disconnects.lock().await.is_empty());
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_unconfirmed_delete_preserves_history_and_resume_refused() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (broker, _, db, parent, connection, mock, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let id = broker.start_delegation(req).await.task_id.unwrap();
+        mock.cancel_fails.store(true, SeqCst);
+        broker.cancel_remote_connection(connection).await.unwrap();
+        crate::db::service::remote_workspace_connection_service::delete(&db.conn, connection)
+            .await
+            .unwrap();
+        let row = remote_store::get_by_task_id(&db.conn, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "canceled");
+        assert_eq!(row.error_code.as_deref(), Some("remote_cancel_unconfirmed"));
+        assert!(row.connection_id.is_none());
+        let mut resume = resume_request(&id);
+        resume.parent_conversation_id = parent;
+        assert_eq!(
+            broker.resume_delegation(resume).await.error_code.as_deref(),
+            Some("not_resumable")
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_recovery_revokes_reservations_and_retracks_cursor() {
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let a = tracker.create("recovery-no-run", &req).await.unwrap();
+        let b = tracker.create("recovery-reserved", &req).await.unwrap();
+        let _ = tracker.reserve(&b).await.unwrap();
+        let c = tracker.create("recovery-running", &req).await.unwrap();
+        let run = tracker.reserve(&c).await.unwrap();
+        let started = tracker.start(&c, &req, &run, false).await.unwrap();
+        tracker.mark_started(&c.task_id, &started).await.unwrap();
+        tracker.progress(&c, "running", None, 1).await.unwrap();
+        // 重新构造 broker，模拟真实重启；启动后新建的任务不能被恢复扫描误伤。
+        let recovered = DelegationBroker::new(Arc::new(MockSpawner::new()), shallow_lookup())
+            .with_remote_db(db.clone());
+        recovered.recover_remote_delegations().await;
+        for id in [&a.task_id, &b.task_id] {
+            let row = tracker.row(id).await.unwrap().unwrap();
+            assert_eq!(row.status, "failed");
+            assert_eq!(row.error_code.as_deref(), Some("interrupted_before_start"));
+        }
+        let blocked = tokio::time::timeout(
+            Duration::from_secs(3),
+            recovered.get_task_status(
+                "parent-conn",
+                Some(parent),
+                &c.task_id,
+                StatusWait::Infinite,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(blocked.blocked_on.is_some());
+        recovered
+            .cancel_task_by_id("parent-conn", Some(parent), &c.task_id)
+            .await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_cancel_wins_late_result_and_reserve_checkpoint() {
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let id = broker.start_delegation(req.clone()).await.task_id.unwrap();
+        let row = tracker.row(&id).await.unwrap().unwrap();
+        broker
+            .cancel_task_by_id("parent-conn", Some(parent), &id)
+            .await;
+        let result: crate::cli_run::wire::RunResult=serde_json::from_value(serde_json::json!({"subtype":"success","is_error":false,
+            "result":"迟到结果","session_id":null,"stop_reason":null,"duration_ms":1,"conversation_id":null,"link":null})).unwrap();
+        assert!(
+            !broker
+                .finish_remote_result("parent-conn", &row, &result, 3)
+                .await
+        );
+        assert_eq!(tracker.row(&id).await.unwrap().unwrap().status, "canceled");
+        // 已登记 inflight 的父取消必须在 reserve/start 前阻止发送。
+        let inflight = broker
+            .pending
+            .inner
+            .lock()
+            .await
+            .register_inflight("parent-conn");
+        broker.cancel_by_parent("parent-conn").await;
+        assert!(broker.remote_setup_canceled(&req, inflight).await);
+        assert_eq!(broker.inflight_count().await, 0);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_per_connection_limit_is_eight_and_queues_ninth() {
+        let db = Arc::new(crate::db::test_helpers::fresh_in_memory_db().await);
+        let tracker = RemoteRunTracker::new(db);
+        let mut permits = Vec::new();
+        for _ in 0..8 {
+            permits.push(tracker.acquire(1).await);
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), tracker.acquire(1))
+                .await
+                .is_err()
+        );
+        // 不同连接不共用限额。
+        let other = tracker.acquire(2).await;
+        drop(permits.pop());
+        let ninth = tokio::time::timeout(Duration::from_millis(100), tracker.acquire(1))
+            .await
+            .unwrap();
+        drop((other, ninth, permits));
+    }
+
+    #[tokio::test]
+    async fn remote_parent_cancel_during_reserve_and_start_withdraws_latest_run() {
+        for route in ["cli_run_reserve", "cli_run_start"] {
+            let (broker, spawner, db, parent, connection, mock, server) = remote_fixture().await;
+            let req = remote_request(&broker, &db, parent, connection).await;
+            *mock.gate_route.lock().await = Some(route.into());
+            let starting = {
+                let broker = broker.clone();
+                tokio::spawn(async move { broker.start_delegation(req).await })
+            };
+            tokio::time::timeout(Duration::from_secs(3), mock.entered.notified())
+                .await
+                .unwrap();
+            broker.cancel_by_parent("parent-conn").await;
+            mock.release.notify_one();
+            let report = tokio::time::timeout(Duration::from_secs(3), starting)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(report.status, TaskStatus::Canceled, "取消窗口 {route}");
+            assert!(report.child_conversation_id.is_none());
+            let calls = mock.calls.lock().await;
+            assert!(calls.iter().any(|(r, _)| r == "cli_run_cancel"));
+            if route == "cli_run_reserve" {
+                assert!(!calls.iter().any(|(r, _)| r == "cli_run_start"));
+            }
+            assert!(spawner.cancels.lock().await.is_empty());
+            assert_eq!(broker.inflight_count().await, 0);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_gap_get_and_not_found_find_before_lost() {
+        use std::sync::atomic::Ordering::SeqCst;
+        for mode in [1, 2] {
+            let (broker, _, db, parent, connection, mock, server) = remote_fixture().await;
+            mock.events_mode.store(mode, SeqCst);
+            let req = remote_request(&broker, &db, parent, connection).await;
+            let id = broker.start_delegation(req).await.task_id.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                broker.get_task_status("parent-conn", Some(parent), &id, StatusWait::Infinite),
+            )
+            .await
+            .unwrap();
+            if mode == 1 {
+                assert_eq!(result.error_code.as_deref(), Some("remote_run_lost"));
+                assert!(mock
+                    .calls
+                    .lock()
+                    .await
+                    .iter()
+                    .any(|(r, _)| r == "cli_run_find"));
+            } else {
+                assert_eq!(result.text.as_deref(), Some("gap补偿结果"));
+                assert_eq!(
+                    remote_store::get_by_task_id(&db.conn, &id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .last_event_seq,
+                    3
+                );
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_retry_backoff_and_unreachable_stays_nonterminal() {
+        let now = Instant::now();
+        let mut retry = remote_run::RetryWindow::new();
+        for seconds in [1, 2, 4, 8, 16, 30, 30] {
+            assert_eq!(retry.failure(now), Some(Duration::from_secs(seconds)));
+        }
+        assert!(retry.failure(now + Duration::from_secs(599)).is_some());
+        assert!(retry.failure(now + Duration::from_secs(600)).is_none());
+        retry.reset();
+        assert_eq!(retry.failure(now), Some(Duration::from_secs(1)));
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("unreachable-run", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let start = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started(&row.task_id, &start).await.unwrap();
+        tracker
+            .progress(&row, "unreachable", None, 0)
+            .await
+            .unwrap();
+        let report = broker.status_from_db(Some(parent), &row.task_id).await;
+        assert_eq!(report.status, TaskStatus::Running);
+        assert!(report
+            .blocked_on
+            .unwrap()
+            .title
+            .unwrap()
+            .contains("remote_unreachable"));
+        broker
+            .cancel_task_by_id("parent-conn", Some(parent), &row.task_id)
+            .await;
+        server.abort();
+    }
+
     // -- completed-cache byte valve ----------------------------------------
 
     fn completed_with_text(parent: &str, text_len: usize) -> CompletedTask {
         CompletedTask {
             parent_connection_id: parent.to_string(),
-            child_conversation_id: 1,
+            child: ChildHandle::Local {
+                connection_id: String::new(),
+                conversation_id: 1,
+            },
             agent_type: AgentType::ClaudeCode,
             status: TaskStatus::Completed,
             text: Some("x".repeat(text_len)),
@@ -10402,11 +11783,9 @@ mod tests {
         let mock = Arc::new(MockSpawner::new());
         let lookup = Arc::new(MockResumeLookup::default());
         *lookup.ctx.lock().await = ctx;
-        let broker = DelegationBroker::new(
-            mock.clone() as Arc<dyn ConnectionSpawner>,
-            shallow_lookup(),
-        )
-        .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup())
+                .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
         enable_delegation(&broker).await;
         (mock, lookup, broker)
     }
@@ -10435,7 +11814,8 @@ mod tests {
     #[tokio::test]
     async fn resume_after_interruption_runs_under_same_id_then_completes() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
 
         let mut req = resume_request("task-1");
@@ -10444,7 +11824,10 @@ mod tests {
         assert_eq!(ack.status, TaskStatus::Running);
         assert_eq!(ack.task_id.as_deref(), Some("task-1"));
         assert_eq!(ack.child_conversation_id, Some(42));
-        assert!(ack.message.unwrap().starts_with("Delegation resumed. task_id=task-1"));
+        assert!(ack
+            .message
+            .unwrap()
+            .starts_with("Delegation resumed. task_id=task-1"));
 
         // The spawn resumed the recorded agent session in the recorded dir.
         let spawns = mock.resume_spawn_args.lock().await;
@@ -10507,7 +11890,8 @@ mod tests {
         assert_eq!(canceled.status, TaskStatus::Canceled);
         assert_eq!(broker.completed_count().await, 1);
 
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request(&task_id)).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10625,7 +12009,8 @@ mod tests {
 
         // No live connection → the stranded row resumes.
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Running))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10727,7 +12112,8 @@ mod tests {
     #[tokio::test]
     async fn resume_send_failure_disconnects_and_unreserves() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Err(SpawnerError::Send("stdin closed".into())))
             .await;
         let report = broker.resume_delegation(resume_request("task-1")).await;
@@ -10785,11 +12171,18 @@ mod tests {
         assert_eq!(report.error_code.as_deref(), Some(NOT_RESUMABLE_CODE));
         assert!(report.message.unwrap().contains("already in progress"));
         assert!(mock.resume_spawn_args.lock().await.is_empty());
-        assert!(broker.pending.inner.lock().await.resuming.contains("task-1"));
+        assert!(broker
+            .pending
+            .inner
+            .lock()
+            .await
+            .resuming
+            .contains("task-1"));
 
         // A successful resume releases its own claim.
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10824,7 +12217,8 @@ mod tests {
     #[tokio::test]
     async fn resumed_task_cancels_like_any_running_task() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10921,7 +12315,10 @@ mod tests {
         assert_eq!(send.task, "do x", "the task goes out untouched");
         let brief = send.brief.expect("the brief rides the first prompt");
         assert!(brief.contains(r#"{"name":"Reviewer","instructions":"Cite line numbers."}"#));
-        let link = send.link.assistant.expect("the child row learns its assistant");
+        let link = send
+            .link
+            .assistant
+            .expect("the child row learns its assistant");
         assert_eq!(link.id, 3);
         assert_eq!(link.snapshot, reviewer().run_snapshot());
 
@@ -10934,7 +12331,12 @@ mod tests {
 
         // Status keeps naming it; the terminal report and event do too.
         let report = broker
-            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
+            .get_task_status(
+                "parent-conn",
+                Some(1),
+                ack.task_id.as_deref().unwrap(),
+                StatusWait::Immediate,
+            )
             .await;
         assert_eq!(report.assistant_id, Some(3));
         broker
@@ -10951,11 +12353,19 @@ mod tests {
             )
             .await;
         let done = broker
-            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
+            .get_task_status(
+                "parent-conn",
+                Some(1),
+                ack.task_id.as_deref().unwrap(),
+                StatusWait::Immediate,
+            )
             .await;
         assert_eq!(done.status, TaskStatus::Completed);
         assert_eq!(done.assistant_name.as_deref(), Some("Reviewer"));
-        assert_eq!(emitter.snapshot().await[0].assistant, Some(reviewer().identity()));
+        assert_eq!(
+            emitter.snapshot().await[0].assistant,
+            Some(reviewer().identity())
+        );
         let writes = writer.snapshot().await;
         let terminal_meta = &writes.last().unwrap().meta["codeg.delegation"];
         assert_eq!(terminal_meta["status"], "completed");
@@ -11046,7 +12456,8 @@ mod tests {
                 ..DelegationConfig::default()
             })
             .await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
 
         let ack = broker.resume_delegation(resume_request("task-1")).await;
@@ -11095,7 +12506,10 @@ mod tests {
         assert!(report.message.unwrap().contains("could not be read back"));
         assert_eq!(report.assistant_id, Some(3));
         assert_eq!(report.assistant_name.as_deref(), Some("Reviewer"));
-        assert!(mock.resume_spawn_args.lock().await.is_empty(), "nothing relaunched");
+        assert!(
+            mock.resume_spawn_args.lock().await.is_empty(),
+            "nothing relaunched"
+        );
     }
 
     /// A resume refused before its gates (delegation switched off) still says
@@ -11110,7 +12524,9 @@ mod tests {
         enable_delegation(&broker).await;
         let ack = broker.start_delegation(assistant_request(1, "pt-e")).await;
         let task_id = ack.task_id.unwrap();
-        broker.cancel_task_by_id("parent-conn", Some(1), &task_id).await;
+        broker
+            .cancel_task_by_id("parent-conn", Some(1), &task_id)
+            .await;
         broker
             .set_config(DelegationConfig {
                 enabled: false,
@@ -11127,7 +12543,10 @@ mod tests {
         foreign.parent_connection_id = "someone-else".into();
         let refused = broker.resume_delegation(foreign).await;
         assert_eq!(refused.agent_type, None);
-        assert_eq!(refused.assistant_id, None, "no identity for a foreign caller");
+        assert_eq!(
+            refused.assistant_id, None,
+            "no identity for a foreign caller"
+        );
     }
 
     /// The DB lookup decides "assistant child" off the row's `assistant_id`,
@@ -11181,9 +12600,15 @@ mod tests {
             }),
         };
 
-        let ctx = lookup.find_resume_context_by_call_id("call-a").await.unwrap();
+        let ctx = lookup
+            .find_resume_context_by_call_id("call-a")
+            .await
+            .unwrap();
         assert_eq!(ctx.assistant, ResumeAssistant::Snapshot(reviewer()));
-        let ctx = lookup.find_resume_context_by_call_id("call-p").await.unwrap();
+        let ctx = lookup
+            .find_resume_context_by_call_id("call-p")
+            .await
+            .unwrap();
         assert_eq!(ctx.assistant, ResumeAssistant::None);
         assert_eq!(plain.assistant_id, None);
 
@@ -11198,7 +12623,10 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            let ctx = lookup.find_resume_context_by_call_id("call-a").await.unwrap();
+            let ctx = lookup
+                .find_resume_context_by_call_id("call-a")
+                .await
+                .unwrap();
             assert!(
                 matches!(ctx.assistant, ResumeAssistant::Unrecoverable { id: 3, .. }),
                 "{broken}: {:?}",
@@ -11209,9 +12637,9 @@ mod tests {
 
     #[tokio::test]
     async fn resuming_an_agent_child_keeps_the_per_agent_defaults_and_no_brief() {
-        let (mock, _lookup, broker) =
-            resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r2"))).await;
+        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.assistant_id, None);
