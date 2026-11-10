@@ -121,7 +121,6 @@ export function SessionDirectoryDialog({
   const applyLayout = useAppWorkspaceStore((s) => s.applySidebarLayout)
   const createGroup = useAppWorkspaceStore((s) => s.createFolderGroup)
   const removeFolder = useAppWorkspaceStore((s) => s.removeFolderFromWorkspace)
-  const reopenFolder = useAppWorkspaceStore((s) => s.addFolderToWorkspaceById)
   const fetchFolders = useAppWorkspaceStore((s) => s.fetchFolders)
   const archivedPaths = useArchivedFolderPaths()
   const convArchive = useConversationArchiveState()
@@ -496,11 +495,7 @@ export function SessionDirectoryDialog({
         ? "bg-tone-success/10 text-tone-success"
         : "bg-muted text-muted-foreground"
   const rankLabel = (rank: DirectoryRank | undefined) =>
-    rank === "archived"
-      ? t("badgeArchived")
-      : rank === "active"
-        ? t("statusInWorkspace")
-        : t("badgeRemoved")
+    rank === "archived" ? t("badgeArchived") : t("statusInWorkspace")
   const reasonLabel = (reason: string | null | undefined) =>
     reason === "manual"
       ? t("reasonManual")
@@ -551,7 +546,6 @@ export function SessionDirectoryDialog({
                 <SelectItem value="all">{t("statusAll")}</SelectItem>
                 <SelectItem value="active">{t("statusActive")}</SelectItem>
                 <SelectItem value="archived">{t("statusArchived")}</SelectItem>
-                <SelectItem value="removed">{t("statusRemoved")}</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -980,31 +974,20 @@ export function SessionDirectoryDialog({
                                   disabled={busy}
                                   onClick={() =>
                                     void run(async () => {
-                                      if (!inWorkspace) {
-                                        await reopenFolder(folder.id)
-                                        setFoldersArchived([folder.path], false)
-                                      } else {
-                                        setFoldersArchived(
-                                          [folder.path],
-                                          !archived.has(folder.path)
-                                        )
-                                      }
+                                      setFoldersArchived(
+                                        [folder.path],
+                                        !archived.has(folder.path)
+                                      )
                                     })
                                   }
                                 >
-                                  {!inWorkspace ? (
-                                    <Plus />
-                                  ) : isArchived ? (
+                                  {isArchived ? (
                                     <ArchiveRestore />
                                   ) : (
                                     <Archive />
                                   )}
                                   <span className="max-md:sr-only">
-                                    {!inWorkspace
-                                      ? t("rejoin")
-                                      : isArchived
-                                        ? t("restore")
-                                        : t("archive")}
+                                    {isArchived ? t("restore") : t("archive")}
                                   </span>
                                 </Button>
                                 {inWorkspace && (
@@ -1059,7 +1042,7 @@ export function SessionDirectoryDialog({
           <DialogFooter className="flex-row items-center justify-end px-6 py-4">
             <span className="mr-auto hidden text-xs text-muted-foreground sm:inline">
               {t("footerSummary", {
-                folders: folders.length,
+                folders: folders.filter((f) => openIds.has(f.id)).length,
                 groups: groups.length,
               })}
             </span>

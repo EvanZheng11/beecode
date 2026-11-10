@@ -91,10 +91,36 @@ describe("会话目录树模型", () => {
     expect(result.map((r) => r.key)).toEqual(["group:10", "folder:2"])
     expect(result[0].selectable).toEqual(["folder:1", "folder:3"])
   })
-  it("移出状态不会混入工作区中的目录", () => {
+  it("全部状态不显示已移出目录，批量选择也不包含已移出项", () => {
+    const result = rows({ openIds: new Set([1, 3]) })
+    expect(result.map((r) => r.key)).toEqual([
+      "group:10",
+      "folder:1",
+      "folder:3",
+    ])
+    expect(result.flatMap((r) => r.selectable)).not.toContain("folder:2")
+  })
+  it("分组搜索和归档筛选不会带出已移出目录", () => {
     expect(
-      rows({ status: "removed", openIds: new Set([1, 3]) }).map((r) => r.key)
-    ).toEqual(["folder:2"])
+      rows({ query: "产品开发", openIds: new Set([2, 3]) }).map((r) => r.key)
+    ).toEqual(["group:10", "folder:3"])
+    expect(
+      rows({
+        status: "archived",
+        openIds: new Set([1, 3]),
+        archivedPaths: ["/project/2"],
+      })
+    ).toEqual([])
+  })
+  it("父目录移出后仍显示工作区中的子目录，搜索不匹配已移出父目录", () => {
+    expect(
+      rows({ openIds: new Set([2, 3]) }).map((r) => [r.key, r.depth])
+    ).toEqual([
+      ["group:10", 0],
+      ["folder:3", 1],
+      ["folder:2", 0],
+    ])
+    expect(rows({ query: "/project/1", openIds: new Set([2, 3]) })).toEqual([])
   })
   it("排序草稿支持移入移出组，只有保存才生成契约", () => {
     const initial = buildSidebarLayout({
@@ -122,6 +148,7 @@ describe("会话目录树模型", () => {
     const large = Array.from({ length: 10000 }, (_, i) => folder(i + 1))
     const result = rows({
       folders: large,
+      openIds: new Set(large.map((f) => f.id)),
       groups: [],
       layout: buildSidebarLayout({ folders: large, groups: [] }),
     })
@@ -150,7 +177,7 @@ describe("会话目录树模型", () => {
       parent_id: null,
       ...extra,
     }) as DbConversationSummary
-  it("普通浏览同层级按 工作区中→已归档→已移出 排序；排序模式保持原序", () => {
+  it("普通浏览按工作区中→已归档排序；排序模式保持原序且隐藏已移出目录", () => {
     const flat = [folder(1), folder(2), folder(3), folder(4)]
     const input = {
       folders: flat,
@@ -162,14 +189,10 @@ describe("会话目录树模型", () => {
     expect(rows({ ...input, rank: true }).map((r) => r.key)).toEqual([
       "folder:3",
       "folder:1",
-      "folder:2",
-      "folder:4",
     ])
     expect(rows({ ...input, rank: false }).map((r) => r.key)).toEqual([
       "folder:1",
-      "folder:2",
       "folder:3",
-      "folder:4",
     ])
   })
   it("worktree 兄弟与组成员同样按状态排序", () => {
@@ -189,13 +212,11 @@ describe("会话目录树模型", () => {
       archivedPaths: ["/project/1"],
       rank: true,
     })
-    // 组内：1(已归档) 先于 4(已移出)；1 的子目录：3(工作区中) 先于 2(已移出)
+    // 已移出的组成员 4 和子目录 2 均不显示。
     expect(result.map((r) => r.key)).toEqual([
       "group:10",
       "folder:1",
       "folder:3",
-      "folder:2",
-      "folder:4",
     ])
   })
   it("会话默认折叠，展开后作为目录子行，归档目录的会话显示为随目录归档", () => {
@@ -229,6 +250,19 @@ describe("会话目录树模型", () => {
     })
     expect(result.map((r) => r.key)).toEqual(["group:10", "folder:1", "conv:9"])
   })
+  it.each(["", "/project/2", "会话7"])(
+    "已移出目录及其会话不会因搜索或展开而显示：%s",
+    (query) => {
+      const result = rows({
+        query,
+        openIds: new Set([1, 3]),
+        conversations: [conv(7, 2)],
+        expandedSessions: new Set(["folder:2"]),
+      })
+      expect(result.map((r) => r.key)).not.toContain("folder:2")
+      expect(result.map((r) => r.key)).not.toContain("conv:7")
+    }
+  )
   it("聊天会话归入虚拟段：默认折叠，归档筛选自动展开，隐藏 chat 目录", () => {
     const chat = folder(99, { kind: "chat" })
     const conv = (id: number) =>
@@ -255,8 +289,5 @@ describe("会话目录树模型", () => {
       (r) => r.kind === "conversation"
     )
     expect(arch.map((r) => r.key)).toEqual(["conv:2"])
-    expect(
-      rows({ ...extra, status: "removed" }).some((r) => r.kind === "chat")
-    ).toBe(false)
   })
 })

@@ -9,13 +9,12 @@ import {
   type SidebarLayout,
 } from "@/components/conversations/sidebar-conversation-grouping"
 
-export type DirectoryStatus = "all" | "active" | "archived" | "removed"
-/** 同层级排序：工作区中 < 已归档 < 已移出。 */
-export type DirectoryRank = "active" | "archived" | "removed"
+export type DirectoryStatus = "all" | "active" | "archived"
+/** 同层级排序：工作区中 < 已归档。 */
+export type DirectoryRank = "active" | "archived"
 const RANK: Record<DirectoryRank, number> = {
   active: 0,
   archived: 1,
-  removed: 2,
 }
 export interface DirectoryRow {
   key: string
@@ -86,7 +85,7 @@ export function buildDirectoryRows({
     byFolder.set(c.folder_id, list)
   }
   const folderRank = (f: FolderDetail): DirectoryRank =>
-    archived.has(f.path) ? "archived" : openIds.has(f.id) ? "active" : "removed"
+    archived.has(f.path) ? "archived" : "active"
   const archivedIds = new Set(
     folders.filter((f) => archived.has(f.path)).map((f) => f.id)
   )
@@ -112,7 +111,6 @@ export function buildDirectoryRows({
     const isArchived = archived.has(f.path)
     if (status === "active") return openIds.has(f.id) && !isArchived
     if (status === "archived") return isArchived
-    if (status === "removed") return !openIds.has(f.id)
     return true
   }
   const rows: DirectoryRow[] = []
@@ -124,6 +122,11 @@ export function buildDirectoryRows({
   ): DirectoryRow[] => {
     const folder = folderMap.get(id)
     if (!folder) return []
+    // 已移出目录不参与展示或搜索；仍在工作区的子目录保留在原层级位置。
+    if (!openIds.has(id))
+      return (children.get(id) ?? []).flatMap((f) =>
+        folderRows(f.id, groupId, depth, inheritedMatch)
+      )
     const match =
       inheritedMatch ||
       matchesName(`${folder.alias ?? ""} ${folder.name} ${folder.path}`)
@@ -135,24 +138,18 @@ export function buildDirectoryRows({
     const folderArchived =
       archivedIds.has(id) ||
       (folder.parent_id != null && archivedIds.has(folder.parent_id))
-    const removed = !openIds.has(id)
     const filtering = !!needle || status !== "all"
     const expanded = expandedSessions.has(key)
     const sessionRows: DirectoryRow[] = []
     for (const c of own) {
       const reason = conversationReason(c) ?? (folderArchived ? "folder" : null)
-      const convRank: DirectoryRank = removed
-        ? "removed"
-        : reason
-          ? "archived"
-          : "active"
+      const convRank: DirectoryRank = reason ? "archived" : "active"
       const titleMatch = !!needle && matchesName(c.title ?? "")
       const nameOk = !needle || titleMatch || (match && expanded)
       const statusOk =
         status === "all" ||
-        (status === "active" && !removed && !reason) ||
-        (status === "archived" && !!reason) ||
-        (status === "removed" && removed)
+        (status === "active" && !reason) ||
+        (status === "archived" && !!reason)
       const show = expanded || status !== "all" || titleMatch
       if (!show || !nameOk || !statusOk) continue
       sessionRows.push({
@@ -194,7 +191,7 @@ export function buildDirectoryRows({
     ]
   }
   const topEntries = rank
-    ? // 稳定排序：分组视为工作区中，已归档/已移出目录排到其后
+    ? // 稳定排序：分组视为工作区中，已归档目录排到其后
       layout.top
         .map((e, i) => ({
           e,
@@ -285,9 +282,8 @@ export function buildDirectoryRows({
             Date.parse(a.conversation?.updated_at ?? "") ||
           a.id - b.id
       )
-    // 已移出状态或无命中时不显示；全部状态且无搜索时保留入口
-    if (status === "removed" || (!list.length && (needle || status !== "all")))
-      return []
+    // 无命中时不显示；全部状态且无搜索时保留入口
+    if (!list.length && (needle || status !== "all")) return []
     return [
       {
         key,

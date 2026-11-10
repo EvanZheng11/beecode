@@ -157,6 +157,9 @@ describe("会话目录管理交互", () => {
     expect(document.querySelector("select")).toBeNull()
     const user = userEvent.setup()
     await user.click(screen.getByRole("combobox", { name: "过滤目录状态" }))
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent)
+    ).toEqual(["全部状态", "工作区中", "已归档"])
     await user.click(await screen.findByRole("option", { name: "已归档" }))
     expect(screen.queryByText("项目2")).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText("选择 项目1"))
@@ -165,20 +168,35 @@ describe("会话目录管理交互", () => {
       expect(archives.set).toHaveBeenCalledWith(["/project/1"], false)
     )
   })
-  it("已归档并移出的目录重新加入时恢复可见", async () => {
+  it("已移出目录不再显示，归档标记不会使其重新出现", () => {
     archives.paths = ["/project/2"]
     state.folders = [state.allFolders[0]]
-    state.addFolderToWorkspaceById.mockResolvedValue(undefined)
     renderDialog()
-    const row = screen.getByLabelText("选择 项目2").closest('[role="row"]')!
-    fireEvent.click(
-      within(row as HTMLElement).getByRole("button", { name: "重新加入" })
-    )
+    expect(screen.getByText("项目1")).toBeInTheDocument()
+    expect(screen.queryByText("项目2")).not.toBeInTheDocument()
+    expect(screen.queryByText("已移出")).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("过滤目录名称"), {
+      target: { value: "/project/2" },
+    })
+    expect(screen.queryByText("项目2")).not.toBeInTheDocument()
+    expect(state.allFolders).toHaveLength(2)
+    expect(state.removeFolderFromWorkspace).not.toHaveBeenCalled()
+  })
+  it("排序隐藏已移出目录，保存时仍保留其布局数据", async () => {
+    state.allFolders = [...state.allFolders, folder(3, 10)]
+    state.folders = state.allFolders.filter((f) => f.id !== 3)
+    renderDialog()
+    fireEvent.click(screen.getByRole("button", { name: /^排序$/ }))
+    expect(screen.queryByText("项目3")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText("上移 项目2"))
+    fireEvent.click(screen.getByRole("button", { name: "保存排序" }))
     await waitFor(() =>
-      expect(state.addFolderToWorkspaceById).toHaveBeenCalledWith(2)
-    )
-    await waitFor(() =>
-      expect(archives.set).toHaveBeenCalledWith(["/project/2"], false)
+      expect(state.applySidebarLayout).toHaveBeenCalledWith([
+        { kind: "folder", id: 2, groupId: null },
+        { kind: "group", id: 10, groupId: null },
+        { kind: "folder", id: 1, groupId: 10 },
+        { kind: "folder", id: 3, groupId: 10 },
+      ])
     )
   })
   it("分组拖到成员行上半部时按所属组的位置落点（指针拖动）", async () => {
