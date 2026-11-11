@@ -17749,19 +17749,16 @@ mod tests {
         let detail = parse_rollout("async-ask-sum", &content, "ask-sum");
         let summary = summary_of("async-ask-sum", &content);
 
-        // 屏幕上一条 user turn，列表里同样的计数。
+        // 已答复信封不再生成 user turn；工具卡片仍是详情独有的一条 assistant turn。
         let texts = turn_texts(&detail);
         assert_eq!(
             texts.iter().filter(|(role, _)| *role == "user").count(),
             1,
             "{texts:?}"
         );
-        assert_eq!(
-            summary.message_count, detail.summary.message_count,
-            "{texts:?}"
-        );
-        // ……即 prompt + 回复两条，折叠掉的信封不计。
-        assert_eq!(summary.message_count, 2, "{texts:?}");
+        // 摘要历来只计文本消息，详情还计工具卡片（同既有 ORCA_ONLY 用例）。
+        assert_eq!(summary.message_count, 2, "prompt + 回复，信封不计：{texts:?}");
+        assert_eq!(detail.summary.message_count, 3, "另含问题卡片：{texts:?}");
         assert_eq!(summary.title.as_deref(), Some("ASKASYNC please"));
     }
 
@@ -17802,10 +17799,9 @@ mod tests {
             1,
             "{texts:?}"
         );
-        assert_eq!(
-            summary.message_count, detail.summary.message_count,
-            "{texts:?}"
-        );
+        // 与双通道相同：两条文本消息，详情另有一条工具卡片。
+        assert_eq!(summary.message_count, 2, "{texts:?}");
+        assert_eq!(detail.summary.message_count, 3, "{texts:?}");
         assert_eq!(summary.title.as_deref(), Some("ASKASYNC please"));
     }
 
