@@ -2676,6 +2676,10 @@ pub async fn merge_back_to_review(
     expect_run_seq: Option<i32>,
     error: Option<String>,
     conflict_files: Option<Vec<String>>,
+    // 交付失败且本地确定没发出 `create_pull` 时才为 true：把首次交付钉在快照里的
+    // `pr_closes` 放开，让用户能重新选。`None` 的快照（不是组合任务、或已经交付过
+    // 一轮）原样写回，字节不变。
+    drop_closing_list: bool,
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
@@ -2705,6 +2709,9 @@ pub async fn merge_back_to_review(
         txn.rollback().await?;
         return Ok(false);
     }
+    if drop_closing_list {
+        release_closing_list(&txn, id).await?;
+    }
     if let Some(files) = conflict_files {
         record_event(
             &txn,
@@ -2726,6 +2733,39 @@ pub async fn merge_back_to_review(
     .await?;
     txn.commit().await?;
     Ok(true)
+}
+
+/// 把一条被退回到 review 的组合任务快照里的 `pr_closes` 去掉——只给「首次交付在本地
+/// 确定没发出 `create_pull`」的失败用（见 `merge_back_to_review` 的最后一个参数）。
+///
+/// 那个 pin 是 [`crate::work_task::engine`] 在交付开始时与 CAS 同一笔写入的，它说
+/// 「这份清单已经随 PR 描述发布了」；一次没发出创建请求的失败让这句话变成假的，
+/// 留着它就永久锁死清单（下一次交付会以「清单已定」拒掉用户的新选择）。
+///
+/// 读改写在这里而不在调用方，是为了让它落在同一个事务里、并在 CAS 已经拿到写锁之后
+/// 再读；快照不可解析就什么都不做——没有清单可放，也不能拿一个读不懂的 JSON 去覆盖。
+async fn release_closing_list<C: ConnectionTrait>(txn: &C, id: i32) -> Result<(), DbError> {
+    let Some(row) = work_task::Entity::find_by_id(id).one(txn).await? else {
+        return Ok(());
+    };
+    let Some(mut meta) = row
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<crate::forge::ForgeSourceMeta>(s).ok())
+    else {
+        return Ok(());
+    };
+    if meta.pr_closes.take().is_none() {
+        return Ok(());
+    }
+    let json = serde_json::to_string(&meta)
+        .map_err(|e| DbError::Validation(format!("source meta not serializable: {e}")))?;
+    work_task::Entity::update_many()
+        .col_expr(work_task::Column::SourceMeta, Expr::value(Some(json)))
+        .filter(work_task::Column::Id.eq(id))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 /// Write the preflight light for the CURRENT review generation. Guarded on
@@ -4050,7 +4090,11 @@ mod tests {
         // A second landing (event vs recovery race) is a no-op.
         assert!(!merge_landed(&db.conn, t.id, "zzz").await.unwrap());
         // And nothing can pull a done task back to review.
-        assert!(!merge_back_to_review(&db.conn, t.id, None, None, None).await.unwrap());
+        assert!(
+            !merge_back_to_review(&db.conn, t.id, None, None, None, false)
+                .await
+                .unwrap()
+        );
 
         let got = get(&db.conn, t.id).await.unwrap();
         assert_eq!(got.status, WorkTaskStatus::Done);
@@ -4171,10 +4215,12 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(!merge_back_to_review(&db.conn, id, None, None, None)
+        assert!(!merge_back_to_review(&db.conn, id, None, None, None, false)
             .await
             .unwrap());
-        assert!(!merge_back_to_review(&db.conn, id, None, None, None).await.unwrap());
+        assert!(!merge_back_to_review(&db.conn, id, None, None, None, false)
+            .await
+            .unwrap());
     }
 
     /// A delivery asked NOT to finish the task settles back to review: the
@@ -4289,8 +4335,13 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(merge_back_to_review(&db.conn, t.id, None, Some("conflict".into()),
-            Some(vec!["a.rs".into()])
+        assert!(merge_back_to_review(
+            &db.conn,
+            t.id,
+            None,
+            Some("conflict".into()),
+            Some(vec!["a.rs".into()]),
+            false,
         )
         .await
         .unwrap());
@@ -4350,7 +4401,11 @@ mod tests {
         assert!(get(&db.conn, t.id).await.unwrap().last_error.is_none());
 
         // Back in clean review for the unattended path proper.
-        assert!(merge_back_to_review(&db.conn, t.id, None, None, None).await.unwrap());
+        assert!(
+            merge_back_to_review(&db.conn, t.id, None, None, None, false)
+                .await
+                .unwrap()
+        );
         assert!(begin_merge(&db.conn, t.id, &state, seq + 1, true, None)
             .await
             .unwrap()
@@ -4410,11 +4465,16 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(
-            merge_back_to_review(&db.conn, t.id, None, Some("launch failed".into()), None)
-                .await
-                .unwrap()
-        );
+        assert!(merge_back_to_review(
+            &db.conn,
+            t.id,
+            None,
+            Some("launch failed".into()),
+            None,
+            false
+        )
+        .await
+        .unwrap());
 
         // Sweep B, dispatched against the pre-failure snapshot: stale
         // generation, CAS miss.
@@ -4894,9 +4954,11 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(merge_back_to_review(&db.conn, t.id, None, Some("nope".into()), None)
-            .await
-            .unwrap());
+        assert!(
+            merge_back_to_review(&db.conn, t.id, None, Some("nope".into()), None, false)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
             Some("nope")
@@ -5393,11 +5455,16 @@ mod tests {
             .unwrap()
             .expect("a user's merge takes a deferred task");
         assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
-        assert!(
-            merge_back_to_review(&db.conn, id, Some(merge_seq), Some("conflict".into()), None)
-                .await
-                .unwrap()
-        );
+        assert!(merge_back_to_review(
+            &db.conn,
+            id,
+            Some(merge_seq),
+            Some("conflict".into()),
+            None,
+            false
+        )
+        .await
+        .unwrap());
         assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
 
         // Queued behind another landing: its place in line belongs on review.
