@@ -755,6 +755,23 @@ fn find_delegation_args(
 /// result sniff.
 pub(crate) const CURSOR_IDENTITYLESS_MCP_TITLE: &str = "MCP: tool";
 
+/// 参数里的目标是否可能被 listener 接受——与 listener 用同一个解析器判断。
+///
+/// 只有 `Missing`（目标字段还没到齐：`raw_input` 正在流式补全，或历史预览被截断）
+/// 仍算可能：标题已认定是委派工具，先登记、由后续 update 回填 key。显式给了却过不了
+/// 严格校验的目标（`remote_connection_id` 为 null/0/负数/字符串、缺 folder、
+/// 非法 agent_type、本地与远程混用）listener 必定拒绝派发，永远不会有可认领的
+/// 往返，登记它只会占住 unkeyed FIFO 槽位。
+fn delegation_target_is_plausible(args: serde_json::Map<String, serde_json::Value>) -> bool {
+    match crate::acp::delegation::types::delegation_target_from_args(
+        &serde_json::Value::Object(args),
+    ) {
+        Ok(_) => true,
+        Err(crate::acp::delegation::types::DelegationTargetError::Missing) => true,
+        Err(_) => false,
+    }
+}
+
 /// True when the ACP `tool_call` smells like an invocation of the
 /// `delegate_to_agent` MCP tool. Defensive on both inputs because the host
 /// agent gets to decide both fields:
@@ -773,6 +790,12 @@ pub(crate) const CURSOR_IDENTITYLESS_MCP_TITLE: &str = "MCP: tool";
 /// * on opencode's code-mode tool (title `execute`), `raw_input` is
 ///   `{"code": "<JS>"}` and the call lives in the script — see
 ///   [`code_mode_delegation_code`].
+/// * a `task`-complete arg blob whose target fails
+///   [`crate::acp::delegation::types::delegation_target_from_args`] is NOT a
+///   delegation: the listener refuses to dispatch it, so no round-trip can
+///   ever claim the id and registering it would only occupy the unkeyed FIFO
+///   slot a real delegation needs. A blob still streaming (no `task` yet) is
+///   registered as before and keyed by its later update.
 ///
 /// This is also the replay-side gate: `commands::conversations::inject_delegation_meta`
 /// reuses it so a persisted tool block whose title/args (or opencode `code`)
@@ -781,20 +804,27 @@ pub(crate) const CURSOR_IDENTITYLESS_MCP_TITLE: &str = "MCP: tool";
 pub(crate) fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> bool {
     let normalized_title = title.to_ascii_lowercase().replace([' ', '-'], "_");
     if normalized_title.contains("delegate_to_agent") {
-        return true;
+        // 标题已经是委派工具，但参数若已是一份完整 blob 而目标严格校验不过
+        // （`remote_connection_id` 为 null/0/负数、缺 folder、非法 agent_type），
+        // listener 必定拒绝派发、不会产生可认领的往返：登记它只会占住 unkeyed
+        // FIFO 槽位，让后面真正的委派认领错卡片。
+        let Some(args) = raw_input
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|v| find_delegation_args(&v, 0))
+        else {
+            return true;
+        };
+        return delegation_target_is_plausible(args);
     }
     if let Some(raw) = raw_input {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
             if let Some(args) = find_delegation_args(&v, 0) {
-                let has_task = args.get("task").and_then(|t| t.as_str()).is_some();
-                let has_agent_type = args.get("agent_type").and_then(|a| a.as_str()).is_some();
-                let has_assistant_id = args
-                    .get("assistant_id")
-                    .is_some_and(|v| v.is_number() || v.is_string());
-                if has_task
-                    && (has_agent_type
-                        || has_assistant_id
-                        || args.contains_key("remote_connection_id"))
+                // 同一个解析器说了算：`task` + 可接受的 target 才算委派调用。
+                if args.get("task").and_then(|t| t.as_str()).is_some()
+                    && crate::acp::delegation::types::delegation_target_from_args(
+                        &serde_json::Value::Object(args),
+                    )
+                    .is_ok()
                 {
                     return true;
                 }
@@ -2702,7 +2732,7 @@ mod delegation_registration_tests {
     //! synthetic id before the move: args arriving on a `ToolCallUpdate`, and
     //! a key backfilled by a later update.
 
-    use super::register_delegation_tool_call_from_event;
+    use super::{extract_delegation_match_key, register_delegation_tool_call_from_event};
     use crate::acp::delegation::broker::{
         ConversationDepthLookup, DelegationBroker, DelegationMatchKey,
     };
@@ -3134,6 +3164,105 @@ mod delegation_registration_tests {
         assert!(
             b.take_pending_tool_call("parent-conn").await.is_none(),
             "only the literal \"MCP: tool\" fallback with an empty input registers"
+        );
+    }
+
+    /// 带 `remote_connection_id: null`、0、负数或残缺远程目标的调用，不得登记成
+    /// 待领 id。旧实现只看 `contains_key`，把这类 listener 必定拒绝的参数也塞进
+    /// unkeyed 队列，后续真实委派的 FIFO 兜底就会认领到它（卡片绑错/孤儿）。这里
+    /// 同时给出合法目标不回归的反例，并覆盖两种标题：任意标题（走参数形状）与
+    /// 字面 `delegate_to_agent`（走标题分支）。
+    #[tokio::test]
+    async fn non_delegation_remote_fields_do_not_take_the_fifo_slot() {
+        let b = broker();
+        for (id, raw) in [
+            (
+                "tc-null",
+                r#"{"task":"t","remote_connection_id":null,"remote_folder_id":4,"remote_agent":"codex"}"#,
+            ),
+            (
+                "tc-zero",
+                r#"{"task":"t","remote_connection_id":0,"remote_folder_id":4,"remote_agent":"codex"}"#,
+            ),
+            (
+                "tc-negative",
+                r#"{"task":"t","remote_connection_id":-3,"remote_folder_id":4,"remote_agent":"codex"}"#,
+            ),
+            // 缺 folder：远程目标必须包含项目，否则 listener 拒绝派发。
+            (
+                "tc-no-folder",
+                r#"{"task":"t","remote_connection_id":2,"remote_agent":"codex"}"#,
+            ),
+            // 字符串 id 不是合法远程目标（只有 assistant_id 允许数字字符串）。
+            (
+                "tc-string-id",
+                r#"{"task":"t","remote_connection_id":"2","remote_folder_id":4,"remote_agent":"codex"}"#,
+            ),
+            // 本地与远程目标混用，listener 也会拒绝。
+            (
+                "tc-mixed",
+                r#"{"task":"t","agent_type":"codex","remote_connection_id":2,"remote_folder_id":4,"remote_agent":"codex"}"#,
+            ),
+        ] {
+            // 任意标题（参数形状分支）与字面委派标题（标题分支）都必须拒绝。
+            for title in ["some tool", "mcp__codeg-mcp__delegate_to_agent"] {
+                register_delegation_tool_call_from_event(&b, &tool_call_event(id, title, Some(raw)))
+                    .await;
+            }
+        }
+        assert!(
+            b.take_pending_tool_call("parent-conn").await.is_none(),
+            "非法/缺失的远程目标不得占用 FIFO 待领槽位"
+        );
+        assert!(
+            b.take_matching_tool_call("parent-conn", &codex_key("t"))
+                .await
+                .is_none(),
+            "也不得产出 keyed 条目"
+        );
+
+        // 合法远程目标照旧登记，且 keyed 精确认领——不回归。
+        let valid = r#"{"task":"t","remote_connection_id":2,"remote_folder_id":4,"remote_agent":"codex"}"#;
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event("tc-remote", "some tool", Some(valid)),
+        )
+        .await;
+        let key = extract_delegation_match_key(Some(valid)).expect("远程目标必须能成 key");
+        assert_eq!(
+            b.take_matching_tool_call("parent-conn", &key).await.as_deref(),
+            Some("tc-remote")
+        );
+        // 本地 agent_type 调用同样不回归。
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event(
+                "tc-local",
+                "some tool",
+                Some(r#"{"agent_type":"codex","task":"local"}"#),
+            ),
+        )
+        .await;
+        assert_eq!(
+            b.take_matching_tool_call("parent-conn", &codex_key("local"))
+                .await
+                .as_deref(),
+            Some("tc-local")
+        );
+        // 标题分支：参数还在流式补全（无 task）时照旧先登记，由后续 update 回填。
+        register_delegation_tool_call_from_event(
+            &b,
+            &tool_call_event(
+                "tc-streaming",
+                "mcp__codeg-mcp__delegate_to_agent",
+                Some(r#"{"remote_connection_id":null}"#),
+            ),
+        )
+        .await;
+        assert_eq!(
+            b.take_pending_tool_call("parent-conn").await.as_deref(),
+            Some("tc-streaming"),
+            "参数尚未补全时不得提前丢弃委派调用"
         );
     }
 
