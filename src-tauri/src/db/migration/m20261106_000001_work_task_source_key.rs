@@ -84,12 +84,14 @@ impl MigrationTrait for Migration {
         // Every task triggered so far handles exactly the one item its column
         // names. Soft-deleted rows included: auto-processing's "has this item
         // ever had a task" counts them, and has to keep counting them.
+        // SQLite 迁移与版本记账并非同一事务；回填后崩溃重启时，只忽略同一来源键重复。
         manager
             .get_connection()
             .execute(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO work_task_source_key (task_id, source_key, position) \
-                 SELECT id, source_key, 0 FROM work_task WHERE source_key IS NOT NULL"
+                 SELECT id, source_key, 0 FROM work_task WHERE source_key IS NOT NULL \
+                 ON CONFLICT(task_id, source_key) DO NOTHING"
                     .to_string(),
             ))
             .await?;
@@ -179,5 +181,23 @@ mod tests {
                 (2, "github:github.com:acme/app:issue:8", 0),
             ]
         );
+
+        // 模拟回填已落盘、但迁移版本尚未记账时退出；再次启动必须能继续，且不覆盖来源行。
+        conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM seaql_migrations WHERE version = ?",
+            [super::Migration.name().into()],
+        ))
+        .await
+        .expect("simulate interrupted migration bookkeeping");
+        Migrator::up(&conn, None)
+            .await
+            .expect("retry interrupted migration");
+        let retried = work_task_source_key::Entity::find()
+            .order_by_asc(work_task_source_key::Column::TaskId)
+            .all(&conn)
+            .await
+            .expect("retried item rows");
+        assert_eq!(retried, rows, "重试不能重复插入或替换已有来源行");
     }
 }
