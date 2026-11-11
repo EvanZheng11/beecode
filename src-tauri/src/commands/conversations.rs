@@ -2871,6 +2871,11 @@ pub async fn gc_orphan_chat_dirs_core(
     conn: &sea_orm::DatabaseConnection,
     data_dir: &std::path::Path,
 ) -> Result<usize, AppCommandError> {
+    // 开发库不包含正式库的引用；两者历史上共用 chat-sessions，不能据此删目录。
+    if crate::db::database_file_name() != "codeg.db" {
+        tracing::warn!("[conversations] chat-dir GC skipped: development database");
+        return Ok(0);
+    }
     gc_orphan_chat_dirs_core_with_threshold(conn, data_dir, CHAT_SCRATCH_STALE).await
 }
 
@@ -2883,6 +2888,12 @@ pub(crate) async fn gc_orphan_chat_dirs_core_with_threshold(
     data_dir: &std::path::Path,
     stale: std::time::Duration,
 ) -> Result<usize, AppCommandError> {
+    // 正式版也不能清理开发库拥有的目录；无法确认文件不存在时同样保守跳过。
+    // 不打开另一份数据库，不移动或迁移任何用户数据。
+    if !matches!(data_dir.join("codeg-dev.db").try_exists(), Ok(false)) {
+        tracing::warn!("[conversations] chat-dir GC skipped: development database may share data");
+        return Ok(0);
+    }
     let root = data_dir.join("chat-sessions");
     if !root.is_dir() {
         return Ok(0);
@@ -4821,6 +4832,44 @@ mod tests {
     // The GC walks the real `chat-sessions` tree under a tempdir; the in-memory
     // DB only supplies the live-chat-folder path set (matching the chat tests
     // above). `Duration::ZERO` forces "always stale" so removal is deterministic.
+
+    #[tokio::test]
+    async fn gc_spares_shared_dirs_when_development_database_exists() {
+        let db = fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().unwrap();
+        std::fs::write(data_dir.path().join("codeg.db"), b"production fixture").unwrap();
+        std::fs::write(data_dir.path().join("codeg-dev.db"), b"development fixture").unwrap();
+        let chat_dir = create_chat_dir_core(data_dir.path()).unwrap();
+        let content = std::path::Path::new(&chat_dir).join("keep.txt");
+        std::fs::write(&content, b"must survive").unwrap();
+
+        let removed = gc_orphan_chat_dirs_core_with_threshold(
+            &db.conn,
+            data_dir.path(),
+            std::time::Duration::ZERO,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(removed, 0);
+        assert_eq!(std::fs::read(&content).unwrap(), b"must survive");
+    }
+
+    #[cfg(all(debug_assertions, feature = "tauri-runtime"))]
+    #[tokio::test]
+    async fn gc_development_entry_point_does_not_query_or_delete() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let chat_dir = create_chat_dir_core(data_dir.path()).unwrap();
+        let content = std::path::Path::new(&chat_dir).join("keep.txt");
+        std::fs::write(&content, b"must survive").unwrap();
+        // 无连接时只有在访问数据库之前短路，入口才能成功返回。
+        let removed =
+            gc_orphan_chat_dirs_core(&sea_orm::DatabaseConnection::Disconnected, data_dir.path())
+                .await
+                .unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(std::fs::read(&content).unwrap(), b"must survive");
+    }
 
     #[tokio::test]
     async fn gc_removes_pre_send_orphan_scratch_dir() {
