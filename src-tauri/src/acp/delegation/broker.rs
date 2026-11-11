@@ -2123,12 +2123,57 @@ impl DelegationBroker {
             return;
         };
         let mut retry = remote_run::RetryWindow::new();
+        // 读库失败单独计窗口，不与网络不可达共用；成功后各自重置。
+        let mut read_retry = remote_run::RetryWindow::new();
+        let mut read_stalled = false;
         loop {
             let row = match tracker.row(&task_id).await {
-                Ok(Some(row)) => row,
-                _ => return,
+                Ok(Some(row)) => {
+                    read_retry.reset();
+                    read_stalled = false;
+                    row
+                }
+                // 行已不存在（父会话级联删除等）：清掉 running 残留并唤醒等待者，
+                // 否则卡片会停在“运行中”。task_id 是每次委派新铸的 UUID，不会
+                // 误删同名新注册。
+                Ok(None) => {
+                    let _ = self.pending.inner.lock().await.running.remove(&task_id);
+                    self.result_notify.notify_waiters();
+                    return;
+                }
+                Err((code, _)) => {
+                    // 瞬时读库失败（busy/IO）不能退出跟踪，否则 running 永久残留。
+                    match read_retry.failure(Instant::now()) {
+                        Some(delay) => {
+                            tracing::warn!(
+                                "[remote-delegation] task_id={} read_failed code={} retry_secs={}",
+                                task_id,
+                                code,
+                                delay.as_secs()
+                            );
+                            tokio::time::sleep(delay).await;
+                        }
+                        // 窗口用尽也不放弃：远端可能仍在跑，改为固定最大退避继续
+                        // 重试，并留一次明确诊断，避免紧循环也不静默假 running。
+                        None => {
+                            if !read_stalled {
+                                read_stalled = true;
+                                tracing::warn!(
+                                    task_id = %task_id,
+                                    code = %code,
+                                    "[remote-delegation] read_failed stalled=read_persistence"
+                                );
+                            }
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                        }
+                    }
+                    continue;
+                }
             };
             if remote_store::TERMINAL_STATUSES.contains(&row.status.as_str()) {
+                // 终态可能由其他路径落库；这里只收尾内存登记并唤醒轮询。
+                let _ = self.pending.inner.lock().await.running.remove(&task_id);
+                self.result_notify.notify_waiters();
                 return;
             }
             let parent = self
@@ -4924,12 +4969,14 @@ impl DelegationBroker {
             let blocked = match class {
                 StatusClass::Running { report, .. } if report.remote.is_some() => {
                     match (&self.remote_tracker, report.task_id.as_deref()) {
+                        // 离线任务没有终态事件，靠这里的唤醒令牌让长轮询返回一次；
+                        // 报告本身仍然不带 `blocked_on`。
                         (Some(tracker), Some(id)) => tracker
                             .row(id)
                             .await
                             .ok()
                             .flatten()
-                            .and_then(|row| remote_run::report(&row).blocked_on),
+                            .and_then(|row| remote_run::wake_block(&row)),
                         _ => None,
                     }
                 }
@@ -11961,15 +12008,135 @@ mod tests {
             .unwrap();
         let report = broker.status_from_db(Some(parent), &row.task_id).await;
         assert_eq!(report.status, TaskStatus::Running);
-        assert!(report
-            .blocked_on
-            .unwrap()
-            .title
-            .unwrap()
-            .contains("remote_unreachable"));
+        // AC2：不可达不是等权限，不报 blocked_on，消息说明需重新同步或取消。
+        assert!(report.blocked_on.is_none());
+        assert!(report.message.unwrap().contains("重新同步"));
+        // 离线没有终态事件，长轮询仍必须能返回一次（否则父会话永久挂住），
+        // 且返回的报告本身不带 blocked_on。
+        broker
+            .pending
+            .inner
+            .lock()
+            .await
+            .running
+            .entry(row.task_id.clone())
+            .or_insert_with(|| RunningTask {
+                child: ChildHandle::Remote {
+                    info: remote_run::info(&row),
+                },
+                parent_connection_id: "parent-conn".into(),
+                parent_tool_use_id: row.parent_tool_use_id.clone(),
+                agent_type: AgentType::ClaudeCode,
+                assistant: None,
+                task_preview: row.task_preview.clone(),
+                task_id: row.task_id.clone(),
+                external_handle: None,
+                started_at: Instant::now(),
+                last_surfaced_block: None,
+            });
+        let polled = tokio::time::timeout(
+            Duration::from_secs(3),
+            broker.get_task_status(
+                "parent-conn",
+                Some(parent),
+                &row.task_id,
+                StatusWait::Infinite,
+            ),
+        )
+        .await
+        .expect("离线任务的长轮询不能永久挂住");
+        assert_eq!(polled.status, TaskStatus::Running);
+        assert!(polled.blocked_on.is_none(), "离线不能报成等待权限");
         broker
             .cancel_task_by_id("parent-conn", Some(parent), &row.task_id)
             .await;
+        server.abort();
+    }
+
+    /// AC1：一次读库瞬时失败不能退出跟踪，恢复后仍能落库并结算。
+    #[tokio::test]
+    async fn remote_track_survives_transient_db_read_failure() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (broker, _, db, parent, connection, mock, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("db-blip", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let start = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started("db-blip", &start).await.unwrap();
+        mock.finish.store(true, SeqCst);
+        tracker.fail_next_reads(1).await;
+        let tracking = {
+            let broker = broker.clone();
+            let permit = tracker.acquire(connection).await;
+            tokio::spawn(async move {
+                broker
+                    .track_remote("parent-conn".into(), "db-blip".into(), permit, false)
+                    .await;
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), tracking)
+            .await
+            .expect("读库瞬时失败后跟踪应继续并结束")
+            .unwrap();
+        assert_eq!(
+            tracker.row("db-blip").await.unwrap().unwrap().status,
+            "completed"
+        );
+        server.abort();
+    }
+
+    /// AC1：持续读库失败时不静默退出也不紧循环，任务保持非终态；
+    /// 恢复后跟踪继续并把批次照常落库。
+    #[tokio::test]
+    async fn remote_track_backs_off_on_sustained_db_failure() {
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("db-down", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let start = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started("db-down", &start).await.unwrap();
+        tracker.fail_next_reads(usize::MAX).await;
+        let tracking = {
+            let broker = broker.clone();
+            let permit = tracker.acquire(connection).await;
+            tokio::spawn(async move {
+                broker
+                    .track_remote("parent-conn".into(), "db-down".into(), permit, false)
+                    .await;
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!tracking.is_finished(), "持续读库失败不能静默退出跟踪");
+        // 行本身没被写坏：仍在 running，等待读库恢复。
+        assert_eq!(
+            remote_store::get_by_task_id(&db.conn, "db-down")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "running"
+        );
+        tracker.fail_next_reads(0).await;
+        // 恢复后退避中的读会成功，跟踪继续并落库 blocked（权限等待）。
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if remote_store::get_by_task_id(&db.conn, "db-down")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status
+                    == "blocked"
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("读库恢复后跟踪必须继续");
+        tracking.abort();
         server.abort();
     }
 
