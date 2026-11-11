@@ -11351,6 +11351,8 @@ async fn handle_elicitation_request(
                     .map(|id| format!("codex-async-question-{id}"))
             });
             let question_id = yielding_question_id.unwrap_or_default();
+            let withdraw_access = Arc::clone(question_access);
+            let withdraw_conn = connection_id.to_string();
             tokio::spawn(async move {
                 let answer = if let Some(registered) = native {
                     registered
@@ -11369,7 +11371,11 @@ async fn handle_elicitation_request(
                 } else if let Some(registered) = yielding {
                     tokio::select! {
                         biased;
-                        () = cancellation.cancelled() => None,
+                        () = cancellation.cancelled() => {
+                            // 异步题显式撤回即清卡；精确题号避免迟到取消清掉新题。
+                            withdraw_access.cancel_question(&withdraw_conn, &question_id).await;
+                            None
+                        },
                         answer = registered.answer_rx => Some(answer),
                     }
                 } else {
@@ -28748,6 +28754,128 @@ mod tests {
             vec!["q-1".to_string()],
             "撤回只做标记，条目留给用户作答后补送"
         );
+    }
+
+    // 使用真实 ACP 取消通知和生产注册表；不发送 TurnComplete，验证撤回立即清卡。
+    async fn codex_async_withdrawal_round_trip(replace_before_cancel: bool) {
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        use crate::acp::question::{QuestionAnswer, QuestionAnswerItem};
+        use std::time::Duration;
+
+        let manager = Arc::new(ConnectionManager::new());
+        let mut commands = manager
+            .insert_test_connection_live("async-withdraw", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let _other_commands = manager
+            .insert_test_connection_live("other-conn", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let state = manager.get_state("async-withdraw").await.unwrap();
+        state.write().await.turn_in_flight = true;
+        let specs = crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+            "header": "选择", "question": "选哪个？", "options": [{"label": "甲"}, {"label": "乙"}]
+        }]})).unwrap();
+        let other = manager.register_yielding_question("other-conn", specs.clone()).await.unwrap();
+        let mut events = state.read().await.event_stream().subscribe();
+        let ask_config = crate::acp::question::QuestionRuntimeConfig::new();
+        ask_config.set(crate::acp::question::QuestionConfig {
+            enabled: true,
+            ..Default::default()
+        }).await;
+        let access: Option<(
+            Arc<dyn crate::acp::question::SessionQuestionAccess>,
+            crate::acp::question::QuestionRuntimeConfig,
+        )> = Some((Arc::new(ConnectionManagerQuestionLookup { manager: manager.clone() }), ask_config));
+        let cancel = Arc::new(tokio::sync::Notify::new());
+        let agent_cancel = cancel.clone();
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let agent = tokio::spawn(Agent.builder().connect_with(
+            agent_end,
+            async move |cx: ConnectionTo<Client>| {
+                let request = cx.send_request_to(Client, CodexElicitationRequest(serde_json::json!({
+                    "mode": "form", "sessionId": "s1",
+                    "message": "Codex keeps working while you answer.",
+                    "requestedSchema": {"type": "object", "properties": {"q1": {
+                        "type": "string", "title": "选哪个？",
+                        "oneOf": [{"const": "甲", "title": "甲"}, {"const": "乙", "title": "乙"}]
+                    }}},
+                    "_meta": {"codex": {"delivery": "async"}}
+                })));
+                agent_cancel.notified().await;
+                request.cancel()?;
+                request.block_task().await
+            },
+        ));
+        let client = tokio::spawn({
+            let state = state.clone();
+            let perms = PendingPermissions::default();
+            Client.builder().on_receive_request(
+                async move |req: CodexElicitationRequest,
+                            responder: Responder<serde_json::Value>,
+                            cx: ConnectionTo<Agent>| {
+                    handle_elicitation_request(&cx, &access, &perms, &state,
+                        &EventEmitter::Noop, "async-withdraw", req, responder).await;
+                    Ok(())
+                },
+                on_receive_request!(),
+            ).connect_with(client_end, async |_cx: ConnectionTo<Agent>| {
+                std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+            })
+        });
+        let question_id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AcpEvent::QuestionRequest { question_id, .. } = &events.recv().await.unwrap().payload {
+                    break question_id.clone();
+                }
+            }
+        }).await.unwrap();
+        let item_id = state.read().await.pending_question.as_ref().unwrap().questions[0].id.clone();
+        let next = if replace_before_cancel {
+            Some(manager.register_yielding_question("async-withdraw", specs.clone()).await.unwrap())
+        } else {
+            None
+        };
+        cancel.notify_one();
+        let response = tokio::time::timeout(Duration::from_secs(5), agent).await.unwrap().unwrap().unwrap();
+        client.abort();
+        if next.is_none() {
+            assert_eq!(response["action"], "cancel");
+            assert!(state.read().await.pending_question.is_none(), "不等回合结束，撤回就必须清卡");
+            assert!(!manager.question_blocks_task_start("async-withdraw").await, "必须释放注册表占槽");
+            let mut resolved = false;
+            while let Ok(event) = events.try_recv() {
+                resolved |= matches!(&event.payload,
+                    AcpEvent::QuestionResolved { question_id: id } if *id == question_id);
+            }
+            assert!(resolved, "必须广播本题的清卡事件");
+        } else {
+            // 被新题替换的旧请求可以先 decline，也可以先收到 cancel；都不能清新题。
+            assert!(["cancel", "decline"].contains(&response["action"].as_str().unwrap()));
+        }
+        manager.answer_question("async-withdraw", &question_id, QuestionAnswer {
+            answers: vec![QuestionAnswerItem { question_id: item_id, labels: vec!["甲".into()] }],
+            declined: false,
+        }).await.unwrap();
+        assert!(commands.try_recv().is_err(), "旧题答案不得转为新消息");
+        assert!(state.read().await.turn_in_flight, "测试不能靠回合结束清理");
+        let next = match next {
+            Some(next) => next,
+            None => manager.register_yielding_question("async-withdraw", specs).await.unwrap(),
+        };
+        assert_eq!(state.read().await.pending_question.as_ref().unwrap().question_id, next.question_id);
+        assert_eq!(manager.get_state("other-conn").await.unwrap().read().await
+            .pending_question.as_ref().unwrap().question_id, other.question_id);
+        manager.cancel_questions_by_parent("async-withdraw").await;
+        manager.cancel_questions_by_parent("other-conn").await;
+    }
+
+    #[tokio::test]
+    async fn codex_async_withdrawal_clears_exact_question_before_turn_end() {
+        codex_async_withdrawal_round_trip(false).await;
+    }
+
+    #[tokio::test]
+    async fn codex_async_withdrawal_cannot_clear_a_new_generation() {
+        codex_async_withdrawal_round_trip(true).await;
     }
 
     #[test]
