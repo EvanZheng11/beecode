@@ -14,6 +14,7 @@
 
 import { useEffect, useSyncExternalStore } from "react"
 
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { listRemoteWorkspaceConnections } from "@/lib/remote-workspace"
 import { getShellTransport } from "@/lib/transport"
 import type {
@@ -347,13 +348,16 @@ export type RemoteMentionErrorKind = "offline" | "token" | "timeout" | "unknown"
 export function classifyRemoteMentionError(
   error: unknown
 ): RemoteMentionErrorKind {
-  const message = (
-    error instanceof Error ? error.message : String(error ?? "")
-  ).toLowerCase()
-  if (!message) return "unknown"
+  // Tauri 和 Web 都可能直接拒绝结构化对象，不能 String(error) 后丢失错误码。
+  const appError = extractAppCommandError(error)
+  if (appError?.code === "authentication_failed") return "token"
+  const message =
+    `${appError?.code ?? ""} ${toErrorMessage(error)}`.toLowerCase()
   if (
     message.includes("remote_mention_timeout") ||
-    message.includes("timeout")
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("超时")
   ) {
     return "timeout"
   }

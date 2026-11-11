@@ -5,6 +5,7 @@ import {
   REMOTE_MENTION_CACHE_TTL_MS,
   buildRemoteMentionUri,
   clearRemoteMentionCache,
+  classifyRemoteMentionError,
   listRemoteMentionFolders,
   parseRemoteMentionUri,
   isPublicHttpBaseUrl,
@@ -116,6 +117,19 @@ describe("远程引用 URI 与访问提示", () => {
         capabilities: ["run"],
       })
     ).toBe(true)
+  })
+})
+
+describe("远程列表结构化错误分类", () => {
+  it.each([
+    [{ code: "authentication_failed", message: "凭据已失效" }, "token"],
+    [{ code: "network_error", message: "连接失败" }, "offline"],
+    [{ code: "network_error", message: "远程列表请求超时" }, "timeout"],
+    [{ code: "invalid_input", message: "参数无效" }, "unknown"],
+    [new Error("remote_mention_timeout"), "timeout"],
+    ["connection refused", "offline"],
+  ] as const)("按真实拒绝体分类：%j", (error, expected) => {
+    expect(classifyRemoteMentionError(error)).toBe(expected)
   })
 })
 
