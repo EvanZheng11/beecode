@@ -438,8 +438,9 @@ impl RemoteRunTracker {
     }
 
     pub async fn cancel(&self, row: &Model, reason: &str) -> Result<bool, RemoteError> {
-        // 先占终态，迟到的 result 不能覆盖用户取消；远端是否确认单独记录。
-        // DB 服务先到者胜出，因此 HTTP 前后的结算在 broker 的终态锁下串行。
+        // 先发远端取消再落终态；迟到的 result 不能覆盖用户取消，因为 broker 在
+        // 同一 task_id 的终态锁内完成这两个动作（HTTP 与 DB 都持有该锁）。
+        // DB 侧先到者胜出，远端是否确认单独记录。
         let confirmed = match (row.connection_id, row.run_id.as_deref()) {
             (Some(connection), Some(run)) => self.cancel_run(connection, run, reason).await.is_ok(),
             (_, None) => true,
