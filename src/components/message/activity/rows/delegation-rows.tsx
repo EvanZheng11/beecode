@@ -39,7 +39,11 @@ import { previewLine } from "@/lib/activity/format"
 import type { ActivityStep, StepStatus } from "@/lib/activity/types"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
 import { parseCodegMcpToolCall } from "@/lib/codeg-mcp-tool"
-import { delegateCallTaskId, isRefusedResume } from "@/lib/delegation-card"
+import {
+  delegateCallTaskId,
+  isRefusedResume,
+  REMOTE_CANCEL_UNCONFIRMED_CODE,
+} from "@/lib/delegation-card"
 import {
   buildDelegationTaskRows,
   deriveBadge,
@@ -295,16 +299,22 @@ function RemoteDelegationActions({
   onResync: () => void
 }) {
   const tDelegation = useTranslations("Folder.chat.delegation")
-  const deleted = availability === "deleted"
+  const deleted = availability === "deleted" || remote.connectionId === null
   const unreachable = remote.status === "unreachable"
   const blocked = remote.status === "blocked"
-  const canceled = remote.status === "canceled"
+  // `canceled` 只是一个状态词：远端确认过（`error_code: "canceled"`）和没确认
+  // （`remote_cancel_unconfirmed`）都落在这个状态上，只有错误码能区分。
+  const cancelUnconfirmed =
+    remote.status === "canceled" &&
+    remote.errorCode === REMOTE_CANCEL_UNCONFIRMED_CODE
   // 跳转与重新同步都落在本机后端（打开本地窗口 / 本机协程重连），浏览器与远程
   // 窗口里没有这些能力；提示类文案仍然照常显示。
   const desktop = isLocalDesktop()
+  // 连接已删除（或从未有过 id）时没有可打开的目标：按钮仍在（说明「远端连接
+  // 已删除」），但禁用且不会调起跳转。
   const canJump = desktop && remote.conversationId != null
-  const canResync = desktop && unreachable
-  if (!unreachable && !blocked && !canceled && !canJump) return null
+  const canResync = desktop && unreachable && remote.connectionId !== null
+  if (!unreachable && !blocked && !cancelUnconfirmed && !canJump) return null
   return (
     <div
       data-testid="delegation-remote-actions"
@@ -340,7 +350,7 @@ function RemoteDelegationActions({
           ) : null}
         </>
       ) : null}
-      {canceled ? (
+      {cancelUnconfirmed ? (
         <span
           data-testid="delegation-remote-cancel-unconfirmed"
           className="shrink-0 text-muted-foreground"
@@ -418,7 +428,7 @@ function DelegationStepRow({
   const [resyncing, setResyncing] = useState(false)
 
   const handleRemoteJump = useCallback(() => {
-    if (!remote) return
+    if (!remote || remote.connectionId === null) return
     openRemoteWorkspace(remote.connectionId, {
       conversationId: remote.conversationId,
     }).catch((err) => {
@@ -429,7 +439,7 @@ function DelegationStepRow({
   }, [remote, tRemote])
 
   const handleRemoteResync = useCallback(() => {
-    if (!remote || !model.taskId) return
+    if (!remote || remote.connectionId === null || !model.taskId) return
     setResyncing(true)
     resyncRemoteDelegation(model.taskId, remote.connectionId)
       .catch((err) => {

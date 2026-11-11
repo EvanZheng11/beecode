@@ -1164,16 +1164,35 @@ describe("远程委派 meta / 报告", () => {
     ).toBeNull()
   })
 
-  it("drops a remote block without a connection id or machine name", () => {
-    const parsed = parseDelegationMeta({
-      "codeg.delegation": {
-        status: "running",
-        remote: { connection_id: 0, connection_name: "x", run_id: "r" },
-      },
-    })
-    expect(parsed?.remote).toBeNull()
+  it("drops a remote block without a machine name", () => {
     expect(
       parseRemoteTaskInfo({ connection_id: 3, connection_name: "  " })
+    ).toBeNull()
+    expect(parseRemoteTaskInfo({ connection_id: 3 })).toBeNull()
+  })
+
+  it("keeps a remote block whose connection was deleted (name, no id)", () => {
+    // 后端在连接删除后把 connection_id 置空、保留名称快照：历史卡仍要说清楚
+    // 这是哪台机器的任务，且绝不能伪造一个连接 id（0 会指向不存在的连接）。
+    const parsed = parseDelegationMeta({
+      "codeg.delegation": {
+        status: "canceled",
+        error_code: "remote_cancel_unconfirmed",
+        remote: { connection_name: "办公室 Mac mini", run_id: "run-1" },
+      },
+    })
+    expect(parsed?.remote).toMatchObject({
+      connectionId: null,
+      connectionName: "办公室 Mac mini",
+      runId: "run-1",
+      status: "canceled",
+    })
+    // 伪造的 0 也不算一个连接。
+    expect(
+      parseRemoteTaskInfo({
+        connection_id: 0,
+        connection_name: "办公室 Mac mini",
+      })?.connectionId
     ).toBeNull()
   })
 

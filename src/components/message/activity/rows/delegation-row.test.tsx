@@ -1105,11 +1105,97 @@ describe("delegation row: 远程委派卡片", () => {
   })
 
   it("取消可能没被远程确认：明确说明风险", async () => {
-    bind(remoteBinding({ status: "canceled" }))
+    bind(
+      remoteBinding({
+        status: "canceled",
+        errorCode: "remote_cancel_unconfirmed",
+      })
+    )
     await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
     expect(
       await screen.findByTestId("delegation-remote-cancel-unconfirmed")
     ).toBeInTheDocument()
+  })
+
+  it("取消已获远程确认（errorCode=canceled）：不再提示未确认", async () => {
+    bind(remoteBinding({ status: "canceled", errorCode: "canceled" }))
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(
+      screen.queryByTestId("delegation-remote-cancel-unconfirmed")
+    ).not.toBeInTheDocument()
+  })
+
+  it("冷加载 meta 的 text_preview 作为结果预览", async () => {
+    await renderRemoteRow(
+      delegation({
+        input: "{}",
+        state: "output-available",
+        meta: {
+          "codeg.delegation": {
+            status: "completed",
+            text_preview: "历史结果预览",
+            remote: REMOTE,
+          },
+        },
+      })
+    )
+    expect(screen.getByText("历史结果预览")).toBeInTheDocument()
+  })
+
+  it("实时结果预览优先于 meta 的 text_preview", async () => {
+    bind(remoteBinding({ status: "completed", resultPreview: "实时结果" }))
+    await renderRemoteRow(
+      delegation({
+        id: "pt-1",
+        input: "{}",
+        state: "output-available",
+        meta: {
+          "codeg.delegation": {
+            status: "completed",
+            text_preview: "历史结果预览",
+            remote: REMOTE,
+          },
+        },
+      })
+    )
+    expect(screen.getByText("实时结果")).toBeInTheDocument()
+    expect(screen.queryByText("历史结果预览")).not.toBeInTheDocument()
+  })
+
+  it("连接已删除的历史远程卡：保留机器名，禁用跳转与重新同步", async () => {
+    mockListRemoteConnections.mockResolvedValue([])
+    await renderRemoteRow(
+      delegation({
+        input: "{}",
+        state: "output-available",
+        meta: {
+          "codeg.delegation": {
+            // 后端在连接删除后省略 connection_id，只留名称快照。
+            status: "unreachable",
+            task_preview: "在远端跑 pnpm build",
+            task_id: "task-1",
+            remote: {
+              connection_name: "办公室 Mac mini",
+              run_id: "run-abcdef123456",
+              conversation_id: 512,
+            },
+          },
+        },
+      })
+    )
+    expect(screen.getByTestId("delegation-remote-label")).toHaveTextContent(
+      "办公室 Mac mini"
+    )
+    const jump = screen.getByTestId("delegation-remote-jump")
+    expect(jump).toBeDisabled()
+    expect(jump).toHaveTextContent("Remote connection deleted")
+    fireEvent.click(jump)
+    expect(mockOpenRemoteWorkspace).not.toHaveBeenCalled()
+    // 没有连接 id 就无处可同步，不给入口。
+    expect(
+      screen.queryByTestId("delegation-remote-resync")
+    ).not.toBeInTheDocument()
+    expect(mockResyncRemoteDelegation).not.toHaveBeenCalled()
   })
 
   it("无法连接：给出「重新同步」入口并触发接入点", async () => {

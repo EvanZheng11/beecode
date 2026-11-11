@@ -121,6 +121,9 @@ export type ParsedMeta = {
   /** 远程委派信息（冷加载来源：`inject_delegation_meta` 把 `remote_delegation`
    *  行合并进来）。存在时卡片走远程展示分支，且不再按本机子会话展开。 */
   remote: RemoteCardInfo | null
+  /** 结果预览（meta 的 `text_preview`）：在线终态写入与冷加载投影共用同一
+   *  字段。实时 `delegation_completed` 事件不带它，刷新后的卡片只能靠这里。 */
+  resultPreview: string | null
 }
 
 /**
@@ -128,7 +131,9 @@ export type ParsedMeta = {
  * 原始远程状态（`RemoteDelegationStatus`）。
  */
 export interface RemoteCardInfo {
-  connectionId: number
+  /** 保存的远程连接 id。连接被删除后后端只留名称快照、省略 id，此时为
+   *  `null`：卡片仍说明是哪台机器，但不跳转、不重新同步，也不伪造一个 id。 */
+  connectionId: number | null
   connectionName: string
   runId: string
   conversationId: number | null
@@ -164,8 +169,9 @@ function coerceConnectionId(value: unknown): number | null {
 
 /**
  * 归一一段远程任务信息（wire 为 snake_case：meta 的 `remote` 字段、事件载荷、
- * 报告里的 `remote` 都是同一形状）。连接 id 或机器名缺失时返回 `null` —— 没有
- * 机器名的「远程」卡片既无法展示也无法跳转，不如退回本机渲染。
+ * 报告里的 `remote` 都是同一形状）。机器名缺失时返回 `null` —— 没有机器名的
+ * 「远程」卡片既无法展示也无法跳转，不如退回本机渲染。连接 id 缺失不是拒绝
+ * 理由：连接被删除后后端只留名称快照，卡片仍要显示历史远程身份。
  *
  * `statusOverride` 让调用方带上同一份 meta / 报告里的状态（`remote` 对象本身
  * 只描述任务身份）。
@@ -179,7 +185,7 @@ export function parseRemoteTaskInfo(
   const connectionId = coerceConnectionId(obj.connection_id)
   const connectionName =
     typeof obj.connection_name === "string" ? obj.connection_name.trim() : ""
-  if (connectionId === null || !connectionName) return null
+  if (!connectionName) return null
   const conversationId =
     typeof obj.conversation_id === "number" &&
     Number.isInteger(obj.conversation_id)
@@ -294,6 +300,7 @@ export function parseDelegationMeta(
   const error_code = obj["error_code"]
   const task_preview = obj["task_preview"]
   const task_id = obj["task_id"]
+  const text_preview = obj["text_preview"]
   return {
     status,
     childConnectionId:
@@ -308,6 +315,8 @@ export function parseDelegationMeta(
     assistantId: coerceAssistantId(obj["assistant_id"]),
     assistantName: coerceAssistantName(obj["assistant_name"]),
     remote: parseRemoteTaskInfo(obj["remote"], remoteStatus),
+    resultPreview:
+      typeof text_preview === "string" && text_preview ? text_preview : null,
   }
 }
 
@@ -1322,6 +1331,14 @@ type ReportedRemote = {
  * (`broker.rs::NOT_RESUMABLE_CODE`). Mirror of the Rust constant.
  */
 export const NOT_RESUMABLE_CODE = "not_resumable"
+
+/**
+ * `DelegationTaskReport.error_code` 写在「远程取消未获确认」上
+ * （`remote_run.rs` 的 `cancel`）：远端 `cli_run_cancel` 失败时任务照样落
+ * `canceled`，只有这个码说明远端可能还在跑。**已确认**的取消带的是
+ * `"canceled"`，所以不能只看状态词。
+ */
+export const REMOTE_CANCEL_UNCONFIRMED_CODE = "remote_cancel_unconfirmed"
 
 /**
  * Opening words of the two `resume_delegation` messages that must stay
