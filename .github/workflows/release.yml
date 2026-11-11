@@ -470,6 +470,7 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: "0"
         run: |
           set -euo pipefail
+          pnpm --dir .. build
           cargo test --locked --features test-utils --test delegation_startup
           cargo test --locked --no-default-features --features test-utils --test delegation_startup
 

@@ -43,6 +43,11 @@ test("发布前执行桌面同步启动与服务器异步启动回归", () => {
   assert.equal(gate["continue-on-error"], undefined)
   assert.equal(gate["working-directory"], "src-tauri")
   assert.match(gate.run, /set -euo pipefail/)
+  assert.ok(
+    gate.run.indexOf("pnpm --dir .. build") >= 0 &&
+      gate.run.indexOf("pnpm --dir .. build") < gate.run.indexOf("cargo test"),
+    "编译启动测试前必须生成 Tauri frontendDist"
+  )
   assert.match(
     gate.run,
     /cargo test --locked --features test-utils --test delegation_startup/
