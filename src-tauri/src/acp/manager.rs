@@ -1078,7 +1078,8 @@ impl ConnectionManager {
     /// shell — disconnecting kills the agent CLI and the background work with
     /// it), no Claude Remote Control (it runs in the same CLI), no codeg
     /// delegation whose child is still running (ending the parent cancels it),
-    /// and no activity (no events, no commands) for at least
+    /// and no non-terminal remote delegation (ending the parent interrupts it on
+    /// the other machine), and no activity (no events, no commands) for at least
     /// `idle_timeout`. `Prompting` connections are always preserved (a turn is
     /// in flight). Returns the number of connections that were disconnected.
     pub async fn sweep_idle(&self, idle_timeout: Duration) -> usize {
@@ -1138,6 +1139,13 @@ impl ConnectionManager {
                 {
                     continue;
                 }
+                // 远程委派没有本机子连接，`delegated_children` 里永远不会有它；
+                // 但父连接被回收时 `cancel_by_parent` 会 interrupt 远端任务。
+                // 非终态（reserving/running/blocked/unreachable）期间一律保活；
+                // 终态条目仍留在表里供快照重放，所以必须按状态判断而不是看表是否为空。
+                if state.has_live_remote_delegation() {
+                    continue;
+                }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
                 if elapsed >= timeout {
                     victims.push(id.clone());
@@ -1171,6 +1179,24 @@ impl ConnectionManager {
                 return false;
             }
             let mut connections = self.connections.lock().await;
+            // 候选选出到移除之间可能又落了一条远程委派（父回合结束后才开跑，或
+            // 远程事件晚到）：远程任务没有本机子连接，父连接一断就会被
+            // `cancel_by_parent` interrupt。所以移除前按状态再复核一次。
+            // `try_read`：不在持有连接表锁时等状态锁（同上面的候选扫描），有
+            // 写入者就本轮放弃，下一次 tick 再说。
+            let live_remote = {
+                let Some(conn) = connections.get(id) else {
+                    return false;
+                };
+                match conn.state.try_read() {
+                    Ok(state) => state.has_live_remote_delegation(),
+                    // 有写入者在跑：本轮不判定，交给下一次 tick。
+                    Err(_) => true,
+                }
+            };
+            if live_remote {
+                return false;
+            }
             let removed = connections.remove(id);
             drop(questions);
             if let Some(conn) = &removed {
@@ -9488,6 +9514,96 @@ mod tests {
         mgr.connections.lock().await.remove("child");
         let n = mgr.sweep_idle(Duration::from_secs(300)).await;
         assert_eq!(n, 1, "with the child gone the idle parent is reclaimed");
+    }
+
+    /// AC1/AC2：远程委派（跨机执行）没有本机子连接，`delegated_children` 永远是
+    /// 空的，所以只靠那张表防不住 idle 回收；而回收父连接会 `cancel_by_parent`
+    /// 把远端任务 interrupt。非终态期间必须保活，结算后仍可回收。
+    #[tokio::test]
+    async fn sweep_idle_skips_a_parent_while_a_remote_delegation_runs() {
+        let remote = |status: &str| {
+            serde_json::json!({
+                "parent_connection_id": "parent",
+                "parent_tool_use_id": "tu-remote",
+                "task_id": "task-remote",
+                "status": status,
+                "remote": { "connection_id": 3, "run_id": "run-1" },
+                "task_preview": "远程跑一遍测试",
+            })
+        };
+        for status in ["reserving", "running", "blocked", "unreachable"] {
+            let mgr = ConnectionManager::new();
+            insert_fake_connection(
+                &mgr,
+                "parent",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+            let state = mgr.get_state("parent").await.unwrap();
+            state.write().await.upsert_remote_delegation(remote(status));
+            backdate_last_activity(&mgr, "parent", 600).await;
+            let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+            assert_eq!(n, 0, "{status} 是非终态，父连接不得被回收");
+            assert!(mgr.connections.lock().await.contains_key("parent"));
+
+            // 结算后终态条目仍留在表里供快照重放，但不能因此永久保活。
+            state
+                .write()
+                .await
+                .upsert_remote_delegation(serde_json::json!({
+                    "task_id": "task-remote", "status": "completed"
+                }));
+            backdate_last_activity(&mgr, "parent", 600).await;
+            let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+            assert_eq!(n, 1, "结算后的父连接必须能回收");
+        }
+    }
+
+    /// AC3：候选已经选出、还没移除时又落了一条远程委派。移除处必须按状态复核，
+    /// 否则这个父连接会被断掉，远端任务随之被 `cancel_by_parent` interrupt。
+    #[tokio::test]
+    async fn idle_claim_keeps_a_connection_that_gained_a_remote_delegation() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "race-remote",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        backdate_last_activity(&mgr, "race-remote", 600).await;
+        // 模拟 sweep 已把它选为候选之后、移除之前到达的远程事件。
+        mgr.get_state("race-remote")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .upsert_remote_delegation(serde_json::json!({
+                "task_id": "late-remote",
+                "status": "running",
+            }));
+
+        assert!(
+            !mgr.disconnect_idle_candidate("race-remote").await,
+            "候选期间新增的远程委派必须阻止本次回收"
+        );
+        assert!(mgr.connections.lock().await.contains_key("race-remote"));
+
+        // 结算后同一连接可以正常回收。
+        mgr.get_state("race-remote")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .upsert_remote_delegation(serde_json::json!({
+                "task_id": "late-remote",
+                "status": "canceled",
+            }));
+        backdate_last_activity(&mgr, "race-remote", 600).await;
+        assert_eq!(mgr.sweep_idle(Duration::from_secs(300)).await, 1);
     }
 
     #[tokio::test]

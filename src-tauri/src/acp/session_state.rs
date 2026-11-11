@@ -2036,6 +2036,22 @@ impl SessionState {
         }
     }
 
+    /// 是否还有仍在跟踪中的远程委派（跨机任务）。
+    ///
+    /// 远程任务跑在另一台机器上，本机没有子连接，`delegated_children` 永远是
+    /// 空的；但父连接一旦被 idle 回收，`cancel_by_parent` 就会 interrupt 远端
+    /// 任务。所以只要表里还有非终态条目（`reserving` / `running` / `blocked` /
+    /// `unreachable`），父连接就不能被回收。
+    ///
+    /// 必须按状态判断而不是看表是否为空：终态条目会一直留在表里供快照重放
+    /// （见 `active_remote_delegations`），否则终态会把父连接永久保活。缺
+    /// `status` 的条目无法判定，按「不保活」处理，避免畸形条目钉死连接。
+    pub fn has_live_remote_delegation(&self) -> bool {
+        self.active_remote_delegations
+            .iter()
+            .any(|e| remote_delegation_status(e).is_some_and(|s| !is_remote_terminal_status(s)))
+    }
+
     /// Whether any AIR async task is still non-terminal AND the adapter has
     /// said something about async tasks recently enough to believe it.
     ///
@@ -5876,6 +5892,43 @@ mod tests {
             "canceled"
         );
         assert!(snap.active_tool_calls.is_empty());
+    }
+
+    /// AC1/AC2：idle 保活只认非终态。远程任务没有本机子连接，`delegated_children`
+    /// 永远为空，所以这条判断就是父连接不被回收的唯一依据；终态条目会一直留在
+    /// 表里供快照重放，绝不能因此永久保活。
+    #[test]
+    fn live_remote_delegation_only_counts_non_terminal_entries() {
+        let mut s = fresh_state();
+        assert!(!s.has_live_remote_delegation(), "空表不保活");
+
+        for status in ["reserving", "running", "blocked", "unreachable"] {
+            s.upsert_remote_delegation(remote_started("t", status));
+            assert!(
+                s.has_live_remote_delegation(),
+                "{status} 是非终态，必须保活父连接"
+            );
+            s.upsert_remote_delegation(serde_json::json!({
+                "task_id": "t", "status": "completed"
+            }));
+            assert!(
+                !s.has_live_remote_delegation(),
+                "同一 task_id 结算后不再保活"
+            );
+        }
+
+        for status in ["completed", "failed", "canceled"] {
+            s.upsert_remote_delegation(remote_started("terminal", status));
+            assert!(!s.has_live_remote_delegation(), "{status} 不得永久保活");
+        }
+
+        // 终态与运行中并存时，运行中的那条仍然保活。
+        s.upsert_remote_delegation(remote_started("still-running", "running"));
+        assert!(s.has_live_remote_delegation());
+        // 缺 status 的畸形条目无法判定，按不保活处理，避免钉死连接。
+        let mut odd = fresh_state();
+        odd.upsert_remote_delegation(serde_json::json!({ "task_id": "odd" }));
+        assert!(!odd.has_live_remote_delegation());
     }
 
     #[test]
