@@ -144,11 +144,11 @@ tauri-build = { version = "2", features = [], optional = true }
 # app's window builders sets one. Turn that off by giving them
 # `.devtools(cfg!(debug_assertions))`, not by taking this feature away — the
 # browser tabs need it.
-tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "devtools"], optional = true }
+tauri = { version = "2.12", features = ["tray-icon", "devtools"], optional = true }
 # Only for its `wry` re-export (version-locked to the runtime tauri uses).
-tauri-runtime-wry = { version = "2.11", optional = true, default-features = false }
+tauri-runtime-wry = { version = "2.12", optional = true, default-features = false }
 tauri-plugin-opener = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "=2.6.0", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 async-trait = "0.1"
 # `codeg-cli`'s argument parser (feature `cli-bin`).
 clap = { version = "4.5", features = ["derive", "env"], optional = true }
@@ -156,6 +156,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 仅启用进程信息，不采集磁盘、网络、传感器或用户信息。
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+# 仅启用进程信息，不采集磁盘、网络、传感器或用户信息。
 # The JSON Schema a `codeg-cli --output-schema` run's result is checked against
 # (drafts 4 to 2020-12). Rather than `jsonschema`: it brings three small crates
 # this tree lacks, where `jsonschema` brings a dozen and turns on serde_json's
@@ -260,7 +261,7 @@ ring = "0.17"
 aes-gcm = { version = "0.10", features = ["stream"] }
 argon2 = "0.5"
 tempfile = "3"
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 semver = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "registry", "std"] }
@@ -268,9 +269,9 @@ tracing-appender = "0.2"
 jsonc-parser = { version = "0.34.0", features = ["cst", "serde"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-window-state = { version = "=2.4.1", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2.14", optional = true }
-tauri-plugin-process = { version = "=2.3.1", optional = true }
+tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }

@@ -12,7 +12,6 @@
   },
   "app": {
     "windows": [],
-    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }
@@ -44,13 +43,21 @@
     "linux": {
       "deb": {
         "desktopTemplate": "./linux/main.desktop",
-        "conflicts": ["codeg"],
-        "replaces": ["codeg"]
+        "conflicts": [
+          "codeg"
+        ],
+        "replaces": [
+          "codeg"
+        ]
       },
       "rpm": {
         "desktopTemplate": "./linux/main.desktop",
-        "obsoletes": ["codeg"],
-        "provides": ["codeg"]
+        "obsoletes": [
+          "codeg"
+        ],
+        "provides": [
+          "codeg"
+        ]
       }
     },
     "macOS": {
@@ -60,7 +67,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["codeg"]
+        "schemes": [
+          "codeg"
+        ]
       }
     },
     "updater": {
