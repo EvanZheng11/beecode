@@ -315,7 +315,7 @@ pub async fn notify_delegation_completion(
 pub async fn remote_delegation_resync(
     db: tauri::State<'_, crate::db::AppDatabase>,
     broker: tauri::State<'_, Arc<DelegationBroker>>,
-    manager: tauri::State<'_, crate::acp::ConnectionManager>,
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
     task_id: String,
     connection_id: Option<i32>,
 ) -> Result<crate::acp::delegation::types::DelegationTaskReport, AppCommandError> {
