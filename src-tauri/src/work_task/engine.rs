@@ -4021,7 +4021,7 @@ impl TaskEngine {
                 .await;
             if let Err(e) = &result {
                 engine
-                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
+                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None, false)
                     .await;
             }
             // Settle first, THEN release, and only then let the caller go: a
@@ -4154,11 +4154,17 @@ impl TaskEngine {
         }
     }
 
+    /// `drop_closing_list` 只给「首次交付在本地确定什么都没发布」的失败用：那次
+    /// 交付一开始就把组合任务的 `pr_closes` 钉进了快照，而它什么都没发布，于是
+    /// 这张清单必须放开，否则用户再也换不了（见 `closing_list`）。其它失败一律传
+    /// `false`：forge 上可能已经有一个描述写着那份清单的 PR，回滚它会让下一次交付
+    /// 再开一个 `Closes` 不一样的。
     async fn back_to_review(
         &self,
         task_id: i32,
         error: String,
         conflict_files: Option<Vec<String>>,
+        drop_closing_list: bool,
     ) {
         let _ = work_task_service::merge_back_to_review(
             &self.db.conn,
@@ -4166,6 +4172,7 @@ impl TaskEngine {
             None,
             Some(error),
             conflict_files,
+            drop_closing_list,
         )
         .await;
         self.emit_upsert(task_id);
@@ -4176,17 +4183,15 @@ impl TaskEngine {
     /// decides, and by then the row may already belong to a delivery someone
     /// started since — `status = merging` alone would let the stale pass bounce
     /// the live one.
-    async fn bounce_delivery(
-        &self,
-        task: &crate::db::entities::work_task::Model,
-        error: String,
-    ) {
+    async fn bounce_delivery(&self, task: &crate::db::entities::work_task::Model, error: String) {
         let _ = work_task_service::merge_back_to_review(
             &self.db.conn,
             task.id,
             Some(task.run_seq),
             Some(error),
             None,
+            // 恢复一条 `merging` 行时 PR 可能已经建出来了，清单保持不动。
+            false,
         )
         .await;
         self.emit_upsert(task.id);
@@ -4680,19 +4685,26 @@ impl TaskEngine {
                 source.pull_request_body(task_id),
             )
         };
-        let attempt = match into {
+        // 第一个值 = 这次尝试之后 forge 上是否可能已经有 PR：走到过 `create_pull`
+        // 就有（哪怕响应丢了、结算失败），采纳一个现成的 PR、或推回一个已有的 PR
+        // 更是如此。那种情况下这份 `pr_closes` 就再也不能回滚。
+        let (may_have_published, attempt) = match into {
             None => open().await,
             Some(target) => match self
                 .push_into_pull(task_id, run_seq, &ctx, target, wt_path, &expected_head)
                 .await
             {
-                Ok(IntoPull::Delivered(pr)) => Ok(pr),
+                // 推回一个已经存在的 PR：它本来就在那儿。
+                Ok(IntoPull::Delivered(pr)) => (true, Ok(pr)),
                 Ok(IntoPull::NoLongerOpen(pr)) => match source {
-                    DeliverySource::Pull(_) => Err(format!(
-                        "{} #{} is no longer open — reopen it, then deliver",
-                        target.provider.change_noun(),
-                        pr.number
-                    )),
+                    DeliverySource::Pull(_) => (
+                        true,
+                        Err(format!(
+                            "{} #{} is no longer open — reopen it, then deliver",
+                            target.provider.change_noun(),
+                            pr.number
+                        )),
+                    ),
                     // The pull request an earlier round opened was closed or
                     // merged since, and this round carries commits it does not
                     // have. They go in a new one — exactly what a first
@@ -4700,18 +4712,33 @@ impl TaskEngine {
                     // guard against an empty one the first delivery had.
                     _ => match self.has_landable_changes(task, wt_path).await {
                         Ok(true) => open().await,
-                        Ok(false) => Err(format!(
-                            "{} #{} is no longer open, and this task has nothing of its own to \
-                             put in a new one — complete it instead",
-                            target.provider.change_noun(),
-                            pr.number
-                        )),
-                        Err(e) => Err(e),
+                        Ok(false) => (
+                            true,
+                            Err(format!(
+                                "{} #{} is no longer open, and this task has nothing of its \
+                                 own to put in a new one — complete it instead",
+                                target.provider.change_noun(),
+                                pr.number
+                            )),
+                        ),
+                        Err(e) => (true, Err(e)),
                     },
                 },
-                Err(e) => Err(e),
+                Err(e) => (true, Err(e)),
             },
         };
+        // 只有「这次交付刚刚钉下清单，而它在本地确定什么都没发布」才把清单还回去。
+        // `pin_source_meta` 为 `None` 说明清单不是这一次写的（早先一轮交付或崩溃
+        // 前的写入留下的），它背后可能已经有一个 PR——那不是这次失败该撤销的。
+        // 同理，这一行上已经记着交付过的 PR（旧版本可能没记下编号）时也不放开：
+        // 那份描述里可能写着另一份清单。
+        let delivered_before = task
+            .source_meta
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+            .is_some_and(|meta| meta.result_pr.is_some());
+        let drop_closing_list =
+            pin_source_meta.is_some() && !may_have_published && !delivered_before;
         match attempt {
             Ok(pr) => match self
                 .settle_delivery(task_id, source, run_seq, &pr, state.keep_in_review)
@@ -4719,12 +4746,14 @@ impl TaskEngine {
             {
                 Ok(url) => Ok(url),
                 Err(e) => {
-                    self.back_to_review(task_id, e.clone(), None).await;
+                    self.back_to_review(task_id, e.clone(), None, drop_closing_list)
+                        .await;
                     Err(e)
                 }
             },
             Err(e) => {
-                self.back_to_review(task_id, e.clone(), None).await;
+                self.back_to_review(task_id, e.clone(), None, drop_closing_list)
+                    .await;
                 Err(e)
             }
         }
@@ -4734,6 +4763,10 @@ impl TaskEngine {
     /// carries it, in `ctx`'s repository — an issue's task's first delivery,
     /// a local task's, and either one's once the pull request an earlier
     /// round opened is gone.
+    ///
+    /// 返回值第一个分量表示这次尝试之后 forge 上是否可能已经有 PR：走到过
+    /// `create_pull` 就算（哪怕本进程没拿到答复），采纳一个现成的 PR 也算。调用方
+    /// 据此决定能不能回滚本次交付钉下的 `pr_closes`（见 [`closing_list`]）。
     #[allow(clippy::too_many_arguments)]
     async fn push_and_open(
         &self,
@@ -4745,22 +4778,29 @@ impl TaskEngine {
         title: &str,
         draft: bool,
         body: String,
-    ) -> Result<ForgePr, String> {
+    ) -> (bool, Result<ForgePr, String>) {
         // Fast-forward push of the same commits is a no-op, so a retry after a
         // later step failed costs nothing and changes nothing. What is pushed
         // is the snapshot, not the branch (see `push_refspec`).
-        self.forge
+        if let Err(e) = self
+            .forge
             .push_branch(ctx, wt_path, ctx.owner_repo, expected_head, work_branch)
             .await
-            .map_err(|e| format!("could not push the task branch: {e}"))?;
+        {
+            return (false, Err(format!("could not push the task branch: {e}")));
+        }
 
         // Look before creating: the previous attempt may have opened the pull
         // request and died on the way to settling it.
-        let existing = self
-            .forge
-            .find_pulls(ctx, work_branch)
-            .await
-            .map_err(|e| format!("could not check for an existing pull request: {e}"))?;
+        let existing = match self.forge.find_pulls(ctx, work_branch).await {
+            Ok(existing) => existing,
+            Err(e) => {
+                return (
+                    false,
+                    Err(format!("could not check for an existing pull request: {e}")),
+                )
+            }
+        };
         match adopt_pull_request(
             existing,
             expected_head,
@@ -4768,23 +4808,33 @@ impl TaskEngine {
             base_branch,
             ctx.owner_repo,
         ) {
-            PrAdoption::Merged(pr) | PrAdoption::Open(pr) => Ok(pr),
-            PrAdoption::ClosedUnmerged(pr) => Err(format!(
-                "pull request #{} for this branch was closed without merging — reopen it, or \
-                 send the task back for another round to deliver a new commit",
-                pr.number
-            )),
+            // 采纳：PR 已经在那儿，描述里写的就是这份清单。
+            PrAdoption::Merged(pr) | PrAdoption::Open(pr) => (true, Ok(pr)),
+            PrAdoption::ClosedUnmerged(pr) => (
+                true,
+                Err(format!(
+                    "pull request #{} for this branch was closed without merging — reopen it, \
+                     or send the task back for another round to deliver a new commit",
+                    pr.number
+                )),
+            ),
             // Someone moved the branch out from under us. Creating is not an
             // option (GitHub allows one open pull request per head/base pair),
             // and adopting would settle this task against a commit it never
             // produced.
-            PrAdoption::StaleHead(pr) => Err(format!(
-                "pull request #{} already covers this branch but points at a different commit — \
-                 someone else pushed to it. Check that branch before delivering again",
-                pr.number
-            )),
+            PrAdoption::StaleHead(pr) => (
+                true,
+                Err(format!(
+                    "pull request #{} already covers this branch but points at a different \
+                     commit — someone else pushed to it. Check that branch before delivering \
+                     again",
+                    pr.number
+                )),
+            ),
             PrAdoption::NoMatch => {
-                let pr = self
+                // 从这里起 PR 可能真的建出来了：请求发出后失败（超时、响应丢失、
+                // 服务端 5xx）都算「结果未知」，不能再当成「什么都没发布」。
+                let created = self
                     .forge
                     .create_pull(
                         ctx,
@@ -4796,8 +4846,11 @@ impl TaskEngine {
                             draft,
                         },
                     )
-                    .await
-                    .map_err(|e| format!("could not open the pull request: {e}"))?;
+                    .await;
+                let pr = match created {
+                    Ok(pr) => pr,
+                    Err(e) => return (true, Err(format!("could not open the pull request: {e}"))),
+                };
                 // The push published exactly `expected_head`, so a pull request
                 // opened at anything else means someone pushed to the branch in
                 // the instant between — work this task must not claim. A forge
@@ -4805,14 +4858,17 @@ impl TaskEngine {
                 if !pr.head_sha.trim().is_empty()
                     && !pr.head_sha.eq_ignore_ascii_case(expected_head)
                 {
-                    return Err(format!(
-                        "pull request #{} was opened, but at a commit this task did not push — \
-                         someone pushed to '{work_branch}' meanwhile. Check that branch before \
-                         delivering again",
-                        pr.number
-                    ));
+                    return (
+                        true,
+                        Err(format!(
+                            "pull request #{} was opened, but at a commit this task did not \
+                             push — someone pushed to '{work_branch}' meanwhile. Check that \
+                             branch before delivering again",
+                            pr.number
+                        )),
+                    );
                 }
-                Ok(pr)
+                (true, Ok(pr))
             }
         }
     }
@@ -11597,9 +11653,11 @@ mod tests {
         remote_base: Mutex<Option<String>>,
         /// `(issue number, comment body)` of every write-back attempt.
         comments: Mutex<Vec<(ForgeItemKind, i64, String)>>,
-        push_error: Option<String>,
-        find_error: Option<String>,
-        create_error: Option<String>,
+        /// 各步的失败注入，都是可清空的：测试要先证明这一次失败，再清掉它证明重试
+        /// 真的走得通——永久失败的假 forge 只能证明「每次都不行」。
+        push_error: Mutex<Option<String>>,
+        find_error: Mutex<Option<String>>,
+        create_error: Mutex<Option<String>>,
         comment_error: Option<String>,
         get_pull_error: Option<String>,
         /// What the pull request looks like once the push has happened — how
@@ -11625,6 +11683,12 @@ mod tests {
         /// The head a newly opened pull request reports, when it is not the
         /// commit last pushed to its branch — someone else pushed in between.
         create_head: Option<String>,
+        /// 建 PR 的请求已经送到 forge、但答复没回来（超时、连接断掉、5xx）——对
+        /// codeg 来说结果未知。模拟成「PR 真的建出来了，但调用方拿到 Err」。
+        create_lost: bool,
+        /// 与 `create_lost` 一起用：PR 建出来之前先停在这里，让测试把行改成
+        /// 「已经不是这一次交付了」，再放行——也就是「PR 建成了，但结算没落库」。
+        create_gate: Option<Arc<Notify>>,
     }
 
     #[async_trait::async_trait]
@@ -11637,8 +11701,8 @@ mod tests {
             commit: &str,
             remote_branch: &str,
         ) -> Result<(), String> {
-            if let Some(e) = &self.push_error {
-                return Err(e.clone());
+            if let Some(e) = self.push_error.lock().await.clone() {
+                return Err(e);
             }
             if let Some(name) = &self.dirty_on_push {
                 std::fs::write(std::path::Path::new(worktree_path).join(name), "scratch\n")
@@ -11666,8 +11730,8 @@ mod tests {
             _ctx: &DeliveryCtx<'_>,
             _head_branch: &str,
         ) -> Result<Vec<ForgePr>, String> {
-            if let Some(e) = &self.find_error {
-                return Err(e.clone());
+            if let Some(e) = self.find_error.lock().await.clone() {
+                return Err(e);
             }
             Ok(self.existing.lock().await.clone())
         }
@@ -11740,8 +11804,11 @@ mod tests {
             _ctx: &DeliveryCtx<'_>,
             req: &NewPullRequest<'_>,
         ) -> Result<ForgePr, String> {
-            if let Some(e) = &self.create_error {
-                return Err(e.clone());
+            if let Some(e) = self.create_error.lock().await.clone() {
+                return Err(e);
+            }
+            if let Some(gate) = &self.create_gate {
+                gate.notified().await;
             }
             let mut created = self.created.lock().await;
             created.push((
@@ -11767,7 +11834,7 @@ mod tests {
                     .map(|(_, commit, _)| commit.clone())
                     .unwrap_or_default(),
             };
-            Ok(ForgePr {
+            let pr = ForgePr {
                 number,
                 html_url: format!("https://github.test/acme/app/pull/{number}"),
                 state: "open".to_string(),
@@ -11776,7 +11843,13 @@ mod tests {
                 head_ref: req.head.to_string(),
                 head_repo: "acme/app".to_string(),
                 base_ref: req.base.to_string(),
-            })
+            };
+            // 建出来了，但答复在路上丢了：`created`/`bodies` 已经记下它，调用方
+            // 只拿到 Err。
+            if self.create_lost {
+                return Err("connection reset while opening the pull request".to_string());
+            }
+            Ok(pr)
         }
     }
 
@@ -12141,15 +12214,24 @@ mod tests {
     async fn any_failed_step_returns_the_task_to_review() {
         let cases = [
             (
-                FakeForge { push_error: Some("remote rejected".into()), ..Default::default() },
+                FakeForge {
+                    push_error: Mutex::new(Some("remote rejected".into())),
+                    ..Default::default()
+                },
                 "could not push",
             ),
             (
-                FakeForge { find_error: Some("502 bad gateway".into()), ..Default::default() },
+                FakeForge {
+                    find_error: Mutex::new(Some("502 bad gateway".into())),
+                    ..Default::default()
+                },
                 "could not check for an existing pull request",
             ),
             (
-                FakeForge { create_error: Some("422 no commits".into()), ..Default::default() },
+                FakeForge {
+                    create_error: Mutex::new(Some("422 no commits".into())),
+                    ..Default::default()
+                },
                 "could not open the pull request",
             ),
         ];
@@ -14038,6 +14120,334 @@ mod tests {
         );
     }
 
+    /// 首次交付在本地明确没发出创建 PR 请求就失败了（push 被拒、连「有没有现成
+    /// PR」都没问到）——那一次什么都没发布，它在开始钉下的 `pr_closes` 必须放开：
+    /// 否则用户再也换不了清单，只能一直看到「清单已在首次交付时固定，去 forge 改
+    /// 描述」，而根本没有 PR 可改。
+    ///
+    /// 每个用例失败一次后都把注入的错误清掉，再用另一个清单重试：证明放开之后重试
+    /// 真的走得通，而不是「每次都会失败」的假 forge 恰好也通过了断言。
+    #[tokio::test]
+    async fn a_first_delivery_that_published_nothing_releases_its_closing_list() {
+        for expected in [
+            "could not push",
+            "could not check for an existing pull request",
+        ] {
+            // 服务层的一个事务提交之后，写锁要真被放掉，否则下一张临时库的首个写会
+            // 撞上 `database is locked`——这是内存库连接池的脾气，不是产品行为。
+            tokio::task::yield_now().await;
+            let f = delivery_fixture(FakeForge::default()).await;
+            as_issues_task(&f).await;
+            let inject = if expected == "could not push" {
+                &f.forge.push_error
+            } else {
+                &f.forge.find_error
+            };
+            *inject.lock().await = Some("injected once".into());
+
+            let err = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+                .await
+                .expect_err("nothing was published");
+            assert!(err.contains(expected), "got {err}");
+            assert!(
+                f.forge.created.lock().await.is_empty(),
+                "no pull request: {expected}"
+            );
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review, "{expected}");
+            assert_eq!(
+                source_record(&task).pr_closes,
+                None,
+                "nothing was published, so nothing is fixed: {expected}"
+            );
+            assert_eq!(
+                source_record(&task).items.len(),
+                3,
+                "the rest of the snapshot stays"
+            );
+
+            // 故障修好，换个清单重试就走得通。
+            *inject.lock().await = None;
+            f.engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]))
+                .await
+                .unwrap_or_else(|e| panic!("retry after {expected}: {e}"));
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Done, "{expected}");
+            assert_eq!(source_record(&task).pr_closes, Some(vec![9]), "{expected}");
+        }
+    }
+
+    /// 已经可能发布了的失败不碰清单：建 PR 的请求发出去了（哪怕答复丢了、或者被当场
+    /// 拒掉）、采纳了一个现成的 PR、或者清单根本不是这一次钉下的。那些情况下 forge
+    /// 上可能真有一个描述写着这份清单的 PR，回滚 pin 就会让下一次交付开出一个
+    /// `Closes` 不一样的第二个 PR。
+    #[tokio::test]
+    async fn a_delivery_that_may_have_published_keeps_its_closing_list() {
+        // 建 PR 的请求送到了 forge，答复没回来。
+        let f = delivery_fixture(FakeForge {
+            create_lost: true,
+            ..FakeForge::default()
+        })
+        .await;
+        as_issues_task(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .await
+            .expect_err("the answer never came back");
+        assert!(err.contains("could not open the pull request"), "{err}");
+        assert_eq!(
+            f.forge.created.lock().await.len(),
+            1,
+            "the pull request IS there — only the answer was lost"
+        );
+        assert_kept(&f, "a lost answer").await;
+
+        // 建 PR 的请求被当场拒掉：它也可能已经落地了，同样算结果未知。
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        *f.forge.create_error.lock().await = Some("422 no commits".into());
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .await
+            .expect_err("the forge refused");
+        assert!(err.contains("could not open the pull request"), "{err}");
+        assert_kept(&f, "a refused create").await;
+
+        // 采纳一个已经存在的 PR：它本来就在那儿。
+        for label in ["open", "closed", "another head"] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            as_issues_task(&f).await;
+            let mut pr = opened_pull(&f.head);
+            match label {
+                "open" => {}
+                "closed" => pr.state = "closed".into(),
+                _ => pr.head_sha = "0".repeat(40),
+            }
+            f.forge.existing.lock().await.push(pr);
+            let _ = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![7]))
+                .await;
+            assert_eq!(
+                source_record(&row(&f.engine, f.task_id).await).pr_closes,
+                Some(vec![7]),
+                "a pull request already exists: {label}"
+            );
+        }
+
+        // 清单不是这一次钉下的，就不归这次失败处置：
+        // - 早先那一轮已经钉过清单（`closing_list` 这次返回的 pin 是 `None`）；
+        // - 这一行早先交付过（旧版本只留 URL、没留编号），forge 上可能真有一个描述
+        //   写着别的清单的 PR，而这一次会当首次交付新钉一份。
+        for pinned_earlier in [true, false] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            as_issues_task(&f).await;
+            {
+                use sea_orm::{IntoActiveModel, Set};
+                let task = row(&f.engine, f.task_id).await;
+                let mut meta = source_record(&task);
+                if pinned_earlier {
+                    meta.pr_closes = Some(vec![7]);
+                } else {
+                    meta.result_pr = Some("https://github.test/acme/app/pull/42".into());
+                }
+                let mut active = task.into_active_model();
+                active.source_meta = Set(Some(serde_json::to_string(&meta).expect("meta json")));
+                active
+                    .update(&f.engine.db.conn)
+                    .await
+                    .expect("what an earlier delivery left");
+            }
+            *f.forge.push_error.lock().await = Some("remote rejected".into());
+            let err = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, None)
+                .await
+                .expect_err("the push was refused");
+            assert!(err.contains("could not push"), "{err}");
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review);
+            let expected = if pinned_earlier {
+                Some(vec![7])
+            } else {
+                Some(vec![7, 9, 12])
+            };
+            assert_eq!(
+                source_record(&task).pr_closes,
+                expected,
+                "not this failure's to release (pinned earlier: {pinned_earlier})"
+            );
+        }
+
+        // PR 建成、结算却没落库（这一代已经不是当前的了）。
+        let gate = Arc::new(Notify::new());
+        let f = delivery_fixture(FakeForge {
+            create_gate: Some(gate.clone()),
+            ..FakeForge::default()
+        })
+        .await;
+        as_issues_task(&f).await;
+        let delivery = tokio::spawn({
+            let engine = f.engine.clone();
+            let task_id = f.task_id;
+            async move {
+                engine
+                    .deliver_pr_closing(task_id, None, false, false, true, Some(vec![7]))
+                    .await
+            }
+        });
+        wait_for("the create request", || {
+            let engine = f.engine.clone();
+            let task_id = f.task_id;
+            async move { row(&engine, task_id).await.status == WorkTaskStatus::Merging }
+        })
+        .await;
+        // 让这一代过期：结算是 CAS 在 run_seq 上的，旧一代就落不了库——正是「PR
+        // 建成了，但这次交付已经不是当前的那一代」。
+        {
+            use sea_orm::Set;
+            let mut newer = row(&f.engine, f.task_id).await.into_active_model();
+            newer.run_seq = Set(3);
+            newer
+                .update(&f.engine.db.conn)
+                .await
+                .expect("a newer generation takes the row");
+        }
+        gate.notify_one();
+        let err = delivery
+            .await
+            .expect("task joined")
+            .expect_err("settle refused");
+        assert!(err.contains("moved on"), "{err}");
+        assert_eq!(f.forge.created.lock().await.len(), 1);
+        assert_kept(&f, "a settle that lost its generation").await;
+    }
+
+    /// 失败之后清单还在原处，任务退回了 review。
+    async fn assert_kept(f: &Delivery, label: &str) {
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review, "{label}");
+        assert_eq!(
+            source_record(&task).pr_closes,
+            Some(vec![7]),
+            "a pull request may carry this list — it stays: {label}"
+        );
+    }
+
+    /// 清单的放回与不动是一回事的两面，在服务层单独验一遍：快照里没有清单（不是
+    /// 组合任务、或已经交付过一轮）就一个字节都不改，读不懂的快照也不覆盖；放开时
+    /// 只删 `pr_closes`，别的字段（包括这个版本不认识的）一个都不丢。
+    #[tokio::test]
+    async fn only_a_pinned_closing_list_is_released_on_the_way_back() {
+        use sea_orm::{ActiveModelTrait, Set};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/tmp/forge-release").await;
+        let conn = &db.conn;
+        let meta = |closes: Option<Vec<i64>>| {
+            let mut value: crate::forge::ForgeSourceMeta =
+                serde_json::from_value(serde_json::json!({
+                    "provider": "github",
+                    "server_host": "github.com",
+                    "api_base": "https://api.github.com",
+                    "account_id": "acc-1",
+                    "owner_repo": "acme/app",
+                    "number": 7,
+                    "url": "https://github.com/acme/app/issues/7",
+                    "title": "t",
+                }))
+                .expect("meta");
+            value.pr_closes = closes;
+            serde_json::to_string(&value).expect("json")
+        };
+        let task = |source_meta: String| async move {
+            let now = chrono::Utc::now();
+            crate::db::entities::work_task::ActiveModel {
+                folder_id: Set(folder),
+                title: Set("t".into()),
+                config: Set("{}".into()),
+                status: Set(WorkTaskStatus::Merging),
+                run_seq: Set(3),
+                source_meta: Set(Some(source_meta)),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(conn)
+            .await
+            .expect("task")
+            .id
+        };
+
+        // 带一个这个版本不认识的字段：放开清单不能把它抹掉。
+        let pinned = {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&meta(Some(vec![7]))).expect("meta json");
+            value["from_a_newer_build"] = serde_json::json!({ "keep": true });
+            value.to_string()
+        };
+        let id = task(pinned).await;
+        assert!(work_task_service::merge_back_to_review(
+            conn,
+            id,
+            Some(3),
+            Some("nope".into()),
+            None,
+            true
+        )
+        .await
+        .expect("bounce"));
+        let bounced = work_task_service::get_model(conn, id).await.expect("row");
+        let released: serde_json::Value =
+            serde_json::from_str(bounced.source_meta.as_deref().expect("meta")).expect("json");
+        assert_eq!(released["pr_closes"], serde_json::Value::Null, "released");
+        assert_eq!(
+            released["from_a_newer_build"],
+            serde_json::json!({ "keep": true }),
+            "an unknown field survives the release"
+        );
+        assert_eq!(
+            released["number"],
+            serde_json::json!(7),
+            "and so does the rest"
+        );
+
+        // 没有清单：原样写回。
+        let held = meta(None);
+        let id = task(held.clone()).await;
+        assert!(work_task_service::merge_back_to_review(
+            conn,
+            id,
+            Some(3),
+            Some("nope".into()),
+            None,
+            true
+        )
+        .await
+        .expect("bounce"));
+        let bounced = work_task_service::get_model(conn, id).await.expect("row");
+        assert_eq!(bounced.source_meta.as_deref(), Some(held.as_str()));
+
+        // 读不懂的快照：不覆盖。
+        let id = task("not json".into()).await;
+        assert!(work_task_service::merge_back_to_review(
+            conn,
+            id,
+            Some(3),
+            Some("nope".into()),
+            None,
+            true
+        )
+        .await
+        .expect("bounce"));
+        let bounced = work_task_service::get_model(conn, id).await.expect("row");
+        assert_eq!(bounced.source_meta.as_deref(), Some("not json"));
+    }
+
     /// Every issue of the task hears how it ended, in its own thread and its
     /// own timeline entry, and each comment names the others — numbers only,
     /// and nothing about which of them the pull request closes.
@@ -15505,7 +15915,7 @@ mod tests {
     #[tokio::test]
     async fn a_push_back_with_nothing_new_is_refused_for_completing() {
         let forge = FakeForge {
-            push_error: Some("403: permission denied".into()),
+            push_error: Mutex::new(Some("403: permission denied".into())),
             ..FakeForge::default()
         };
         let f = delivery_fixture(forge).await;
@@ -15550,7 +15960,7 @@ mod tests {
     #[tokio::test]
     async fn a_delivery_whose_push_already_landed_settles_without_pushing_again() {
         let forge = FakeForge {
-            push_error: Some("403: permission denied".into()),
+            push_error: Mutex::new(Some("403: permission denied".into())),
             ..FakeForge::default()
         };
         let f = delivery_fixture(forge).await;
