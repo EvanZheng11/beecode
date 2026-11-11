@@ -48721,10 +48721,14 @@ mod tests {
             "no straggler reopened a turn: {:#?}",
             grok.seen
         );
+        // 两次撤题各自必要，不是重复取消：Stop 在把 `session/cancel` 发出去之前
+        // 先撤一次（迟到作答不能复活刚停的回合），`close_grok_agent_turn` 关掉
+        // Grok 自开的回合后再撤一次并顺带答掉它的计划审批。第一次已把注册表清空，
+        // 第二次在常规路径上是空操作，只兜住这段窗口里新到的问题。
         assert_eq!(
             grok.reclaimed_asks(),
-            (1, 1),
-            "a question or plan approval the stopped turn was parked on is answered"
+            (2, 1),
+            "Stop 边界撤一次题，关掉的回合再撤一次并答掉计划审批"
         );
         let s = grok.state.read().await;
         assert_eq!(s.status, ConnectionStatus::Connected);
