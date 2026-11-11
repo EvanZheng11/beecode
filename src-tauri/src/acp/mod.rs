@@ -50,6 +50,7 @@ pub mod prompt_hydration;
 pub mod project_trust;
 pub mod provider_models;
 pub mod question;
+pub(crate) mod qoder;
 pub mod registry;
 pub mod remote_registry;
 pub mod remote_snapshot;

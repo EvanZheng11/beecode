@@ -121,6 +121,9 @@ export interface SnapshotPatch {
   /** 在飞的远程委派，同样只在 attach 处消费于重放种子（`delegation-seed`）。
    *  缺失（老后端）按 `[]`。 */
   activeRemoteDelegations: ActiveRemoteDelegationState[]
+  /** Child connection ids of every running codeg delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -194,6 +197,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
     activeRemoteDelegations: wire.active_remote_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 

@@ -471,6 +471,13 @@ pub struct ConnectionManager {
     /// no cap, no cumulative growth; entries are removed on answer / cancel /
     /// connection teardown.
     pending_questions: Arc<Mutex<HashMap<String, PendingQuestionEntry>>>,
+    /// Held across a question's registration AND its publication. A newer
+    /// question may withdraw a yielding one (codex's async question), so two
+    /// registrations on one connection can overlap; without this, the older
+    /// one's `QuestionRequest` could be published after the newer one's and
+    /// overwrite its card, and its drained-entry compensation would then clear
+    /// the card altogether, leaving the newer question waiting unseen.
+    question_registration: Arc<Mutex<()>>,
     /// In-flight Grok `exit_plan_mode` approvals awaiting the user's decision,
     /// keyed by the globally-unique `approval_id`. The connection's ext handler
     /// parks on the receiver; the answer / cancel path resolves (and removes) the
@@ -484,6 +491,49 @@ pub struct ConnectionManager {
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
 /// blocked listener round-trip; `questions` is retained so `answer_question` can
 /// build the self-describing outcome without a `SessionState` read (race-free).
+/// A test-only stop between a question's registration and its publication,
+/// per connection, so a test can line up the interleaving that
+/// `ConnectionManager::question_registration` rules out.
+#[cfg(test)]
+pub(crate) mod question_registration_test_gate {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use tokio::sync::Notify;
+
+    struct Gate {
+        reached: Arc<Notify>,
+        resume: Arc<Notify>,
+    }
+
+    fn gates() -> &'static Mutex<HashMap<String, Gate>> {
+        static GATES: OnceLock<Mutex<HashMap<String, Gate>>> = OnceLock::new();
+        GATES.get_or_init(Default::default)
+    }
+
+    /// Stop the next registration on `conn` before it publishes. Returns
+    /// (reached, resume): wait on the first, notify the second to let it go.
+    pub(crate) fn install(conn: &str) -> (Arc<Notify>, Arc<Notify>) {
+        let reached = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        gates().lock().unwrap().insert(
+            conn.to_string(),
+            Gate {
+                reached: reached.clone(),
+                resume: resume.clone(),
+            },
+        );
+        (reached, resume)
+    }
+
+    pub(crate) async fn pause(conn: &str) {
+        let gate = gates().lock().unwrap().remove(conn);
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.resume.notified().await;
+        }
+    }
+}
+
 struct PendingQuestionEntry {
     parent_connection_id: String,
     survives_turn: bool,
@@ -500,6 +550,9 @@ struct PendingQuestionEntry {
     /// 已交给 waiter、尚未确认上游写出的答案；短暂保留以覆盖作答与撤回竞态。
     submitted: Option<QuestionAnswer>,
     upstream_closed: Arc<std::sync::atomic::AtomicBool>,
+    /// Withdrawn when the connection asks another question (see
+    /// `SessionQuestionAccess::register_yielding_question`).
+    yields_to_newer: bool,
 }
 
 impl PendingQuestionEntry {
@@ -548,6 +601,7 @@ impl ConnectionManager {
             chat_channel: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
+            question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -565,6 +619,7 @@ impl ConnectionManager {
             chat_channel: self.chat_channel.clone(),
             probe_locks: self.probe_locks.clone(),
             pending_questions: self.pending_questions.clone(),
+            question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
         }
     }
@@ -618,6 +673,7 @@ impl ConnectionManager {
             chat_channel: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
+            question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -1020,8 +1076,9 @@ impl ConnectionManager {
     /// "Idle" means: status is `Connected`, no `pending_permission`, no
     /// launched-but-unresolved background work (async sub-agent / background
     /// shell — disconnecting kills the agent CLI and the background work with
-    /// it), no Claude Remote Control (it runs in the same CLI), and no activity
-    /// (no events, no commands) for at least
+    /// it), no Claude Remote Control (it runs in the same CLI), no codeg
+    /// delegation whose child is still running (ending the parent cancels it),
+    /// and no activity (no events, no commands) for at least
     /// `idle_timeout`. `Prompting` connections are always preserved (a turn is
     /// in flight). Returns the number of connections that were disconnected.
     pub async fn sweep_idle(&self, idle_timeout: Duration) -> usize {
@@ -1065,6 +1122,20 @@ impl ConnectionManager {
                 // disconnecting would end it there. It stays until they turn it
                 // off or close the connection themselves.
                 if state.remote_control.is_some() {
+                    continue;
+                }
+                // A codeg delegation still running. It outlives the turn that
+                // started it, so its parent is idle by design while the child
+                // works, and ending the parent cancels every child it has in
+                // flight (`cancel_by_parent`). Every delegation is counted, not
+                // just the ones bound to a card (`active_delegations`). Only a
+                // child still in the map counts: an entry whose terminal frame
+                // never arrived must not pin the parent forever.
+                if state
+                    .delegated_children
+                    .iter()
+                    .any(|child| connections.contains_key(child))
+                {
                     continue;
                 }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
@@ -2923,6 +2994,8 @@ impl ConnectionManager {
         };
         if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
+            // A dying process may never report its turn's end.
+            crate::agent_turn_files::end_turn(conn_id, false, std::time::SystemTime::now());
             // First: a connection still in its handshake is not reading
             // `cmd_tx`, and a full channel would hold the send below until it
             // did. Cancelled, it stops and drops the receiver instead.
@@ -3198,6 +3271,7 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     // Same handoff as `disconnect`: closing a window leaves
                     // the agents exiting, not exited.
                     self.park_draining(&conn).await;
@@ -3216,6 +3290,42 @@ impl ConnectionManager {
             "[ACP] disconnect by owner window owner_window={} count={}",
             owner_window_label, disconnected
         );
+        disconnected
+    }
+
+    /// End every live connection bound to `conversation_id` and report how many
+    /// there were. Called when the conversation is deleted: that is the user
+    /// saying they are done with it, so the agent working on it goes too —
+    /// including one a closed tab deliberately left running because it still
+    /// had work in flight (a background task, Remote Control), which nothing
+    /// could otherwise reach again. Covers every client, not only the one that
+    /// deleted it.
+    pub async fn disconnect_by_conversation_id(&self, conversation_id: i32) -> usize {
+        // Read each state after letting go of the map, as `connections_of_cli_run`
+        // does: never wait on a state lock while holding the map lock.
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| (id.clone(), conn.state.clone()))
+                .collect()
+        };
+        let mut disconnected = 0;
+        for (id, state) in all {
+            if state.read().await.conversation_id != Some(conversation_id) {
+                continue;
+            }
+            if self.disconnect(&id).await.is_ok() {
+                disconnected += 1;
+            }
+        }
+        if disconnected > 0 {
+            tracing::info!(
+                "[ACP] disconnect by deleted conversation conversation_id={} count={}",
+                conversation_id,
+                disconnected
+            );
+        }
         disconnected
     }
 
@@ -3284,6 +3394,7 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     // Same handoff as every other teardown: the entry goes
                     // immediately, so the child is parked as draining to stay
                     // visible while it exits — and, here, to be swept below.
@@ -3396,7 +3507,8 @@ impl ConnectionManager {
             let mut connections = self.connections.lock().await;
             connections
                 .drain()
-                .map(|(_, conn)| {
+                .map(|(id, conn)| {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
                     conn.handshake.cancel();
                     (conn.cmd_tx, conn.child_pid)
                 })
@@ -4049,7 +4161,7 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion> {
         // 保留无期限底层入口；实时原生桥走 register_native_question_with_timeout。
-        self.register_question_inner(conn_id, questions, None, false, None, false)
+        self.register_question_inner(conn_id, questions, None, false, None, false, false)
             .await
     }
 
@@ -4063,7 +4175,7 @@ impl ConnectionManager {
         questions: Vec<QuestionSpec>,
         timeout: Option<std::time::Duration>,
     ) -> Option<RegisteredQuestion> {
-        self.register_question_inner(conn_id, questions, timeout, true, None, false)
+        self.register_question_inner(conn_id, questions, timeout, true, None, false, false)
             .await
     }
 
@@ -4075,7 +4187,27 @@ impl ConnectionManager {
     ) -> Option<RegisteredQuestion> {
         // 非秘密原生 RPC 也可能跨越前台回合；只有上游撤回/用户操作能结束它。
         let survives_turn = !questions.iter().any(|question| question.is_secret);
-        self.register_question_inner(conn_id, questions, Some(timeout), survives_turn, None, true)
+        self.register_question_inner(
+            conn_id,
+            questions,
+            Some(timeout),
+            survives_turn,
+            None,
+            true,
+            false,
+        )
+        .await
+    }
+
+    /// [`Self::register_question`] for a question that gives way to the next
+    /// one asked on the connection (codex's `request_user_input_async`; see
+    /// `SessionQuestionAccess::register_yielding_question`).
+    pub async fn register_yielding_question(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.register_question_inner(conn_id, questions, None, false, None, false, true)
             .await
     }
 
@@ -4087,6 +4219,7 @@ impl ConnectionManager {
         survives_turn: bool,
         replacing_question: Option<&str>,
         native_request: bool,
+        yields_to_newer: bool,
     ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
@@ -4094,6 +4227,9 @@ impl ConnectionManager {
         if crate::acp::question::validate_specs(&questions).is_err() {
             return None;
         }
+        // Registration and publication happen as one step (see
+        // `question_registration`). The answer / cancel paths do not take it.
+        let _registering = self.question_registration.lock().await;
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -4122,8 +4258,20 @@ impl ConnectionManager {
             drained.extend(Self::drain_parent_questions(&mut reg, conn_id, |e| {
                 e.submitted.is_some() || e.is_orphaned()
             }));
-            if reg.values().any(|e| e.parent_connection_id == conn_id) {
+            // A pending question that yields is withdrawn for this one; any other
+            // pending question refuses it. Dropping a withdrawn entry's sender
+            // resolves its waiter with an error, as a cancel does.
+            let held: Vec<(String, bool)> = reg
+                .iter()
+                .filter(|(_, e)| e.parent_connection_id == conn_id)
+                .map(|(id, e)| (id.clone(), e.yields_to_newer))
+                .collect();
+            if held.iter().any(|(_, yields)| !yields) {
                 return None;
+            }
+            for (id, _) in &held {
+                reg.remove(id);
+                drained.push(id.clone());
             }
             reg.insert(
                 question_id.clone(),
@@ -4137,10 +4285,13 @@ impl ConnectionManager {
                     native_request,
                     submitted: None,
                     upstream_closed: upstream_closed.clone(),
+                    yields_to_newer,
                 },
             );
             drained
         };
+        #[cfg(test)]
+        question_registration_test_gate::pause(conn_id).await;
         // Ungated emit: the agent is blocked in the tool call, so the card must
         // show regardless of any turn-flag timing. 期限在应用事件时从共享句柄
         // 现读，防止「注册广播」与「并发延长」交错时带上旧期限。
@@ -5247,9 +5398,17 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         questions: Vec<QuestionSpec>,
         timeout: std::time::Duration,
     ) -> Option<RegisteredQuestion> {
-        self.manager.register_question_inner(
-            parent_connection_id, questions, Some(timeout), true, Some(question_id), false,
-        ).await
+        self.manager
+            .register_question_inner(
+                parent_connection_id,
+                questions,
+                Some(timeout),
+                true,
+                Some(question_id),
+                false,
+                false,
+            )
+            .await
     }
 
     async fn retry_native_question_with_timeout(
@@ -5268,7 +5427,18 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
                 survives_turn,
                 Some(question_id),
                 true,
+                false,
             )
+            .await
+    }
+
+    async fn register_yielding_question(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.manager
+            .register_yielding_question(parent_connection_id, questions)
             .await
     }
 
@@ -9280,6 +9450,46 @@ mod tests {
         assert_eq!(n, 1, "Remote Control off no longer exempts the sweep");
     }
 
+    /// An async delegation outlives the turn that started it, so its parent
+    /// sits idle while the child works — and ending the parent cancels every
+    /// child it has in flight (`cancel_by_parent`). With its tab closed nothing
+    /// touches the parent, so the sweep alone decides whether the child lives.
+    /// The child here has a synthetic parent tool-use id: no card, so nothing
+    /// in `active_delegations`, and the sweep must spare the parent anyway.
+    #[tokio::test]
+    async fn sweep_idle_skips_a_parent_while_its_delegated_child_runs() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "parent",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        insert_fake_connection(&mgr, "child", AgentType::Codex, None, EventEmitter::Noop).await;
+        mgr.get_state("child").await.unwrap().write().await.status = ConnectionStatus::Prompting;
+        mgr.get_state("parent")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .apply_event(&AcpEvent::DelegationChildRunning {
+                child_connection_id: "child".into(),
+                running: true,
+            });
+        backdate_last_activity(&mgr, "parent", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 0, "the parent of a running delegation must not be swept");
+        assert!(mgr.connections.lock().await.contains_key("parent"));
+
+        // A child that is gone no longer counts, even if its completion never
+        // reached the parent: a stranded entry must not pin the parent forever.
+        mgr.connections.lock().await.remove("child");
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "with the child gone the idle parent is reclaimed");
+    }
+
     #[tokio::test]
     async fn sweep_idle_picks_only_qualifying_subset() {
         let mgr = ConnectionManager::new();
@@ -13125,6 +13335,120 @@ mod tests {
     async fn register_question_unknown_connection_is_none() {
         let mgr = ConnectionManager::new();
         assert!(mgr.register_question("nope", q_spec()).await.is_none());
+    }
+
+    /// codex's async question (codex-acp 2.6.0) leaves the turn running, so a
+    /// question the agent asks while it is open replaces it instead of being
+    /// refused unseen. It never displaces a question the agent waits on.
+    #[tokio::test]
+    async fn an_async_question_gives_way_to_the_next_one() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cx", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        async fn pending(mgr: &ConnectionManager) -> Option<String> {
+            let state = mgr.get_state("cx").await.unwrap();
+            let id = state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .map(|p| p.question_id.clone());
+            id
+        }
+
+        let first = mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .expect("the async question registers");
+        // Another async question replaces it, and so does a blocking one.
+        let second = mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .expect("a newer async question takes its place");
+        assert!(first.answer_rx.await.is_err(), "the first was withdrawn");
+        let blocking = mgr
+            .register_question("cx", q_spec())
+            .await
+            .expect("a blocking question takes its place");
+        assert!(second.answer_rx.await.is_err(), "the second was withdrawn");
+        assert_eq!(pending(&mgr).await, Some(blocking.question_id.clone()));
+
+        // While the blocking one is open, an async question is the one refused.
+        assert!(mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .is_none());
+        assert_eq!(pending(&mgr).await, Some(blocking.question_id));
+    }
+
+    /// A blocking question that withdraws an async one while the async one is
+    /// still being published must not have its card overwritten by the older
+    /// one (and then cleared by its compensation). The async registration is
+    /// stopped between registering and publishing; the blocking one cannot
+    /// finish until it is let go, and the card ends up on the blocking one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_question_registering_meanwhile_keeps_its_card() {
+        use std::sync::Arc;
+        let mgr = Arc::new(ConnectionManager::new());
+        mgr.insert_test_connection("race", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let (reached, resume) = question_registration_test_gate::install("race");
+        let async_q = tokio::spawn({
+            let mgr = mgr.clone();
+            async move { mgr.register_yielding_question("race", q_spec()).await }
+        });
+        reached.notified().await;
+        let mut blocking = tokio::spawn({
+            let mgr = mgr.clone();
+            async move { mgr.register_question("race", q_spec()).await }
+        });
+        // Registration is one step with publication: the blocking question
+        // waits for the async one to be published.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), &mut blocking)
+                .await
+                .is_err(),
+            "the blocking question registered while the async one was mid-publication"
+        );
+        resume.notify_one();
+        let async_q = async_q
+            .await
+            .unwrap()
+            .expect("the async question registered");
+        let blocking = blocking
+            .await
+            .unwrap()
+            .expect("the blocking question registers");
+        assert!(
+            async_q.answer_rx.await.is_err(),
+            "the async question was withdrawn"
+        );
+
+        let state = mgr.get_state("race").await.unwrap();
+        assert_eq!(
+            state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .map(|p| p.question_id.clone()),
+            Some(blocking.question_id.clone()),
+            "the card shows the question that is pending"
+        );
+        mgr.answer_question(
+            "race",
+            &blocking.question_id,
+            crate::acp::question::QuestionAnswer {
+                answers: vec![crate::acp::question::QuestionAnswerItem {
+                    question_id: "qa".into(),
+                    labels: vec!["A".into()],
+                }],
+                declined: false,
+            },
+        )
+        .await
+        .expect("answerable");
+        assert!(blocking.answer_rx.await.is_ok());
     }
 
     #[tokio::test]
