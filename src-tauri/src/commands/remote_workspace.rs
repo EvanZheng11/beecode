@@ -182,18 +182,17 @@ pub async fn delete_remote_workspace_connection(
     db: tauri::State<'_, AppDatabase>,
     id: i32,
 ) -> Result<(), AppCommandError> {
-    if let Some(state) =
-        app.try_state::<std::sync::Arc<crate::acp::delegation::broker::DelegationBroker>>()
-    {
-        state.cancel_remote_connection(id).await?;
-    } else {
-        return Err(AppCommandError::configuration_invalid(
-            "远程委派状态不可用，无法安全删除连接",
-        ));
+    let state = app
+        .try_state::<std::sync::Arc<crate::acp::delegation::broker::DelegationBroker>>()
+        .ok_or_else(|| {
+            AppCommandError::configuration_invalid("远程委派状态不可用，无法安全删除连接")
+        })?;
+    state.cancel_remote_connection(id).await?;
+    if let Err(error) = remote_workspace_connection_service::delete(&db.conn, id).await {
+        // 取消已过、但连接没删掉：闸门必须重新打开，否则这条连接永久不能再委派。
+        state.release_remote_connection_gate(id).await;
+        return Err(AppCommandError::db(error));
     }
-    remote_workspace_connection_service::delete(&db.conn, id)
-        .await
-        .map_err(AppCommandError::db)?;
     // What the remote host's pages stored in the built-in browser goes with
     // the connection they were opened through.
     crate::browser::remote::forget_connection(&app, id).await;

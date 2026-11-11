@@ -1624,8 +1624,9 @@ pub struct DelegationBroker {
     block_resurface: Duration,
     remote_tracker: Option<Arc<RemoteRunTracker>>,
     remote_manager: Option<Arc<crate::acp::manager::ConnectionManager>>,
-    // 远程结果与取消必须串行；HTTP 不持有 pending 锁。
-    remote_terminal: Arc<Mutex<()>>,
+    // 远程结果与取消按 task_id 串行；HTTP 不持有 pending 锁。
+    // 按任务分片：一条离线连接的慢取消 HTTP 不能拖住其他任务的结算。
+    remote_terminals: Arc<Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>>,
 }
 
 /// A child this parent-turn cancel interrupted. Enough for the next prompt
@@ -1705,8 +1706,28 @@ impl DelegationBroker {
             block_resurface: BLOCK_RESURFACE_INTERVAL,
             remote_tracker: None,
             remote_manager: None,
-            remote_terminal: Arc::new(Mutex::new(())),
+            remote_terminals: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// 远程任务的终态串行锁，按 `task_id` 分片；同一任务的结果与取消互斥，
+    /// 不同任务互不等待。弱引用表：没人持有该锁时条目可自行回收，
+    /// 超过 64 条时顺便清理失效项，避免长跑进程里任务 id 无限堆积。
+    async fn remote_terminal(&self, task_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut map = self.remote_terminals.lock().await;
+            if let Some(lock) = map.get(task_id).and_then(|weak| weak.upgrade()) {
+                lock
+            } else {
+                if map.len() > 64 {
+                    map.retain(|_, weak| weak.strong_count() > 0);
+                }
+                let lock = Arc::new(Mutex::new(()));
+                map.insert(task_id.to_string(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        lock.lock_owned().await
     }
 
     /// 生产必须注入同一 DB；未配置时远程请求失败关闭，不回落本机。
@@ -1919,7 +1940,7 @@ impl DelegationBroker {
         drop(deleting);
         if parked {
             {
-                let _terminal = self.remote_terminal.lock().await;
+                let _terminal = self.remote_terminal(&task_id).await;
                 if let Ok(Some(row)) = tracker.row(&task_id).await {
                     if remote_store::NON_TERMINAL_STATUSES.contains(&row.status.as_str()) {
                         self.publish_remote(
@@ -2020,7 +2041,7 @@ impl DelegationBroker {
         let Some(tracker) = &self.remote_tracker else {
             return;
         };
-        let _terminal = self.remote_terminal.lock().await;
+        let _terminal = self.remote_terminal(&task.task_id).await;
         if let Ok(Some(row)) = tracker.row(&task.task_id).await {
             let _ = tracker.cancel(&row, reason).await;
             if let Ok(Some(row)) = tracker.row(&task.task_id).await {
@@ -2059,7 +2080,7 @@ impl DelegationBroker {
         let Some(tracker) = &self.remote_tracker else {
             return false;
         };
-        let _terminal = self.remote_terminal.lock().await;
+        let _terminal = self.remote_terminal(&row.task_id).await;
         // 取消 drain 先发生时，结果不得抢在慢 HTTP cancel 前落库。
         let mut inner = self.pending.inner.lock().await;
         if inner.teardown_pending.contains(&row.task_id)
@@ -2194,7 +2215,7 @@ impl DelegationBroker {
                     )
                     .await?;
                 if row.status != status || row.blocked_on != blocked {
-                    let _terminal = self.remote_terminal.lock().await;
+                    let _terminal = self.remote_terminal(&task_id).await;
                     if let Ok(Some(updated)) = tracker.row(&task_id).await {
                         if remote_store::NON_TERMINAL_STATUSES.contains(&updated.status.as_str()) {
                             self.publish_remote(&parent, &updated, "remote_delegation_updated")
@@ -2213,7 +2234,7 @@ impl DelegationBroker {
                     if code == "run_not_found" {
                         match tracker.find(&row).await {
                             Ok(false) => {
-                                let _terminal = self.remote_terminal.lock().await;
+                                let _terminal = self.remote_terminal(&task_id).await;
                                 let mut inner = self.pending.inner.lock().await;
                                 // 与正常结果一致：取消 drain 一旦认领，lost 不能抢先结算。
                                 if inner.teardown_pending.contains(&task_id)
@@ -2350,7 +2371,7 @@ impl DelegationBroker {
         let Some(tracker) = &self.remote_tracker else {
             return unknown_report(task_id);
         };
-        let terminal = self.remote_terminal.lock().await;
+        let terminal = self.remote_terminal(task_id).await;
         let Ok(Some(row)) = tracker.row(task_id).await else {
             return unknown_report(task_id);
         };
@@ -2418,12 +2439,35 @@ impl DelegationBroker {
         };
         let gate = tracker.gate(connection).await;
         let mut deleting = gate.lock().await;
+        // 闸门只有在非终态行全部取消成功后才能保持关闭；查询或落库失败必须复位，
+        // 否则连接没删掉却永久不能再委派（只能重启进程恢复）。
         *deleting = true;
+        let result = self.cancel_unsettled_remote_rows(tracker, connection).await;
+        if result.is_err() {
+            *deleting = false;
+        }
+        result
+    }
+
+    /// 删除本身失败时重新打开闸门：取消已成功但连接还在，继续委派是合法的。
+    /// 删除成功时不需要调用——闸门随连接一起失效。
+    pub async fn release_remote_connection_gate(&self, connection: i32) {
+        let Some(tracker) = &self.remote_tracker else {
+            return;
+        };
+        *tracker.gate(connection).await.lock().await = false;
+    }
+
+    async fn cancel_unsettled_remote_rows(
+        &self,
+        tracker: &RemoteRunTracker,
+        connection: i32,
+    ) -> Result<(), crate::app_error::AppCommandError> {
         let rows = remote_store::list_unsettled_by_connection(&tracker.db.conn, connection)
             .await
             .map_err(crate::app_error::AppCommandError::db)?;
         for row in rows {
-            let _terminal = self.remote_terminal.lock().await;
+            let _terminal = self.remote_terminal(&row.task_id).await;
             tracker.cancel(&row, "user").await.map_err(|_| {
                 crate::app_error::AppCommandError::configuration_invalid("远程取消状态落库失败")
             })?;
@@ -5093,7 +5137,7 @@ impl DelegationBroker {
             None => {
                 // 重启后任务可能尚在恢复队列或已停止在 unreachable；仍须能通过 DB 取消。
                 if let Some(tracker) = &self.remote_tracker {
-                    let _terminal = self.remote_terminal.lock().await;
+                    let _terminal = self.remote_terminal(task_id).await;
                     if let Ok(Some(row)) = tracker.row(task_id).await {
                         if Some(row.parent_conversation_id) != parent_conversation_id {
                             return unknown_report(task_id);
@@ -11759,6 +11803,138 @@ mod tests {
             }
             server.abort();
         }
+    }
+
+    /// AC1/AC3：一条离线连接的慢取消不能挡住另一个任务的结算，
+    /// 而取消仍然先到先得、迟到的 result 不覆盖。
+    #[tokio::test]
+    async fn remote_offline_cancel_does_not_block_other_task_result() {
+        let (broker, _, db, parent, connection, mock, server) = remote_fixture().await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        // 两个同连接的任务；它们共用一个连接，但终态锁按 task_id 分片。
+        let mut rows = Vec::new();
+        for task in ["offline-task", "healthy-task"] {
+            let req = remote_request(&broker, &db, parent, connection).await;
+            let row = tracker.create(task, &req).await.unwrap();
+            let run = tracker.reserve(&row).await.unwrap();
+            let start = tracker.start(&row, &req, &run, false).await.unwrap();
+            tracker.mark_started(task, &start).await.unwrap();
+            rows.push(tracker.row(task).await.unwrap().unwrap());
+        }
+        // 让 cli_run_cancel 停在门闩上，模拟 30 秒无响应的离线远端。
+        *mock.gate_route.lock().await = Some("cli_run_cancel".into());
+        let canceling = {
+            let broker = broker.clone();
+            let offline = rows[0].clone();
+            let task = RunningTask {
+                child: ChildHandle::Remote {
+                    info: remote_run::info(&offline),
+                },
+                parent_connection_id: "parent-conn".into(),
+                parent_tool_use_id: offline.parent_tool_use_id.clone(),
+                agent_type: AgentType::ClaudeCode,
+                assistant: None,
+                task_preview: offline.task_preview.clone(),
+                task_id: offline.task_id.clone(),
+                external_handle: None,
+                started_at: Instant::now(),
+                last_surfaced_block: None,
+            };
+            tokio::spawn(async move { broker.cancel_remote_task(&task, "user").await })
+        };
+        tokio::time::timeout(Duration::from_secs(3), mock.entered.notified())
+            .await
+            .unwrap();
+        // 另一个任务的结果必须在取消 HTTP 仍挂着时就能落库。
+        let result: crate::cli_run::wire::RunResult = serde_json::from_value(serde_json::json!({
+            "subtype":"success","is_error":false,"result":"另一个任务结果","session_id":null,
+            "stop_reason":null,"duration_ms":1,"conversation_id":null,"link":null
+        }))
+        .unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_secs(3),
+            broker.finish_remote_result("parent-conn", &rows[1], &result, 1)
+        )
+        .await
+        .expect("另一个任务的结果不应被离线取消拖住"));
+        assert_eq!(
+            tracker.row("healthy-task").await.unwrap().unwrap().status,
+            "completed"
+        );
+        mock.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(3), canceling)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tracker.row("offline-task").await.unwrap().unwrap().status,
+            "canceled"
+        );
+        // 同一任务内取消仍然胜出：迟到的 result 不能覆盖。
+        let late: crate::cli_run::wire::RunResult = serde_json::from_value(serde_json::json!({
+            "subtype":"success","is_error":false,"result":"迟到结果","session_id":null,
+            "stop_reason":null,"duration_ms":1,"conversation_id":null,"link":null
+        }))
+        .unwrap();
+        broker
+            .finish_remote_result("parent-conn", &rows[0], &late, 2)
+            .await;
+        let offline_row = tracker.row("offline-task").await.unwrap().unwrap();
+        assert_eq!(offline_row.status, "canceled");
+        assert!(offline_row.result_text.is_none());
+        server.abort();
+    }
+
+    /// AC2：取消阶段落库失败必须恢复闸门，否则连接未删却永久不能委派。
+    #[tokio::test]
+    async fn remote_delete_db_failure_reopens_gate() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("gate-task", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let start = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started("gate-task", &start).await.unwrap();
+        // 让终态落库必然失败（查询仍可成功），验证失败路径恢复闸门。
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "CREATE TRIGGER fail_settle BEFORE UPDATE ON remote_delegation \
+                 BEGIN SELECT RAISE(ABORT, 'boom'); END"
+                    .to_owned(),
+            ))
+            .await
+            .unwrap();
+        assert!(broker.cancel_remote_connection(connection).await.is_err());
+        assert!(
+            !*tracker.gate(connection).await.lock().await,
+            "取消失败后闸门必须恢复，否则连接永久不能委派"
+        );
+        server.abort();
+    }
+
+    /// AC2（删除失败那一半）：取消成功、连接行没删掉时，命令层必须重新打开闸门。
+    #[tokio::test]
+    async fn remote_delete_failure_after_cancel_reopens_gate() {
+        let (broker, _, db, parent, connection, _, server) = remote_fixture().await;
+        let req = remote_request(&broker, &db, parent, connection).await;
+        let tracker = broker.remote_tracker.as_ref().unwrap();
+        let row = tracker.create("gate-task-2", &req).await.unwrap();
+        let run = tracker.reserve(&row).await.unwrap();
+        let start = tracker.start(&row, &req, &run, false).await.unwrap();
+        tracker.mark_started("gate-task-2", &start).await.unwrap();
+        broker.cancel_remote_connection(connection).await.unwrap();
+        assert!(
+            *tracker.gate(connection).await.lock().await,
+            "取消成功时闸门保持关闭，等待删除凭据"
+        );
+        broker.release_remote_connection_gate(connection).await;
+        assert!(
+            !*tracker.gate(connection).await.lock().await,
+            "删除失败时闸门必须恢复，否则连接永久不能委派"
+        );
+        server.abort();
     }
 
     #[tokio::test]
