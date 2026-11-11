@@ -1,12 +1,24 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LinkSafetyModalProps } from "streamdown"
 
 const mocks = vi.hoisted(() => ({
   onLinkCheck: vi.fn<(url: string) => boolean | Promise<boolean>>(),
+  transportCall: vi.fn<(command: string, args?: unknown) => Promise<unknown>>(),
   renderModal: vi.fn((props: LinkSafetyModalProps) =>
     props.isOpen ? <div data-testid="link-modal">{props.url}</div> : null
   ),
+}))
+
+// 远程徽标会去查本机连接列表（判断“已失效”）；这里只数请求次数。
+vi.mock("@/lib/transport", () => ({
+  getShellTransport: () => ({ call: mocks.transportCall }),
 }))
 
 vi.mock("next-intl", () => {
@@ -36,11 +48,13 @@ import { MarkdownLink } from "./markdown-link"
 describe("MarkdownLink", () => {
   beforeEach(() => {
     mocks.onLinkCheck.mockReset()
+    mocks.transportCall.mockReset()
     mocks.renderModal.mockClear()
     vi.spyOn(window, "open").mockReturnValue(null)
   })
 
   afterEach(() => {
+    cleanup()
     vi.restoreAllMocks()
   })
 
@@ -251,6 +265,41 @@ describe("MarkdownLink", () => {
       const badge = screen.getByRole("img", { name: "file: report.pdf" })
       expect(badge).toHaveAttribute("data-reference-badge")
       expect(badge).toHaveAttribute("data-ref-type", "file")
+    })
+  })
+
+  describe("remote reference badges", () => {
+    it("普通链接不订阅远程连接：不注册 focus 监听也不请求", () => {
+      const add = vi.spyOn(window, "addEventListener")
+      render(<MarkdownLink href="https://example.com">example</MarkdownLink>)
+      expect(add.mock.calls.filter(([type]) => type === "focus")).toHaveLength(
+        0
+      )
+      expect(mocks.transportCall).not.toHaveBeenCalled()
+    })
+
+    it("远程引用才订阅：多个徽标共用一个 focus 监听，卸载后摘掉", async () => {
+      mocks.transportCall.mockResolvedValue([])
+      const add = vi.spyOn(window, "addEventListener")
+      const remove = vi.spyOn(window, "removeEventListener")
+      const focusCalls = () =>
+        add.mock.calls.filter(([type]) => type === "focus").length
+      const focusRemovals = () =>
+        remove.mock.calls.filter(([type]) => type === "focus").length
+
+      const first = render(
+        <MarkdownLink href="codeg://remote/7/file/2/a.ts">a.ts</MarkdownLink>
+      )
+      render(
+        <MarkdownLink href="codeg://remote/7/file/2/b.ts">b.ts</MarkdownLink>
+      )
+      await waitFor(() => expect(mocks.transportCall).toHaveBeenCalledTimes(1))
+      expect(focusCalls()).toBe(1)
+
+      first.unmount()
+      expect(focusRemovals()).toBe(0)
+      cleanup()
+      expect(focusRemovals()).toBe(1)
     })
   })
 })

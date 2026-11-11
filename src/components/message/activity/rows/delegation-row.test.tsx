@@ -1138,6 +1138,47 @@ describe("delegation row: 远程委派卡片", () => {
     fireEvent.click(jump)
     expect(mockOpenRemoteWorkspace).not.toHaveBeenCalled()
   })
+
+  it("多张远程卡片共用一次在途连接查询", async () => {
+    let settle: (ids: Array<{ id: number }>) => void = () => {}
+    mockListRemoteConnections.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve))
+    )
+    bind(remoteBinding())
+    const row = (
+      <NextIntlClientProvider locale="en" messages={messagesWithRemoteKeys}>
+        <ContentPartsRenderer
+          parts={[delegation({ id: "pt-1", input: "{}" })]}
+          role="assistant"
+        />
+      </NextIntlClientProvider>
+    )
+    // 两张卡片同时挂载，查询还没落地。
+    render(row)
+    render(row)
+    await act(async () => {})
+    expect(mockListRemoteConnections).toHaveBeenCalledTimes(1)
+
+    await act(async () => settle([{ id: 7 }]))
+    const jumps = screen.getAllByTestId("delegation-remote-jump")
+    expect(jumps).toHaveLength(2)
+    expect(jumps[0]).toBeEnabled()
+  })
+
+  it("连接查询失败不缓存：重新挂载会再试一次", async () => {
+    mockListRemoteConnections.mockRejectedValueOnce(new Error("offline"))
+    bind(remoteBinding())
+    const first = await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(mockListRemoteConnections).toHaveBeenCalledTimes(1)
+    first.unmount()
+
+    mockListRemoteConnections.mockResolvedValue([{ id: 7 }])
+    await renderRemoteRow(delegation({ id: "pt-1", input: "{}" }))
+    expect(mockListRemoteConnections).toHaveBeenCalledTimes(2)
+    await waitFor(() =>
+      expect(screen.getByTestId("delegation-remote-jump")).toBeEnabled()
+    )
+  })
 })
 
 describe("delegation row: 远程跳转的桌面范围", () => {

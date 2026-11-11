@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest"
+import { act, renderHook } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  REMOTE_MENTION_CACHE_MAX_ENTRIES,
+  REMOTE_MENTION_CACHE_TTL_MS,
   buildRemoteMentionUri,
+  clearRemoteMentionCache,
+  listRemoteMentionFolders,
   parseRemoteMentionUri,
   isPublicHttpBaseUrl,
+  resetRemoteMentionConnectionsForTests,
   supportsRemoteRun,
+  useRemoteMentionConnectionState,
   type RemoteMentionTarget,
 } from "./remote-mention"
+
+// 远程列表请求走 shell 传输层；测试里只数调用次数、控制何时落地。
+const transport = vi.hoisted(() => ({ call: vi.fn() }))
+vi.mock("@/lib/transport", () => ({ getShellTransport: () => transport }))
 
 const targets: RemoteMentionTarget[] = [
   { connectionId: 1, kind: "file", folderId: 2, target: "src/中文 空格.ts" },
@@ -104,5 +115,100 @@ describe("远程引用 URI 与访问提示", () => {
         capabilities: ["run"],
       })
     ).toBe(true)
+  })
+})
+
+describe("远程列表缓存与连接订阅", () => {
+  afterEach(() => {
+    clearRemoteMentionCache()
+    resetRemoteMentionConnectionsForTests()
+    transport.call.mockReset()
+    vi.restoreAllMocks()
+  })
+
+  it("访问超过上限的键会淘汰最旧条目，过期条目不再滞留", async () => {
+    transport.call.mockResolvedValue([])
+    const now = vi.spyOn(Date, "now")
+    let clock = 1_000
+    now.mockImplementation(() => clock)
+
+    const total = REMOTE_MENTION_CACHE_MAX_ENTRIES + 5
+    for (let id = 1; id <= total; id += 1) {
+      clock += 1
+      await listRemoteMentionFolders(id)
+    }
+    expect(transport.call).toHaveBeenCalledTimes(total)
+
+    // 最早的键已被淘汰：再访问要重新请求。
+    clock += 1
+    await listRemoteMentionFolders(1)
+    expect(transport.call).toHaveBeenCalledTimes(total + 1)
+
+    // 最新的键仍在缓存里。
+    clock += 1
+    await listRemoteMentionFolders(total)
+    expect(transport.call).toHaveBeenCalledTimes(total + 1)
+
+    // 整批过期后再访问，缓存里只剩新条目，旧条目全部清掉。
+    clock += REMOTE_MENTION_CACHE_TTL_MS + 1
+    await listRemoteMentionFolders(1)
+    expect(transport.call).toHaveBeenCalledTimes(total + 2)
+    await listRemoteMentionFolders(1)
+    expect(transport.call).toHaveBeenCalledTimes(total + 2)
+  })
+
+  it("清空缓存后，清空前发出的请求不会把旧结果写回新缓存", async () => {
+    let resolveStale: (value: unknown) => void = () => {}
+    transport.call.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveStale = resolve))
+    )
+    const stale = listRemoteMentionFolders(1)
+    clearRemoteMentionCache()
+    resolveStale([{ id: 1, name: "旧", path: "/old", alias: null }])
+    expect(await stale).toHaveLength(1)
+
+    transport.call.mockResolvedValueOnce([
+      { id: 2, name: "新", path: "/new", alias: null },
+    ])
+    const fresh = await listRemoteMentionFolders(1)
+    expect(fresh.map((folder) => folder.id)).toEqual([2])
+    expect(transport.call).toHaveBeenCalledTimes(2)
+  })
+
+  it("多链接共享一个 focus 监听，无订阅时不监听也不请求", async () => {
+    transport.call.mockResolvedValue([])
+    const add = vi.spyOn(window, "addEventListener")
+    const remove = vi.spyOn(window, "removeEventListener")
+    const focusCalls = () =>
+      add.mock.calls.filter(([type]) => type === "focus").length
+    const focusRemovals = () =>
+      remove.mock.calls.filter(([type]) => type === "focus").length
+
+    const views = [1, 2, 3].map((connectionId) =>
+      renderHook(() => useRemoteMentionConnectionState(connectionId))
+    )
+    await act(async () => {})
+    expect(focusCalls()).toBe(1)
+    // 共享快照只拉一次。
+    expect(transport.call).toHaveBeenCalledTimes(1)
+    expect(views[0].result.current).toBe("missing")
+
+    for (const view of views) view.unmount()
+    expect(focusRemovals()).toBe(1)
+
+    // 没有订阅者后，切焦不再触发请求。
+    const before = transport.call.mock.calls.length
+    window.dispatchEvent(new Event("focus"))
+    await act(async () => {})
+    expect(transport.call).toHaveBeenCalledTimes(before)
+  })
+
+  it("普通链接不订阅远程连接：不监听 focus，也不发请求", async () => {
+    const add = vi.spyOn(window, "addEventListener")
+    const view = renderHook(() => useRemoteMentionConnectionState(null, false))
+    await act(async () => {})
+    expect(view.result.current).toBe("unknown")
+    expect(add.mock.calls.filter(([type]) => type === "focus")).toHaveLength(0)
+    expect(transport.call).not.toHaveBeenCalled()
   })
 })

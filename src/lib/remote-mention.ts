@@ -313,6 +313,13 @@ export const REMOTE_MENTION_MAX_ROWS = 50
 /** 连接 + 项目列表的内存缓存时长（设计 4.1.2.2：60 秒）。 */
 export const REMOTE_MENTION_CACHE_TTL_MS = 60_000
 
+/**
+ * 列表缓存的总条目上限：一条 = 一个连接 + 项目的组合。只有同键访问才会顺手删
+ * 过期条目，没有总量上限时浏览大量项目会让缓存一直涨；这里固定封顶，超出时先
+ * 清过期、再淘汰最旧的条目。
+ */
+export const REMOTE_MENTION_CACHE_MAX_ENTRIES = 32
+
 function withTimeout<T>(promise: Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -390,8 +397,23 @@ interface CacheEntry<T> {
 
 const cache = new Map<string, CacheEntry<unknown>>()
 
+/** 每次清空缓存自增：清空前发出的请求回来时不再写回，避免旧结果覆盖新数据。 */
+let cacheEpoch = 0
+
 function cacheKey(command: string, ids: (number | string | null)[]): string {
   return `${command}:${ids.map((id) => id ?? "-").join(":")}`
+}
+
+/** 先删过期条目，再把总量压到上限内（Map 的插入顺序即最旧在前）。 */
+function sweepCache(now: number): void {
+  for (const [key, entry] of cache) {
+    if (now - entry.at > REMOTE_MENTION_CACHE_TTL_MS) cache.delete(key)
+  }
+  while (cache.size >= REMOTE_MENTION_CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
 }
 
 function readCache<T>(key: string, now: number): T | null {
@@ -408,13 +430,19 @@ async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
   const now = Date.now()
   const hit = readCache<T>(key, now)
   if (hit !== null) return hit
+  const epoch = cacheEpoch
   const value = await load()
-  cache.set(key, { at: Date.now(), value })
+  if (epoch === cacheEpoch) {
+    const at = Date.now()
+    sweepCache(at)
+    cache.set(key, { at, value })
+  }
   return value
 }
 
 /** 清空缓存：测试隔离，以及窗口重新获得焦点时刷新。 */
 export function clearRemoteMentionCache(): void {
+  cacheEpoch += 1
   cache.clear()
 }
 
@@ -571,6 +599,16 @@ let connectionsSnapshot: RemoteWorkspaceConnection[] | null = null
 let connectionsLoading: Promise<void> | null = null
 const connectionListeners = new Set<() => void>()
 
+/**
+ * 窗口 focus 监听的共享计数：整个窗口只注册一个监听，第一个订阅者挂上，最后
+ * 一个退订时摘掉。每条远程徽标各注册一个，切换焦点就会叠出 N 个回调。
+ */
+let focusSubscribers = 0
+
+function onWindowFocus(): void {
+  void refreshRemoteMentionConnections()
+}
+
 function emitConnections(): void {
   for (const listener of connectionListeners) listener()
 }
@@ -599,6 +637,21 @@ function subscribeRemoteMentionConnections(onChange: () => void): () => void {
   }
 }
 
+/** 所有远程徽标共享同一个 window focus 监听，没有订阅者时不监听。 */
+function retainConnectionsFocusListener(): () => void {
+  focusSubscribers += 1
+  if (focusSubscribers === 1) window.addEventListener("focus", onWindowFocus)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    focusSubscribers -= 1
+    if (focusSubscribers === 0) {
+      window.removeEventListener("focus", onWindowFocus)
+    }
+  }
+}
+
 function getRemoteMentionConnectionsSnapshot():
   | RemoteWorkspaceConnection[]
   | null {
@@ -624,9 +677,13 @@ export type RemoteMentionConnectionState = "unknown" | "available" | "missing"
 /**
  * 解析某个连接 id 在本机是否还存在。首个订阅者触发一次加载（并在窗口重新获得
  * 焦点时刷新），因此把远程引用粘进会话后删掉连接，徽标会自己变成"已失效"。
+ *
+ * `enabled` 为 false 时完全不订阅、不发起请求：普通 markdown 链接也走这个钩子，
+ * 不能因为渲染一条链接就去拉连接列表。
  */
 export function useRemoteMentionConnectionState(
-  connectionId: number | null | undefined
+  connectionId: number | null | undefined,
+  enabled = true
 ): RemoteMentionConnectionState {
   const list = useSyncExternalStore(
     subscribeRemoteMentionConnections,
@@ -634,16 +691,11 @@ export function useRemoteMentionConnectionState(
     getRemoteMentionConnectionsServerSnapshot
   )
   useEffect(() => {
+    if (!enabled) return
     if (connectionsSnapshot === null) void refreshRemoteMentionConnections()
-  }, [])
-  useEffect(() => {
-    const onFocus = () => {
-      void refreshRemoteMentionConnections()
-    }
-    window.addEventListener("focus", onFocus)
-    return () => window.removeEventListener("focus", onFocus)
-  }, [])
-  if (connectionId == null || list === null) return "unknown"
+    return retainConnectionsFocusListener()
+  }, [enabled])
+  if (!enabled || connectionId == null || list === null) return "unknown"
   return list.some((connection) => connection.id === connectionId)
     ? "available"
     : "missing"
@@ -654,4 +706,6 @@ export function resetRemoteMentionConnectionsForTests(): void {
   connectionsSnapshot = null
   connectionsLoading = null
   connectionListeners.clear()
+  if (focusSubscribers > 0) window.removeEventListener("focus", onWindowFocus)
+  focusSubscribers = 0
 }

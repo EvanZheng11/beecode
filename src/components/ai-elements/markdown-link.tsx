@@ -89,7 +89,8 @@ export function MarkdownLink({
       ? parseRemoteMentionUri(href)
       : null
   const remoteConnectionState = useRemoteMentionConnectionState(
-    remoteTarget?.connectionId
+    remoteTarget?.connectionId,
+    remoteTarget !== null
   )
 
   // Deliberately NOT async: `openLinkWithSafety` opens the tab inside this
