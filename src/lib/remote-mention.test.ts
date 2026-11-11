@@ -9,6 +9,7 @@ import {
   parseRemoteMentionUri,
   isPublicHttpBaseUrl,
   resetRemoteMentionConnectionsForTests,
+  refreshRemoteMentionConnections,
   supportsRemoteRun,
   useRemoteMentionConnectionState,
   type RemoteMentionTarget,
@@ -205,10 +206,21 @@ describe("远程列表缓存与连接订阅", () => {
 
   it("普通链接不订阅远程连接：不监听 focus，也不发请求", async () => {
     const add = vi.spyOn(window, "addEventListener")
-    const view = renderHook(() => useRemoteMentionConnectionState(null, false))
+    let renders = 0
+    const view = renderHook(() => {
+      renders += 1
+      return useRemoteMentionConnectionState(null, false)
+    })
     await act(async () => {})
     expect(view.result.current).toBe("unknown")
     expect(add.mock.calls.filter(([type]) => type === "focus")).toHaveLength(0)
     expect(transport.call).not.toHaveBeenCalled()
+
+    // 另一个远程徽标刷新共享快照时，普通链接也不应订阅并跟着重渲染。
+    const initialRenders = renders
+    transport.call.mockResolvedValue([])
+    await act(async () => refreshRemoteMentionConnections())
+    expect(renders).toBe(initialRenders)
+    view.unmount()
   })
 })

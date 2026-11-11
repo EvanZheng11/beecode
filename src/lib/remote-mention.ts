@@ -637,6 +637,11 @@ function subscribeRemoteMentionConnections(onChange: () => void): () => void {
   }
 }
 
+// 禁用的普通链接不加入共享快照订阅，避免远程状态变化触发整段历史链接重渲染。
+function skipRemoteMentionConnections(): () => void {
+  return () => {}
+}
+
 /** 所有远程徽标共享同一个 window focus 监听，没有订阅者时不监听。 */
 function retainConnectionsFocusListener(): () => void {
   focusSubscribers += 1
@@ -686,8 +691,10 @@ export function useRemoteMentionConnectionState(
   enabled = true
 ): RemoteMentionConnectionState {
   const list = useSyncExternalStore(
-    subscribeRemoteMentionConnections,
-    getRemoteMentionConnectionsSnapshot,
+    enabled ? subscribeRemoteMentionConnections : skipRemoteMentionConnections,
+    enabled
+      ? getRemoteMentionConnectionsSnapshot
+      : getRemoteMentionConnectionsServerSnapshot,
     getRemoteMentionConnectionsServerSnapshot
   )
   useEffect(() => {
