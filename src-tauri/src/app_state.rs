@@ -203,8 +203,13 @@ pub fn build_delegation_stack(
             .with_remote_manager(cm_arc),
     );
     // 数据库迁移完成后恢复；不阻塞应用启动和本机委派栈安装。
+    // 桌面 setup 运行在同步线程，不能依赖当前线程已进入 Tokio 运行时。
+    #[cfg(feature = "tauri-runtime")]
+    use tauri::async_runtime::spawn;
+    #[cfg(not(feature = "tauri-runtime"))]
+    use tokio::spawn;
     let recovering = broker.clone();
-    tokio::spawn(async move {
+    spawn(async move {
         recovering.recover_remote_delegations().await;
     });
     let tokens = Arc::new(TokenRegistry::default());
