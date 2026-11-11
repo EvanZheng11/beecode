@@ -4021,7 +4021,7 @@ impl TaskEngine {
                 .await;
             if let Err(e) = &result {
                 engine
-                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None, false)
+                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
                     .await;
             }
             // Settle first, THEN release, and only then let the caller go: a
@@ -4154,12 +4154,23 @@ impl TaskEngine {
         }
     }
 
+    /// 普通合并与恢复失败保留既有关闭清单，只有交付失败才显式申请释放。
+    async fn back_to_review(
+        &self,
+        task_id: i32,
+        error: String,
+        conflict_files: Option<Vec<String>>,
+    ) {
+        self.back_to_review_after_delivery(task_id, error, conflict_files, false)
+            .await;
+    }
+
     /// `drop_closing_list` 只给「首次交付在本地确定什么都没发布」的失败用：那次
     /// 交付一开始就把组合任务的 `pr_closes` 钉进了快照，而它什么都没发布，于是
     /// 这张清单必须放开，否则用户再也换不了（见 `closing_list`）。其它失败一律传
     /// `false`：forge 上可能已经有一个描述写着那份清单的 PR，回滚它会让下一次交付
     /// 再开一个 `Closes` 不一样的。
-    async fn back_to_review(
+    async fn back_to_review_after_delivery(
         &self,
         task_id: i32,
         error: String,
@@ -4746,13 +4757,13 @@ impl TaskEngine {
             {
                 Ok(url) => Ok(url),
                 Err(e) => {
-                    self.back_to_review(task_id, e.clone(), None, drop_closing_list)
+                    self.back_to_review_after_delivery(task_id, e.clone(), None, drop_closing_list)
                         .await;
                     Err(e)
                 }
             },
             Err(e) => {
-                self.back_to_review(task_id, e.clone(), None, drop_closing_list)
+                self.back_to_review_after_delivery(task_id, e.clone(), None, drop_closing_list)
                     .await;
                 Err(e)
             }
