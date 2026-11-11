@@ -2676,9 +2676,8 @@ pub async fn merge_back_to_review(
     expect_run_seq: Option<i32>,
     error: Option<String>,
     conflict_files: Option<Vec<String>>,
-    // 交付失败且本地确定没发出 `create_pull` 时才为 true：把首次交付钉在快照里的
-    // `pr_closes` 放开，让用户能重新选。`None` 的快照（不是组合任务、或已经交付过
-    // 一轮）原样写回，字节不变。
+    // 交付失败、且这份清单确实是这一次才钉下、本地又确定什么都没发布时才为 true：
+    // 把 `pr_closes` 放开，让用户能重新选。没有清单的快照原样写回，字节不变。
     drop_closing_list: bool,
 ) -> Result<bool, DbError> {
     let now = Utc::now();
@@ -2743,7 +2742,9 @@ pub async fn merge_back_to_review(
 /// 留着它就永久锁死清单（下一次交付会以「清单已定」拒掉用户的新选择）。
 ///
 /// 读改写在这里而不在调用方，是为了让它落在同一个事务里、并在 CAS 已经拿到写锁之后
-/// 再读；快照不可解析就什么都不做——没有清单可放，也不能拿一个读不懂的 JSON 去覆盖。
+/// 再读。改的是 JSON 本身（只删 `pr_closes`），不是反序列化再序列化：快照里可能有
+/// 这个版本不认识的字段，而一次失败的退回不该把它们抹掉。读不懂的 JSON 一个字节都
+/// 不改——没有清单可放，也不能拿一个读不懂的快照去覆盖。
 async fn release_closing_list<C: ConnectionTrait>(txn: &C, id: i32) -> Result<(), DbError> {
     let Some(row) = work_task::Entity::find_by_id(id).one(txn).await? else {
         return Ok(());
@@ -2751,11 +2752,14 @@ async fn release_closing_list<C: ConnectionTrait>(txn: &C, id: i32) -> Result<()
     let Some(mut meta) = row
         .source_meta
         .as_deref()
-        .and_then(|s| serde_json::from_str::<crate::forge::ForgeSourceMeta>(s).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
     else {
         return Ok(());
     };
-    if meta.pr_closes.take().is_none() {
+    let Some(object) = meta.as_object_mut() else {
+        return Ok(());
+    };
+    if object.remove("pr_closes").is_none() {
         return Ok(());
     }
     let json = serde_json::to_string(&meta)
