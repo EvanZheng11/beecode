@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -461,6 +462,11 @@ impl CodexParser {
         // would put the sidebar's message count one ahead of the turns the
         // opened conversation actually renders.
         let mut recent_user_records: Vec<(DateTime<Utc>, UserTurnFingerprint)> = Vec::new();
+        // codex 的 `request_user_input_async` 调用，按 call id 索引；这样回复
+        // 信封在这里的判定与详情解析器（`codex_async_questions`）完全一致：
+        // 被折叠进问题卡片，本身不渲染任何 user turn，因此既不计入消息数，
+        // 也不参与标题。
+        let mut async_question_calls: HashMap<String, AsyncQuestionCall> = HashMap::new();
         // Plan mode, mirroring the detail parser so the sidebar count tracks the
         // turns the opened conversation renders: a plan document counts once
         // (whichever of its two copies is seen first), and the synthetic
@@ -577,13 +583,24 @@ impl CodexParser {
                                     continue;
                                 }
 
-                                let visible_text =
-                                    strip_internal_frames(&decode_user_text(raw_text));
+                                // 与详情解析器的同名分支做同样的折叠：已答复的回复
+                                // 信封属于问题卡片（没有 user turn，故不计也不取标题），
+                                // 而指向本 rollout 之外的未知信封保留详情视图渲染的
+                                // 那段文本，继续像普通用户消息一样计数。
+                                let text = match codex_async_questions::take_reply(
+                                    raw_text,
+                                    &mut async_question_calls,
+                                ) {
+                                    ReplyMessage::NotAReply => Cow::Borrowed(raw_text),
+                                    ReplyMessage::Answered(_) => continue,
+                                    ReplyMessage::Display(display) => Cow::Owned(display),
+                                };
+                                let visible_text = strip_internal_frames(&decode_user_text(&text));
                                 let has_images = payload
                                     .get("images")
                                     .and_then(|v| v.as_array())
                                     .is_some_and(|images| !images.is_empty());
-                                if contains_only_internal_frames(raw_text) && !has_images {
+                                if contains_only_internal_frames(&text) && !has_images {
                                     continue;
                                 }
                                 if skip_duplicate_user_record(
@@ -676,6 +693,27 @@ impl CodexParser {
                     if let Some(payload) = value.get("payload") {
                         let payload_type =
                             payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        // 登记本文件里的异步提问调用，供后面的回复信封与普通 prompt
+                        // 区分（见 `codex_async_questions`）。id 回退顺序与详情解析器一致。
+                        if matches!(payload_type, "function_call" | "custom_tool_call")
+                            && payload
+                                .get("name")
+                                .or_else(|| payload.get("tool_name"))
+                                .and_then(|n| n.as_str())
+                                == Some(codex_async_questions::TOOL_NAME)
+                        {
+                            let tool_use_id = payload
+                                .get("call_id")
+                                .or_else(|| payload.get("tool_call_id"))
+                                .or_else(|| payload.get("id"))
+                                .and_then(|id| id.as_str());
+                            let question = parse_codex_json_arg(payload)
+                                .as_ref()
+                                .and_then(AsyncQuestionCall::from_arguments);
+                            if let (Some(id), Some(call)) = (tool_use_id, question) {
+                                async_question_calls.insert(id.to_string(), call);
+                            }
+                        }
                         if payload_type == "message" {
                             let role = payload.get("role").and_then(|r| r.as_str()).unwrap_or("");
                             // The detail parser turns an IMAGE-bearing
@@ -717,6 +755,22 @@ impl CodexParser {
                                     extract_response_item_message_blocks(payload, is_user)
                                 {
                                     let text = first_text_block(&blocks).unwrap_or_default();
+
+                                    // 异步提问的回复。详情解析器把已答复的信封折叠进卡
+                                    // 片、不产出 user turn，所以这里也不计；指向未知调用
+                                    // 的信封在详情视图里按文本渲染，这里照常计数。
+                                    let text = if is_user {
+                                        match codex_async_questions::take_reply(
+                                            &text,
+                                            &mut async_question_calls,
+                                        ) {
+                                            ReplyMessage::NotAReply => text,
+                                            ReplyMessage::Answered(_) => continue,
+                                            ReplyMessage::Display(display) => display,
+                                        }
+                                    } else {
+                                        text
+                                    };
 
                                     // Plan document, counted outside the promotion
                                     // gate exactly as the detail parser renders it
@@ -17623,6 +17677,180 @@ mod tests {
             "{texts:?}"
         );
         assert!(texts.contains(&("assistant", Some("Deploying to staging.".into()))));
+    }
+
+    // ── 异步提问回复：摘要与详情一致 ───────────────────────────────
+    //
+    // 详情解析器把「已答复」的回复信封折叠进问题卡片，因此不渲染 user turn。
+    // 摘要通道必须丢掉同一条记录，否则侧边栏计数会比打开的会话多一条（信封若是
+    // 本文件第一条会参与取标题的记录，标题也会被它抢走）。指向本 rollout 之外
+    // 调用的信封在详情里不会被丢弃（渲染成「> 问题」加答案），所以摘要也要计数。
+
+    const ASYNC_ENVELOPE: &str = "<send_user_message_question_reply>\n[{\"answer\":\"Staging\\n\\nprobe note\",\"question\":\"Which environment should I deploy to?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_1\\\",0]\"}]\n</send_user_message_question_reply>";
+
+    fn async_question_call(ts: &str) -> serde_json::Value {
+        record(
+            ts,
+            "response_item",
+            serde_json::json!({"type": "function_call", "id": "fc_1", "name": "request_user_input_async",
+                "arguments": "{\"questions\": [{\"title\": \"Which environment should I deploy to?\", \"options\": [\"Staging\", \"Production\"]}]}",
+                "call_id": "call_1"}),
+        )
+    }
+
+    /// 复现线上形状（侧边栏与打开后的会话对不上）：prompt、异步调用、accepted 输出，
+    /// 回复信封同时写在两条通道上，再接模型的回答。
+    #[test]
+    fn an_answered_async_question_is_counted_once_by_the_summary_too() {
+        let content = jsonl(&[
+            record(
+                "2026-11-09T12:41:40.770Z",
+                "session_meta",
+                serde_json::json!({"id": "ask-sum", "cwd": "/w", "cli_version": "0.166.0", "model_provider": "fake"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.771Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "ASKASYNC please"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.780Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ASKASYNC please"}]}),
+            ),
+            async_question_call("2026-11-09T12:41:40.786Z"),
+            record(
+                "2026-11-09T12:41:40.789Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "{\"accepted\":true}"}),
+            ),
+            record(
+                "2026-11-09T12:41:41.800Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": ASYNC_ENVELOPE}]}),
+            ),
+            record(
+                "2026-11-09T12:41:41.801Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": ASYNC_ENVELOPE}),
+            ),
+            assistant_item("2026-11-09T12:41:41.826Z", "Deploying to staging."),
+            record(
+                "2026-11-09T12:41:41.831Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1"}),
+            ),
+        ]);
+        let detail = parse_rollout("async-ask-sum", &content, "ask-sum");
+        let summary = summary_of("async-ask-sum", &content);
+
+        // 屏幕上一条 user turn，列表里同样的计数。
+        let texts = turn_texts(&detail);
+        assert_eq!(
+            texts.iter().filter(|(role, _)| *role == "user").count(),
+            1,
+            "{texts:?}"
+        );
+        assert_eq!(
+            summary.message_count, detail.summary.message_count,
+            "{texts:?}"
+        );
+        // ……即 prompt + 回复两条，折叠掉的信封不计。
+        assert_eq!(summary.message_count, 2, "{texts:?}");
+        assert_eq!(summary.title.as_deref(), Some("ASKASYNC please"));
+    }
+
+    /// 只有 `response_item` 通道（用自己 `CODEX_HOME` 跑的嵌入方）：调用和信封
+    /// 是文件里唯一的副本，摘要仍须把回复认成卡片折叠而不是一条 user turn。
+    #[test]
+    fn an_answered_async_question_counts_once_without_the_event_channel() {
+        let content = jsonl(&[
+            record(
+                "2026-11-09T12:41:40.770Z",
+                "session_meta",
+                serde_json::json!({"id": "ask-ri", "cwd": "/w", "cli_version": "0.166.0"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.780Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ASKASYNC please"}]}),
+            ),
+            async_question_call("2026-11-09T12:41:40.786Z"),
+            record(
+                "2026-11-09T12:41:40.789Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "{\"accepted\":true}"}),
+            ),
+            record(
+                "2026-11-09T12:41:41.800Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": ASYNC_ENVELOPE}]}),
+            ),
+            assistant_item("2026-11-09T12:41:41.826Z", "Deploying to staging."),
+        ]);
+        let detail = parse_rollout("async-ask-ri", &content, "ask-ri");
+        let summary = summary_of("async-ask-ri", &content);
+
+        let texts = turn_texts(&detail);
+        assert_eq!(
+            texts.iter().filter(|(role, _)| *role == "user").count(),
+            1,
+            "{texts:?}"
+        );
+        assert_eq!(
+            summary.message_count, detail.summary.message_count,
+            "{texts:?}"
+        );
+        assert_eq!(summary.title.as_deref(), Some("ASKASYNC please"));
+    }
+
+    /// 指向本 rollout 之外调用的信封（例如别的 Codex 客户端写的）：详情把它当普通
+    /// 用户消息渲染，摘要就要照样计数并取标题——按形状一律丢弃会让列表少一条真消息。
+    #[test]
+    fn an_unknown_async_question_reply_still_counts_as_its_own_turn() {
+        let content = jsonl(&[
+            record(
+                "2026-11-09T12:41:40.770Z",
+                "session_meta",
+                serde_json::json!({"id": "ask-unknown", "cwd": "/w", "cli_version": "0.166.0"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.771Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "ASKASYNC please"}),
+            ),
+            record(
+                "2026-11-09T12:41:41.800Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": ASYNC_ENVELOPE}),
+            ),
+            assistant_item("2026-11-09T12:41:41.826Z", "Deploying to staging."),
+        ]);
+        let detail = parse_rollout("async-ask-unknown", &content, "ask-unknown");
+        let summary = summary_of("async-ask-unknown", &content);
+
+        let texts = turn_texts(&detail);
+        assert_eq!(
+            texts.iter().filter(|(role, _)| *role == "user").count(),
+            2,
+            "{texts:?}"
+        );
+        assert_eq!(
+            summary.message_count, detail.summary.message_count,
+            "{texts:?}"
+        );
+        assert_eq!(summary.message_count, 3, "{texts:?}");
+        assert_eq!(summary.title.as_deref(), Some("ASKASYNC please"));
     }
 
     /// codex 0.165 turns `reasoning_effort_override` on: under a ChatGPT
