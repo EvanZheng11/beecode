@@ -274,7 +274,7 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json"))
   const cargo = read("src-tauri/Cargo.toml")
   assert.equal(pkg.name, "beecode")
-  assert.equal(pkg.version, "0.42.5")
+  assert.equal(pkg.version, "0.42.6")
   assert.equal(config.version, pkg.version)
   assert.equal(config.productName, "BeeCode")
   assert.equal(config.mainBinaryName, "codeg")
@@ -287,10 +287,10 @@ test("BeeCode 版本、更新源及兼容契约一致", () => {
   assert.deepEqual(config.plugins.updater.endpoints, [
     "https://github.com/EvanZheng11/beecode/releases/latest/download/latest.json",
   ])
-  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.42\.5"/)
+  assert.match(cargo, /\[package\]\nname = "beecode"\nversion = "0\.42\.6"/)
   assert.match(
     read("src-tauri/Cargo.lock"),
-    /name = "beecode"\nversion = "0\.42\.5"/
+    /name = "beecode"\nversion = "0\.42\.6"/
   )
   assert.match(cargo, /default-run = "codeg"/)
   const lock = read("src-tauri/Cargo.lock")

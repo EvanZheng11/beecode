@@ -219,8 +219,12 @@ function messageButton(label: string): HTMLElement {
 
 /** The file box of `name`. */
 function fileBox(name: string): HTMLElement {
-  return screen.getByText(name).closest("[data-testid=nav-file]")!
-    .parentElement as HTMLElement
+  // The file's line names it; an open diff's title bar does too.
+  const line = screen
+    .getAllByText(name)
+    .map((el) => el.closest("[data-testid=nav-file]"))
+    .find((el) => el != null)!
+  return line.parentElement as HTMLElement
 }
 
 beforeEach(() => {
@@ -231,37 +235,79 @@ beforeEach(() => {
 })
 
 describe("MessageNavList", () => {
-  it("展开箭头只切换详情，点击无详情消息仍高亮当前选中行", () => {
-    const onSelect = vi.fn()
-    renderList({ onSelect })
-    const row = messageButton("edit something").parentElement!
-    fireEvent.click(within(row).getByRole("button", { name: "2 files" }))
-    expect(onSelect).not.toHaveBeenCalled()
-    expect(screen.getByTestId("nav-sub-agent")).toBeInTheDocument()
-    fireEvent.click(messageButton("first message"))
-    expect(messageButton("first message")).toHaveAttribute(
-      "aria-current",
-      "location"
-    )
-    expect(messageButton("first message").parentElement).toHaveClass(
-      "bg-primary-soft"
-    )
+  describe("while the agent answers a message", () => {
+    const running = { turnId: "u3", startedAt: Date.now() - 65_000 }
+
+    it("lists that message first, its clock running", () => {
+      renderList({ running })
+      const pinned = screen.getByTestId("nav-running")
+      expect(pinned).toHaveTextContent("delete a file")
+      expect(within(pinned).getByTestId("nav-running-clock")).toHaveTextContent(
+        /1m [56]s/
+      )
+      // First in the list, and listed once.
+      const labels = screen
+        .getAllByTestId("nav-message")
+        .map((row) => row.textContent)
+      expect(labels[0]).toContain("delete a file")
+      expect(
+        labels.filter((label) => label?.includes("delete a file"))
+      ).toHaveLength(1)
+      expect(labels.slice(1).map((l) => l?.replace(/\d+$/, ""))).toEqual([
+        expect.stringContaining("first message"),
+        expect.stringContaining("edit something"),
+      ])
+    })
+
+    it("says it is running in words for a screen reader", () => {
+      renderList({ running })
+      expect(
+        within(screen.getByTestId("nav-running-clock")).getByText("Running")
+      ).toHaveClass("sr-only")
+    })
+
+    it("goes back to its place once it is done", () => {
+      const view = renderList({ running })
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SessionViewerHostContext.Provider
+            value={{ open: (request) => opened.push(request) }}
+          >
+            <MessageNavScrollContext.Provider value={null}>
+              <MessageNavList entries={entries} onSelect={vi.fn()} />
+            </MessageNavScrollContext.Provider>
+          </SessionViewerHostContext.Provider>
+        </NextIntlClientProvider>
+      )
+      expect(screen.queryByTestId("nav-running")).not.toBeInTheDocument()
+      const labels = screen
+        .getAllByTestId("nav-message")
+        .map((row) => row.textContent)
+      expect(labels[2]).toContain("delete a file")
+    })
+
+    it("lists nothing first for a message it doesn't hold", () => {
+      renderList({ running: { turnId: "elsewhere", startedAt: null } })
+      expect(screen.queryByTestId("nav-running")).not.toBeInTheDocument()
+    })
   })
 
-  it("展开消息保持紧凑单行、蓝色编号和淡蓝选中态，委派在行下展开", () => {
-    renderList()
-    const button = messageButton("edit something")
-    fireEvent.click(button)
-    expect(button).toHaveClass("h-8")
-    expect(screen.getByText("edit something")).toHaveClass("truncate")
-    expect(button.parentElement).toHaveClass("bg-primary-soft")
-    expect(within(button).getByText("2")).toHaveClass("bg-primary-soft")
-    expect(screen.getAllByTestId("nav-sub-agent")).toHaveLength(1)
-    expect(button.parentElement?.nextElementSibling).toContainElement(
-      screen.getByTestId("nav-sub-agent")
-    )
-    fireEvent.click(messageButton("first message"))
-    expect(screen.queryByTestId("nav-sub-agent")).toBeNull()
+  it("says when the message the transcript shows was sent", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-06-12T12:06:30.000Z"))
+    try {
+      renderList({
+        currentTurnId: "u1",
+        entries: [
+          { ...entries[0], sentAt: Date.parse("2026-06-12T12:00:00.000Z") },
+        ],
+      })
+      expect(screen.getByTestId("nav-row-time")).toHaveTextContent(
+        "6 minutes ago"
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("lists nothing without entries", () => {
@@ -333,6 +379,19 @@ describe("MessageNavList", () => {
       screen.getByRole("button", { name: "Load earlier messages" })
     )
     expect(onRetryEarlier).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps code left to right under a right-to-left interface", () => {
+    // A list item's own text-align (`-webkit-match-parent`) turns the list's
+    // logical start into a physical right under RTL, which would carry
+    // through a diff's dir="ltr" and push its code to the right edge: each
+    // row starts its own.
+    renderList()
+    const rows = screen.getAllByRole("listitem")
+    expect(rows).toHaveLength(entries.length)
+    for (const row of rows) {
+      expect(row.firstElementChild).toHaveClass("text-start")
+    }
   })
 
   it("sums up a closed message's sub-agents and files", () => {
@@ -451,6 +510,26 @@ describe("MessageNavList", () => {
       expect(document.querySelector("[data-diff-row]")).toBeNull()
     })
 
+    it("unfolds a diff in a panel under the file's line, as the transcript does an edit's", () => {
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      const box = fileBox("b.ts")
+      fireEvent.click(
+        within(box).getByRole("button", {
+          name: "Show the changes to src/b.ts",
+        })
+      )
+      // The line stays a line — no frame round it and the diff together…
+      const line = box.querySelector("[data-testid=nav-file]")!
+      expect(box).not.toHaveClass("border")
+      expect(line.querySelector("[data-diff-row]")).toBeNull()
+      // …and the diff opens in a panel of its own under it: the page colour
+      // inside a hairline.
+      const panel = line.nextElementSibling as HTMLElement
+      expect(panel.querySelectorAll("[data-diff-row]")).toHaveLength(3)
+      expect(panel).toHaveClass("border", "border-border", "bg-background")
+    })
+
     it("switches a diff to side by side and back, remembering the panel's own choice", () => {
       renderList()
       fireEvent.click(messageButton("edit something"))
@@ -491,6 +570,46 @@ describe("MessageNavList", () => {
       expect(openFileTarget).toHaveBeenCalledWith("/repo/src/b.ts", {
         diff: { content: EDIT_DIFF, groupLabel: "u2" },
       })
+    })
+
+    // As an edit's diff in the transcript: the switch and the open-in-tab
+    // button sit on the diff panel's title bar, not on the file's line.
+    it("puts a diff's controls on its panel's title bar", () => {
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      const box = fileBox("b.ts")
+      const line = box.querySelector("[data-testid=nav-file]") as HTMLElement
+      expect(
+        within(line).queryByRole("button", { name: "View Diff" })
+      ).toBeNull()
+      fireEvent.click(
+        within(line).getByRole("button", {
+          name: "Show the changes to src/b.ts",
+        })
+      )
+      expect(
+        within(line).queryByRole("button", { name: "View Diff" })
+      ).toBeNull()
+      expect(
+        within(line).queryByRole("button", {
+          name: "Switch to side-by-side view",
+        })
+      ).toBeNull()
+      const panel = within(box).getByTestId("nav-file-diff")
+      const bar = panel.firstElementChild as HTMLElement
+      // The bidi marks that keep the folder in order aside.
+      expect(bar.textContent?.replace(/\u200e/g, "")).toContain("src/b.ts")
+      expect(
+        within(bar).getByRole("button", { name: "View Diff" })
+      ).toBeInTheDocument()
+      expect(
+        within(bar).getByRole("button", {
+          name: "Switch to side-by-side view",
+        })
+      ).toBeInTheDocument()
+      // The code is under the bar.
+      expect(bar.querySelector("[data-diff-row]")).toBeNull()
+      expect(panel.querySelectorAll("[data-diff-row]")).toHaveLength(3)
     })
 
     it("keeps a file's diff open while its message is closed and reopened", () => {
@@ -545,11 +664,32 @@ describe("MessageNavList", () => {
       ])
     })
 
+    it("draws a sub-agent as the transcript's activity draws a delegation", () => {
+      models.set("tu-1", {
+        task: "Investigate the flaky test",
+        childConversationId: 9,
+        status: "running",
+      })
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      const agent = screen.getByTestId("nav-sub-agent")
+      // A line, not a card: its logo in a status ring that turns while it
+      // works, how it is doing in words, and the ↗ that says the line opens
+      // its conversation.
+      expect(agent).not.toHaveClass("border")
+      const ring = agent.querySelector("[role=img]")!
+      expect(ring.querySelector(".animate-spin")).not.toBeNull()
+      expect(within(agent).getByText("running")).toBeInTheDocument()
+      expect(agent.querySelector(".lucide-arrow-up-right")).not.toBeNull()
+    })
+
     it("only reports a sub-agent with no conversation to open", () => {
       models.set("tu-1", { childConversationId: null })
       renderList()
       fireEvent.click(messageButton("edit something"))
-      expect(screen.getByTestId("nav-sub-agent").tagName).not.toBe("BUTTON")
+      const agent = screen.getByTestId("nav-sub-agent")
+      expect(agent.tagName).not.toBe("BUTTON")
+      expect(agent.querySelector(".lucide-arrow-up-right")).toBeNull()
     })
 
     it("only reports a sub-agent when there is no viewer to open it in", () => {
@@ -572,6 +712,13 @@ describe("MessageNavList", () => {
       })
       const [failed, resumed] = screen.getAllByTestId("nav-sub-agent")
       expect(failed).toHaveTextContent("timeout")
+      // In the failure colour, its ring as well as its words.
+      expect(within(failed).getByText("timeout")).toHaveClass(
+        "text-tone-danger"
+      )
+      expect(
+        failed.querySelector("[role=img] > .border-tone-danger")
+      ).not.toBeNull()
       expect(within(failed).queryByTitle("Resumed")).not.toBeInTheDocument()
       expect(within(resumed).getByTitle("Resumed")).toBeInTheDocument()
     })
@@ -580,7 +727,7 @@ describe("MessageNavList", () => {
   describe("in a scroll area", () => {
     /** A scroll area `height` tall, at its top. Rows are 33px apart from its
      *  top (the virtualizer mock), and the section header covers its top
-     *  28px. */
+     *  36px. */
     function scrollArea(height: number): HTMLElement & { height: number } {
       const element = document.createElement("div") as HTMLDivElement & {
         height: number
@@ -631,6 +778,36 @@ describe("MessageNavList", () => {
       ).toBeInTheDocument()
     })
 
+    // The running message is listed apart, above the virtualized rows.
+    it("offers a way back to the current message when it is the running one", () => {
+      const area = scrollArea(60)
+      renderList(
+        {
+          currentTurnId: "u3",
+          running: { turnId: "u3", startedAt: null },
+        },
+        { scrollElement: area }
+      )
+      // It sits 30px into the scrolled content, 40px tall.
+      const pinned = screen.getByTestId("nav-running")
+      pinned.getBoundingClientRect = () =>
+        ({ top: 30 - area.scrollTop, height: 40 }) as DOMRect
+      scrollTo(area, 200)
+      const back = screen.getByRole("button", {
+        name: "Scroll to the current message (#3)",
+      })
+      fireEvent.click(back)
+      expect(area.scrollTo).toHaveBeenCalledWith({
+        top: 30 - (60 - 40) / 2,
+        behavior: "smooth",
+      })
+      // Back at the top it is in view again.
+      scrollTo(area, 0)
+      expect(
+        screen.queryByRole("button", { name: /Scroll to the current message/ })
+      ).not.toBeInTheDocument()
+    })
+
     it("checks again when the scroll area resizes, without a scroll", async () => {
       const observers: Array<() => void> = []
       const Original = globalThis.ResizeObserver
@@ -667,6 +844,44 @@ describe("MessageNavList", () => {
       } finally {
         globalThis.ResizeObserver = Original
       }
+    })
+
+    it("fills nothing with an opaque colour a background image would not show through", async () => {
+      models.set("tu-1", { childConversationId: 9 })
+      const area = scrollArea(60)
+      renderList({ currentTurnId: "u3" }, { scrollElement: area })
+      await screen.findByRole("button", {
+        name: "Scroll to the current message (#3)",
+      })
+      fireEvent.click(messageButton("edit something"))
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show the changes to src/b.ts" })
+      )
+      // Over a workspace background image `ws-msg-card` / `ws-msg-chip` turn
+      // a fill translucent (globals.css): every page-coloured or muted fill
+      // here — the band, the diff's panel, the button back to the current
+      // message — has one.
+      // Their tints too (`bg-background/80`): page-coloured all the same.
+      const OPAQUE = /^bg-(background|card|muted|secondary|popover)(\/\d+)?$/
+      const classes = (el: Element) =>
+        (el.getAttribute("class") ?? "").split(/\s+/)
+      const filled = [...document.body.querySelectorAll("*")].filter((el) =>
+        classes(el).some((c) => OPAQUE.test(c))
+      )
+      expect(filled.length).toBeGreaterThanOrEqual(3)
+      for (const el of filled) {
+        expect(classes(el).join(" ")).toMatch(/\bws-msg-(card|chip)\b/)
+      }
+      // A fade into the page colour is dropped there (`ws-no-fade`)…
+      const fades = [
+        ...document.body.querySelectorAll("[class*='from-background']"),
+      ]
+      expect(fades).toHaveLength(1)
+      expect(fades[0]).toHaveClass("ws-no-fade")
+      // …and the hairlines are the transcript's (`ws-msg-scope`).
+      expect(
+        screen.getByTestId("virtual-list").closest(".ws-msg-scope")
+      ).not.toBeNull()
     })
 
     it("offers nothing while the current message is in view", async () => {
