@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react"
 import { NextIntlClientProvider, useTranslations } from "next-intl"
+import type { Locale } from "next-intl"
 import type { ReactNode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -9,7 +10,14 @@ const h = vi.hoisted(() => ({
   status: null as string | null,
 }))
 vi.mock("@/contexts/acp-connections-context", () => {
-  const actions = { setActiveKey: vi.fn(), touchActivity: vi.fn() }
+  // 生命周期卸载清理会调用 `releaseActiveKey`（use-connection-lifecycle.ts:448），
+  // 缺它会抛 "not a function" 并使 afterEach 的 cleanup 中断，连带污染下一条用例的
+  // connect 调用计数。
+  const actions = {
+    setActiveKey: vi.fn(),
+    releaseActiveKey: vi.fn(),
+    touchActivity: vi.fn(),
+  }
   return { useAcpActions: () => actions }
 })
 vi.mock("@/contexts/task-context", () => {
@@ -35,6 +43,11 @@ vi.mock("@/hooks/use-connection", () => ({
     configOptions: null,
     isViewer: false,
     backgroundOutstanding: 0,
+    // `isConnectionBusy`（src/lib/connection-teardown.ts）按 `ConnectionWork`
+    // 全量判定卸载是否可断开，这三项缺一会让卸载清理抛错，故按真实契约给空值。
+    asyncTasks: [],
+    remoteControl: null,
+    delegatedChildren: [],
   }),
 }))
 
@@ -56,7 +69,9 @@ it.each([
     vi.spyOn(console, "error").mockImplementation(() => {})
     h.status = null
     h.connect.mockRejectedValue(error)
-    let locale = "en"
+    // `Locale` 是 next-intl 的 AppConfig 收窄联合类型（见 src/i18n/global.d.ts），
+    // 显式标注避免 `let` 推导成 string 后赋给 provider 的 locale 触发 TS2322。
+    let locale: Locale = "en"
     function Wrapper({ children }: { children: ReactNode }) {
       return (
         <NextIntlClientProvider
