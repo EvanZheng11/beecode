@@ -63,6 +63,9 @@ pub struct RemoteRunTracker {
     slots: Mutex<HashMap<i32, Arc<Semaphore>>>,
     gates: Mutex<HashMap<i32, Arc<Mutex<bool>>>>,
     recovery_cutoff: chrono::DateTime<chrono::Utc>,
+    /// 仅测试：接下来 N 次行读取直接返回错误，用于验证读库退避重试。
+    #[cfg(test)]
+    read_failures: Mutex<usize>,
 }
 
 impl RemoteRunTracker {
@@ -73,7 +76,15 @@ impl RemoteRunTracker {
             slots: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             recovery_cutoff: chrono::Utc::now(),
+            #[cfg(test)]
+            read_failures: Mutex::new(0),
         }
+    }
+
+    /// 仅测试：让接下来 `count` 次行读取返回错误；0 表示恢复正常。
+    #[cfg(test)]
+    pub async fn fail_next_reads(&self, count: usize) {
+        *self.read_failures.lock().await = count;
     }
 
     pub fn existed_at_startup(&self, row: &Model) -> bool {
@@ -331,6 +342,14 @@ impl RemoteRunTracker {
     }
 
     pub async fn row(&self, task_id: &str) -> Result<Option<Model>, RemoteError> {
+        #[cfg(test)]
+        {
+            let mut failures = self.read_failures.lock().await;
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(err("remote_persistence_failed", "注入的读库失败"));
+            }
+        }
         store::get_by_task_id(&self.db.conn, task_id)
             .await
             .map_err(db_error)
@@ -494,10 +513,17 @@ pub fn info(row: &Model) -> RemoteTaskInfo {
 }
 
 pub fn report(row: &Model) -> DelegationTaskReport {
+    // 不可达不是“等权限”：没有待处理的人工请求，只是离线且仍非终态。
     let blocked = match row.status.as_str() {
-        "unreachable" => Some("remote_unreachable"),
         "blocked" => row.blocked_on.as_deref(),
         _ => None,
+    };
+    let message = match (row.error_message.clone(), row.status.as_str()) {
+        (Some(message), _) => Some(message),
+        (None, "unreachable") => {
+            Some("远程连接连续十分钟不可达：任务仍非终态，可重新同步或取消".into())
+        }
+        (None, _) => blocked.map(|_| "请去远程界面处理".into()),
     };
     DelegationTaskReport {
         task_id: Some(row.task_id.clone()),
@@ -511,10 +537,7 @@ pub fn report(row: &Model) -> DelegationTaskReport {
         agent_type: None,
         text: row.result_text.clone(),
         error_code: row.error_code.clone(),
-        message: row
-            .error_message
-            .clone()
-            .or_else(|| blocked.map(|_| "请去远程界面处理".into())),
+        message,
         duration_ms: row.duration_ms.and_then(|d| u64::try_from(d).ok()),
         blocked_on: blocked.map(|kind| BlockedOn {
             kind: if kind == "question" {
@@ -523,16 +546,27 @@ pub fn report(row: &Model) -> DelegationTaskReport {
                 BlockedKind::Permission
             },
             request_id: format!("remote:{kind}:{}", row.last_event_seq),
-            title: Some(if kind == "remote_unreachable" {
-                "remote_unreachable：远程连续十分钟不可达，请重新同步或取消".into()
-            } else {
-                "请去远程界面处理请求".into()
-            }),
+            title: Some("请去远程界面处理请求".into()),
         }),
         assistant_id: None,
         assistant_name: None,
         progress: None,
         remote: Some(info(row)),
+    }
+}
+
+/// 状态长轮询的唤醒依据：真正的人工阻塞，或离线任务的内部令牌。
+/// 离线没有终态事件，没有令牌时 `wait_ms: 0` 会永久挂住；令牌只用于唤醒，
+/// 报告里的 `blocked_on` 仍为 `None`（离线不是等人工权限）。
+pub fn wake_block(row: &Model) -> Option<BlockedOn> {
+    match row.status.as_str() {
+        "blocked" => report(row).blocked_on,
+        "unreachable" => Some(BlockedOn {
+            kind: BlockedKind::Permission,
+            request_id: format!("remote:unreachable:{}", row.last_event_seq),
+            title: None,
+        }),
+        _ => None,
     }
 }
 
@@ -585,4 +619,74 @@ fn db_error(_: impl std::fmt::Display) -> RemoteError {
 }
 pub fn err(code: &str, message: &str) -> RemoteError {
     (code.into(), message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn row(status: &str, blocked_on: Option<&str>) -> Model {
+        Model {
+            id: 1,
+            task_id: "task-1".into(),
+            connection_id: Some(3),
+            parent_conversation_id: 9,
+            parent_tool_use_id: "tool-1".into(),
+            connection_name: "构建机".into(),
+            remote_folder_id: 7,
+            remote_workspace: "/remote".into(),
+            target_kind: "agent".into(),
+            target_ref: "codex".into(),
+            target_label: "Codex".into(),
+            permissions: "wait".into(),
+            task_preview: "任务".into(),
+            run_id: Some("run-1".into()),
+            remote_conversation_id: Some(77),
+            remote_link: None,
+            remote_worktree: None,
+            status: status.into(),
+            blocked_on: blocked_on.map(str::to_owned),
+            last_event_seq: 5,
+            result_text: None,
+            result_subtype: None,
+            error_code: None,
+            error_message: None,
+            duration_ms: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            settled_at: None,
+        }
+    }
+
+    /// AC2：unreachable 报告不假装等权限，仍是非终态并提示重新同步或取消。
+    #[test]
+    fn unreachable_report_is_not_a_permission_block() {
+        let report = report(&row("unreachable", None));
+        assert_eq!(report.status, TaskStatus::Running);
+        assert!(report.blocked_on.is_none(), "离线不能报成等待权限");
+        assert!(report.message.unwrap().contains("重新同步"));
+    }
+
+    /// 离线任务仍需唤醒长轮询，但唤醒令牌不是报告内容。
+    #[test]
+    fn unreachable_wakes_poll_without_reporting_a_block() {
+        let offline = row("unreachable", None);
+        assert!(report(&offline).blocked_on.is_none());
+        let wake = wake_block(&offline).expect("离线任务必须能唤醒长轮询");
+        assert!(wake.title.is_none());
+        assert_eq!(wake.kind, BlockedKind::Permission);
+        // 运行中的任务不伪造阻塞。
+        assert!(wake_block(&row("running", None)).is_none());
+    }
+
+    /// blocked 仍保留原有的权限/问题阻塞语义，别把离线修复带成回归。
+    #[test]
+    fn blocked_report_keeps_its_blocked_kind() {
+        let question = report(&row("blocked", Some("question")));
+        assert_eq!(question.blocked_on.unwrap().kind, BlockedKind::Question);
+        let permission = report(&row("blocked", Some("permission")));
+        assert_eq!(permission.message.as_deref(), Some("请去远程界面处理"));
+        assert_eq!(permission.blocked_on.unwrap().kind, BlockedKind::Permission);
+    }
 }
