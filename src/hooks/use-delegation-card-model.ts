@@ -84,8 +84,9 @@ export interface DelegationIdentity {
  * 三条来源（实时事件绑定 → 快照 meta → 工具输出/报告）合并成这一份。
  */
 export interface RemoteDelegationView {
-  /** 保存的远程连接 id（用于跳转/判断连接是否已被删除）。 */
-  connectionId: number
+  /** 保存的远程连接 id（用于跳转/判断连接是否已被删除）。连接删除后为
+   *  `null`：历史卡仍显示机器名，但没有可操作的连接。 */
+  connectionId: number | null
   connectionName: string
   runId: string
   /** 远程会话 id —— 本机不存在该会话，绝不用它查本机记录。 */
@@ -236,7 +237,12 @@ export function useDelegationCardModel(
     const base = live ?? fromMeta ?? fromOutput
     if (!base) return null
     return {
-      connectionId: base.connectionId,
+      // 实时事件/报告可能把「连接已删除」写成 0（后端 `RemoteTaskInfo::info` 的
+      // 兜底）：0 不是连接主键，一律归 null，卡片按「连接已删除」处理。
+      connectionId:
+        base.connectionId != null && base.connectionId >= 1
+          ? base.connectionId
+          : null,
       connectionName: base.connectionName,
       runId: base.runId,
       conversationId:
@@ -249,7 +255,8 @@ export function useDelegationCardModel(
         base.worktree ?? fromMeta?.worktree ?? fromOutput?.worktree ?? null,
       status: live?.status ?? fromMeta?.status ?? fromOutput?.status ?? null,
       blockedOn: live?.blockedOn ?? null,
-      resultPreview: live?.resultPreview ?? null,
+      // 实时事件的结果预览优先；刷新后只有 meta 的 `text_preview`。
+      resultPreview: live?.resultPreview ?? parsedMeta?.resultPreview ?? null,
       errorCode:
         live?.errorCode ??
         parsedMeta?.errorCode ??
@@ -261,6 +268,7 @@ export function useDelegationCardModel(
     binding?.remote,
     parsedMeta?.remote,
     parsedMeta?.errorCode,
+    parsedMeta?.resultPreview,
     toolOutput?.remote,
     toolOutput?.errorCode,
   ])
