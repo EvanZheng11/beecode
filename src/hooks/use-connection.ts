@@ -32,6 +32,7 @@ import {
   EMPTY_TOOL_APPROVALS,
   type ToolApprovalMap,
 } from "@/lib/activity/approval"
+import type { RemoteDelegationWork } from "@/lib/connection-teardown"
 
 const DEFAULT_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   image: false,
@@ -46,6 +47,7 @@ const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 // for every connection that has no async tasks — i.e. almost all of them.
 const EMPTY_ASYNC_TASKS: AsyncTaskRecord[] = []
 const EMPTY_DELEGATED_CHILDREN: string[] = []
+const EMPTY_REMOTE_DELEGATIONS: RemoteDelegationWork[] = []
 
 export interface UseConnectionReturn {
   connectionId: string | null
@@ -136,6 +138,9 @@ export interface UseConnectionReturn {
    *  ending the parent cancels them. See
    *  `ConnectionState.delegatedChildren`. */
   delegatedChildren: string[]
+  /** 还在进行的远程委派（跨机执行）。同样只是 busy 信号：本机父连接是远程任务唯一
+   *  的回传通道。见 `ConnectionState.remoteDelegations`。 */
+  remoteDelegations: RemoteDelegationWork[]
   connect: (
     agentType: AgentType,
     workingDir?: string,
@@ -324,6 +329,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const backgroundOutstanding = connection?.backgroundOutstanding ?? 0
   const delegatedChildren =
     connection?.delegatedChildren ?? EMPTY_DELEGATED_CHILDREN
+  const remoteDelegations =
+    connection?.remoteDelegations ?? EMPTY_REMOTE_DELEGATIONS
 
   const connect = useCallback(
     (
@@ -438,6 +445,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       isDelegationChild,
       backgroundOutstanding,
       delegatedChildren,
+      remoteDelegations,
       connect,
       disconnect,
       reapplyConfig,
@@ -486,6 +494,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       isDelegationChild,
       backgroundOutstanding,
       delegatedChildren,
+      remoteDelegations,
       connect,
       disconnect,
       reapplyConfig,

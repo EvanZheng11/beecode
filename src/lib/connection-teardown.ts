@@ -15,7 +15,23 @@
 
 import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { isAsyncTaskTerminal } from "@/lib/async-tasks"
-import type { AsyncTaskRecord, RemoteControlInfo } from "@/lib/types"
+import { isRemoteTerminal } from "@/lib/delegation-card"
+import type {
+  AsyncTaskRecord,
+  RemoteControlInfo,
+  RemoteDelegationStatus,
+} from "@/lib/types"
+
+/**
+ * 一条还在跟踪的远程委派（跨机执行，任务在另一台机器上跑）。
+ *
+ * 远程任务没有本机子连接，`delegatedChildren` 看不到它；本机父连接是它唯一的
+ * 回传通道，断了远程结果就再没有地方落地。
+ */
+export interface RemoteDelegationWork {
+  taskId: string
+  status: RemoteDelegationStatus
+}
 
 /**
  * Everything the gate weighs. Every field is required on purpose: a caller
@@ -30,6 +46,12 @@ export interface ConnectionWork {
   remoteControl: RemoteControlInfo | null
   /** Child connection ids of the codeg delegations still running. */
   delegatedChildren: readonly string[]
+  /**
+   * 非终态的远程委派（跨机执行）。本机没有它的子连接，所以只能按任务状态判活：
+   * `reserving` / `running` / `blocked` / `unreachable` 都要保活，
+   * `completed` / `failed` / `canceled` 才可回收。
+   */
+  remoteDelegations: readonly RemoteDelegationWork[]
 }
 
 /**
@@ -54,6 +76,8 @@ export interface ConnectionWork {
  *     turn that started it, and the backend cancels every sub-agent a parent
  *     has in flight when the parent goes (the backend sweep spares it too,
  *     while the child is alive).
+ *   * 一次还在进行的远程委派（跨机执行）：任务在另一台机器上，本机连接是它唯一的
+ *     回传通道。`unreachable` 也算在内——用户还能「重新同步」，断了就没得同步了。
  *
  * Only OWNERS need this gate: a viewer's teardown detaches and never kills
  * anything, and the sweeps skip viewers, so one left attached leaks its
@@ -66,7 +90,8 @@ export function isConnectionBusy(conn: ConnectionWork): boolean {
     conn.backgroundOutstanding > 0 ||
     conn.asyncTasks.some((task) => !isAsyncTaskTerminal(task)) ||
     conn.remoteControl != null ||
-    conn.delegatedChildren.length > 0
+    conn.delegatedChildren.length > 0 ||
+    conn.remoteDelegations.some((task) => !isRemoteTerminal(task.status))
   )
 }
 

@@ -70,6 +70,7 @@ function connected(over: Partial<ConnectionState> = {}): ConnectionState {
     asyncTasks: [],
     remoteControl: null,
     delegatedChildren: [],
+    remoteDelegations: [],
     ...over,
   } as unknown as ConnectionState
 }
