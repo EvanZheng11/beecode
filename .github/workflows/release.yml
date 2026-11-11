@@ -461,6 +461,18 @@ jobs:
               ;;
           esac
 
+      # 构建成功不能证明同步 setup 能启动；原生 Linux 运行两种运行时边界的回归。
+      - name: 桌面与服务器启动运行时回归
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        working-directory: src-tauri
+        env:
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: |
+          set -euo pipefail
+          cargo test --locked --features test-utils --test delegation_startup
+          cargo test --locked --no-default-features --features test-utils --test delegation_startup
+
       - name: 诊断 Windows Tauri 构建环境
         if: contains(matrix.target, 'windows')
         shell: pwsh

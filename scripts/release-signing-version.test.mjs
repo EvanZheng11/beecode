@@ -32,6 +32,34 @@ function step(name) {
   return next === -1 ? rest : rest.slice(0, next)
 }
 
+test("发布前执行桌面同步启动与服务器异步启动回归", () => {
+  const steps = parse(workflow).jobs["build-tauri"].steps
+  const index = steps.findIndex(
+    (step) => step.name === "桌面与服务器启动运行时回归"
+  )
+  assert.ok(index >= 0, "缺少启动运行时回归门禁")
+  const gate = steps[index]
+  assert.equal(gate.if, "matrix.target == 'x86_64-unknown-linux-gnu'")
+  assert.equal(gate["continue-on-error"], undefined)
+  assert.equal(gate["working-directory"], "src-tauri")
+  assert.match(gate.run, /set -euo pipefail/)
+  assert.match(
+    gate.run,
+    /cargo test --locked --features test-utils --test delegation_startup/
+  )
+  assert.match(
+    gate.run,
+    /cargo test --locked --no-default-features --features test-utils --test delegation_startup/
+  )
+  assert.ok(
+    index <
+      steps.findIndex(
+        (step) => step.name === "Build and upload to draft release (Linux x64)"
+      ),
+    "启动回归必须先于桌面产物上传"
+  )
+})
+
 test("服务器签名使用已解析发布标签，并校验可信注释版本", () => {
   for (const name of [
     "用更新签名密钥签服务器包（Unix）",
