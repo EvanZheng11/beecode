@@ -196,10 +196,16 @@ export const DelegationResumeRow = memo(function DelegationResumeRow({
 /** 保存的远程连接 id 缓存：一张卡片一个查询太浪费，远端连接列表变化很慢。 */
 let remoteConnectionIdsCache: { at: number; ids: Set<number> } | null = null
 const REMOTE_CONNECTION_IDS_TTL_MS = 15_000
+/** 在途请求：同时挂载的多张远程卡片共用一个，不并发打 N 次 IPC。 */
+let remoteConnectionIdsLoading: Promise<Set<number>> | null = null
+/** 每次重置自增：清空前发出的请求回来时不再写回，免得旧响应覆盖新结果。 */
+let remoteConnectionIdsEpoch = 0
 
 /** 测试用：清掉连接 id 缓存（真实运行不需要）。 */
 export function resetRemoteConnectionIdsCache(): void {
+  remoteConnectionIdsEpoch += 1
   remoteConnectionIdsCache = null
+  remoteConnectionIdsLoading = null
 }
 
 async function loadRemoteConnectionIds(): Promise<Set<number>> {
@@ -210,10 +216,22 @@ async function loadRemoteConnectionIds(): Promise<Set<number>> {
   ) {
     return remoteConnectionIdsCache.ids
   }
-  const list = await listRemoteWorkspaceConnections()
-  const ids = new Set(list.map((c) => c.id))
-  remoteConnectionIdsCache = { at: now, ids }
-  return ids
+  if (remoteConnectionIdsLoading) return remoteConnectionIdsLoading
+  const epoch = remoteConnectionIdsEpoch
+  const loading = listRemoteWorkspaceConnections()
+    .then((list) => {
+      const ids = new Set(list.map((c) => c.id))
+      if (epoch === remoteConnectionIdsEpoch) {
+        remoteConnectionIdsCache = { at: Date.now(), ids }
+      }
+      return ids
+    })
+    .finally(() => {
+      // 失败不缓存：下一次挂载会重试。已被重置时不要动新一代的在途请求。
+      if (epoch === remoteConnectionIdsEpoch) remoteConnectionIdsLoading = null
+    })
+  remoteConnectionIdsLoading = loading
+  return loading
 }
 
 type RemoteAvailability = "unknown" | "available" | "deleted"
