@@ -11454,6 +11454,15 @@ async fn handle_elicitation_request(
                     .is_ok();
                 if let Some(delivery) = delivery {
                     delivery.complete(delivered).await;
+                } else if delivered && !question_id.is_empty() {
+                    // 异步题没有 native delivery：回执只能在这里释放。否则已作答条目
+                    // 的 `submitted` 一直在注册表里，idle 扫描把它当成活跃提问，父连接
+                    // 永远不回收（MCP 提问与原生提问都已在传输接纳后确认）。按题号精确
+                    // 释放，不误清之后注册的新题；发送失败不确认，留给回合结束/断连
+                    // 清理，与 yielding 现有的取消语义一致。
+                    withdraw_access
+                        .confirm_question_answer(&withdraw_conn, &question_id)
+                        .await;
                 }
             });
         }
@@ -28876,6 +28885,274 @@ mod tests {
     #[tokio::test]
     async fn codex_async_withdrawal_cannot_clear_a_new_generation() {
         codex_async_withdrawal_round_trip(true).await;
+    }
+
+    fn async_receipt_specs() -> Vec<crate::acp::question::QuestionSpec> {
+        crate::acp::question::parse_questions(&serde_json::json!({"questions": [{
+            "header": "选择", "question": "选哪个？", "options": [{"label": "甲"}, {"label": "乙"}]
+        }]}))
+        .unwrap()
+    }
+
+    /// 用真实 `handle_elicitation_request` + 真实注册表跑一次 codex 异步题（没有
+    /// native delivery），返回管理器、题号与题目项 id。
+    async fn codex_async_receipt_round_trip() -> (
+        Arc<crate::acp::manager::ConnectionManager>,
+        String,
+        String,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    ) {
+        use crate::acp::manager::{ConnectionManager, ConnectionManagerQuestionLookup};
+        use crate::acp::question::{QuestionAnswer, QuestionAnswerItem};
+        use std::time::Duration;
+
+        let manager = Arc::new(ConnectionManager::new());
+        let commands = manager
+            .insert_test_connection_live(
+                "async-receipt",
+                AgentType::Codex,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let state = manager.get_state("async-receipt").await.unwrap();
+        state.write().await.turn_in_flight = true;
+        let mut events = state.read().await.event_stream().subscribe();
+        let ask_config = crate::acp::question::QuestionRuntimeConfig::new();
+        ask_config
+            .set(crate::acp::question::QuestionConfig {
+                enabled: true,
+                ..Default::default()
+            })
+            .await;
+        let access: Option<(
+            Arc<dyn crate::acp::question::SessionQuestionAccess>,
+            crate::acp::question::QuestionRuntimeConfig,
+        )> = Some((
+            Arc::new(ConnectionManagerQuestionLookup {
+                manager: manager.clone(),
+            }),
+            ask_config,
+        ));
+
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let agent = tokio::spawn(Agent.builder().connect_with(
+            agent_end,
+            async move |cx: ConnectionTo<Client>| {
+                cx.send_request_to(
+                    Client,
+                    CodexElicitationRequest(serde_json::json!({
+                        "mode": "form", "sessionId": "s1",
+                        "message": "Codex keeps working while you answer.",
+                        "requestedSchema": {"type": "object", "properties": {"q1": {
+                            "type": "string", "title": "选哪个？",
+                            "oneOf": [{"const": "甲", "title": "甲"}, {"const": "乙", "title": "乙"}]
+                        }}},
+                        "_meta": {"codex": {"delivery": "async"}}
+                    })),
+                )
+                .block_task()
+                .await
+            },
+        ));
+        let client = tokio::spawn({
+            let state = state.clone();
+            let perms = PendingPermissions::default();
+            Client
+                .builder()
+                .on_receive_request(
+                    async move |req: CodexElicitationRequest,
+                                responder: Responder<serde_json::Value>,
+                                cx: ConnectionTo<Agent>| {
+                        handle_elicitation_request(
+                            &cx,
+                            &access,
+                            &perms,
+                            &state,
+                            &EventEmitter::Noop,
+                            "async-receipt",
+                            req,
+                            responder,
+                        )
+                        .await;
+                        Ok(())
+                    },
+                    on_receive_request!(),
+                )
+                .connect_with(client_end, async |_cx: ConnectionTo<Agent>| {
+                    std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                })
+        });
+        let question_id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AcpEvent::QuestionRequest { question_id, .. } =
+                    &events.recv().await.unwrap().payload
+                {
+                    break question_id.clone();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let item_id = state
+            .read()
+            .await
+            .pending_question
+            .as_ref()
+            .unwrap()
+            .questions[0]
+            .id
+            .clone();
+        manager
+            .answer_question(
+                "async-receipt",
+                &question_id,
+                QuestionAnswer {
+                    answers: vec![QuestionAnswerItem {
+                        question_id: item_id.clone(),
+                        labels: vec!["甲".into()],
+                    }],
+                    declined: false,
+                },
+            )
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), agent)
+            .await
+            .expect("异步题必须把答案回送给 codex")
+            .expect("agent task")
+            .expect("a response, not an error");
+        assert_eq!(response["action"], "accept", "{response}");
+        client.abort();
+        (manager, question_id, item_id, commands)
+    }
+
+    /// 回执是否仍钉住父连接：把活动时间推旧后跑 idle 扫描，返回回收的连接数。
+    /// 连接已被回收时返回 0（状态已不在）。
+    async fn idle_sweep_after_backdating(
+        manager: &crate::acp::manager::ConnectionManager,
+        conn: &str,
+    ) -> usize {
+        let Some(state) = manager.get_state(conn).await else {
+            return 0;
+        };
+        // 有写入者（例如回执释放路径正在拿状态锁）时本轮跳过，别在这里等锁。
+        let Ok(mut session) = state.try_write() else {
+            return 0;
+        };
+        session.last_activity_at = chrono::Utc::now() - chrono::Duration::seconds(600);
+        drop(session);
+        manager
+            .sweep_idle(std::time::Duration::from_secs(300))
+            .await
+    }
+
+    /// 异步题没有 native delivery：回送成功后必须按题号释放回执，否则 `submitted`
+    /// 条目会被 idle 扫描当成活跃提问，父连接永不回收。
+    #[tokio::test]
+    async fn codex_async_question_releases_its_receipt_after_delivery() {
+        use std::time::Duration;
+
+        let (manager, _question_id, _item_id, _commands) = codex_async_receipt_round_trip().await;
+        // 回执在 handler 的派发任务里释放；只有条目真的没了，idle 扫描才会回收
+        // 这个连接（之前它被当作「有活跃提问」永久保活）。
+        let released = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if idle_sweep_after_backdating(&manager, "async-receipt").await == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            released.is_ok(),
+            "回送成功后必须释放已作答回执，否则 idle 永远回收不了父连接"
+        );
+        assert!(manager.get_state("async-receipt").await.is_none());
+        manager.cancel_questions_by_parent("async-receipt").await;
+    }
+
+    /// 迟到的回执只能按题号释放，不得清掉之后注册的新题。
+    #[tokio::test]
+    async fn codex_async_receipt_cannot_clear_a_new_generation() {
+        let (manager, question_id, _item_id, _commands) = codex_async_receipt_round_trip().await;
+        // 等旧题回执先释放（否则同一连接上的新题会被旧题挡住）。
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while manager.question_blocks_task_start("async-receipt").await {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("旧题回执必须先释放");
+        let next = manager
+            .register_yielding_question("async-receipt", async_receipt_specs())
+            .await
+            .expect("旧题已释放，新题必须能注册");
+        // 模拟旧题的迟到/重复回执。
+        manager
+            .confirm_question_answer("async-receipt", &question_id)
+            .await;
+        assert!(
+            manager
+                .cancel_question("async-receipt", &next.question_id)
+                .await,
+            "迟到的回执不得清掉之后注册的新题"
+        );
+        manager.cancel_questions_by_parent("async-receipt").await;
+    }
+
+    /// 未确认的回执不得被当成已送达：条目留着继续挡 idle 回收，仍由现有的
+    /// 回合结束清理收走。回送失败（`respond` 报错）在测试里无法伪造 transport
+    /// 失败，只能在 manager 边界验证「未 confirm 就等于未送达」这条语义。
+    #[tokio::test]
+    async fn unconfirmed_async_receipt_keeps_the_parent_alive_until_turn_end() {
+        let manager = Arc::new(crate::acp::manager::ConnectionManager::new());
+        let _commands = manager
+            .insert_test_connection_live(
+                "async-receipt",
+                AgentType::Codex,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let state = manager.get_state("async-receipt").await.unwrap();
+        state.write().await.turn_in_flight = true;
+        let reg = manager
+            .register_yielding_question("async-receipt", async_receipt_specs())
+            .await
+            .unwrap();
+        let item_id = state.read().await.pending_question.as_ref().unwrap().questions[0]
+            .id
+            .clone();
+        manager
+            .answer_question(
+                "async-receipt",
+                &reg.question_id,
+                crate::acp::question::QuestionAnswer {
+                    answers: vec![crate::acp::question::QuestionAnswerItem {
+                        question_id: item_id,
+                        labels: vec!["甲".into()],
+                    }],
+                    declined: false,
+                },
+            )
+            .await
+            .unwrap();
+        // 没有 confirm：回执还在，父连接必须保活。
+        assert_eq!(
+            idle_sweep_after_backdating(&manager, "async-receipt").await,
+            0,
+            "未确认的回执仍算活跃提问，idle 不得回收父连接"
+        );
+        // 回合结束的现有清理语义仍然收得走它。
+        manager.cancel_turn_questions_by_parent("async-receipt").await;
+        assert_eq!(
+            idle_sweep_after_backdating(&manager, "async-receipt").await,
+            1,
+            "回合结束清理后连接必须可回收（证明上面保活的就是这条回执）"
+        );
+        manager.cancel_questions_by_parent("async-receipt").await;
     }
 
     #[test]
