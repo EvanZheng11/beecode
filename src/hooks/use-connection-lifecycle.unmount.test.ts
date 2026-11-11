@@ -12,7 +12,11 @@
 
 import { renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { AsyncTaskRecord, RemoteControlInfo } from "@/lib/types"
+import type {
+  AsyncTaskRecord,
+  RemoteControlInfo,
+  RemoteDelegationStatus,
+} from "@/lib/types"
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -38,6 +42,10 @@ const conn = vi.hoisted(() => ({
   asyncTasks: [] as AsyncTaskRecord[],
   remoteControl: null as RemoteControlInfo | null,
   delegatedChildren: [] as string[],
+  remoteDelegations: [] as {
+    taskId: string
+    status: RemoteDelegationStatus
+  }[],
   disconnect: (() => Promise.resolve()) as () => Promise<void>,
 }))
 
@@ -64,6 +72,7 @@ vi.mock("@/hooks/use-connection", () => {
       asyncTasks: conn.asyncTasks,
       remoteControl: conn.remoteControl,
       delegatedChildren: conn.delegatedChildren,
+      remoteDelegations: conn.remoteDelegations,
     }),
   }
 })
@@ -107,6 +116,7 @@ describe("useConnectionLifecycle unmount teardown", () => {
     conn.asyncTasks = []
     conn.remoteControl = null
     conn.delegatedChildren = []
+    conn.remoteDelegations = []
     releaseActiveKey = vi.fn()
     acp.setActiveKey = vi.fn()
     acp.releaseActiveKey = releaseActiveKey as unknown as (key: string) => void
@@ -142,6 +152,35 @@ describe("useConnectionLifecycle unmount teardown", () => {
 
   it("disconnects an owner whose tasks have all settled", () => {
     conn.asyncTasks = [backgroundTerminal("completed")]
+
+    closeView()
+
+    expect(disconnect).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps an owner alive while a remote delegation is still in flight", () => {
+    // 远程任务在本机没有子连接，只有这条 busy 信号能拦住卸载。
+    conn.remoteDelegations = [{ taskId: "task-1", status: "running" }]
+
+    closeView()
+
+    expect(disconnect).not.toHaveBeenCalled()
+  })
+
+  it("keeps an owner alive while a remote delegation waits unreachable", () => {
+    // `unreachable` 非终态：用户还可以「重新同步」，断了就没了。
+    conn.remoteDelegations = [{ taskId: "task-1", status: "unreachable" }]
+
+    closeView()
+
+    expect(disconnect).not.toHaveBeenCalled()
+  })
+
+  it("disconnects an owner once every remote delegation is terminal", () => {
+    conn.remoteDelegations = [
+      { taskId: "task-1", status: "completed" },
+      { taskId: "task-2", status: "canceled" },
+    ]
 
     closeView()
 

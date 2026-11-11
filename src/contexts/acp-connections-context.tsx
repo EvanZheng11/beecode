@@ -55,6 +55,7 @@ import {
 import {
   isConnectionBusy,
   isConnectionGoneError,
+  type RemoteDelegationWork,
 } from "@/lib/connection-teardown"
 import {
   getConversationIdByExternalIdFromStore,
@@ -88,6 +89,7 @@ import type {
   PromptCapabilitiesInfo,
   PromptInputBlock,
   RemoteControlInfo,
+  RemoteDelegationStatus,
   ToolApprovalInfo,
   ToolCallImageWire,
   UserMessageBlock,
@@ -117,6 +119,7 @@ import {
 } from "@/lib/activity/approval"
 import { contentBlocksFromUserMessage } from "@/lib/user-message-blocks"
 import { parseAskQuestionInput } from "@/lib/ask-question"
+import { isRemoteTerminal } from "@/lib/delegation-card"
 import { presentSessionNotice, splitHeadline } from "@/lib/session-notices"
 import { presentPluginLoadFailures } from "@/lib/plugin-load-failures"
 import {
@@ -522,6 +525,18 @@ export interface ConnectionState {
    */
   delegatedChildren: string[]
   /**
+   * 还在进行的远程委派（跨机执行），同样是一个 busy 信号。
+   *
+   * 远程任务没有本机子连接，`delegatedChildren` 看不到它；本机父连接是它唯一的
+   * 回传通道，断开后远程结果再也没有地方落地。所以 `reserving` / `running` /
+   * `blocked` / `unreachable` 都要挡自动断连，`completed` / `failed` /
+   * `canceled` 到达即移除（门控随之解封）。
+   *
+   * 由 `remote_delegation_started` / `_updated` / `_completed` 维护，并从快照
+   * 的 `active_remote_delegations` 恢复（重连后不会丢保护）。
+   */
+  remoteDelegations: RemoteDelegationWork[]
+  /**
    * Tool-call context observed OUT-OF-TURN (status !== "prompting"), kept
    * ONLY so a background permission request can still render its command/
    * diff details. Out-of-turn wire tool events are barred from `liveMessage`
@@ -665,6 +680,21 @@ type Action =
       contextKey: string
       childConnectionId: string
       running: boolean
+    }
+  | {
+      // 一条远程委派的开始/状态变化/终态。幂等，所以重复事件不改变状态。
+      type: "REMOTE_DELEGATION_STATE"
+      contextKey: string
+      taskId: string
+      status: RemoteDelegationStatus
+    }
+  | {
+      // 远程委派刚启动（`remote_delegation_started`，载荷不带状态）。只在该任务
+      // 尚未跟踪时插入：事件乱序时后到的 started 不能把已收到的 `blocked` /
+      // 已收到的终态倒退掉。
+      type: "REMOTE_DELEGATION_STARTED"
+      contextKey: string
+      taskId: string
     }
   | StreamingAction
   | { type: "STREAM_BATCH"; actions: StreamingAction[] }
@@ -1768,6 +1798,32 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 const EMPTY_DELEGATED_CHILDREN: string[] = []
+/** 非终态远程委派的那份空表（同 `EMPTY_DELEGATED_CHILDREN`：保住引用相等）。 */
+const EMPTY_REMOTE_DELEGATIONS: RemoteDelegationWork[] = []
+
+/**
+ * 在跟踪的远程委派（跨机执行）—— 本机没有它的子连接，所以存的是父连接上的
+ * 一个 busy 信号，而非可渲染状态（卡片自己从 `DelegationProvider` 取）。
+ *
+ * 只留非终态条目：终态到达即移除，门控随之解封（和 `delegatedChildren` 到达
+ * `running: false` 是同一个时机）。`unreachable` 非终态，所以留着。
+ */
+function withRemoteDelegation(
+  tasks: RemoteDelegationWork[],
+  taskId: string,
+  status: RemoteDelegationStatus
+): RemoteDelegationWork[] {
+  const prev = tasks.find((t) => t.taskId === taskId)
+  if (isRemoteTerminal(status)) {
+    // 终态即离开这份表（门控随之解封）；本来就没这个任务时保住引用。
+    return prev ? tasks.filter((t) => t.taskId !== taskId) : tasks
+  }
+  // 状态没变就不动引用（同一任务可能被重放多次）。
+  if (prev?.status === status) return tasks
+  return prev
+    ? tasks.map((t) => (t.taskId === taskId ? { taskId, status } : t))
+    : [...tasks, { taskId, status }]
+}
 
 /** Last time an out-of-turn drop was logged — module-level sampling clock. */
 let lastOutOfTurnDropLogAt = 0
@@ -2083,6 +2139,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
+        remoteDelegations: EMPTY_REMOTE_DELEGATIONS,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2150,6 +2207,7 @@ function connectionsReducer(
         configStaleDismissed: false,
         backgroundOutstanding: 0,
         delegatedChildren: EMPTY_DELEGATED_CHILDREN,
+        remoteDelegations: EMPTY_REMOTE_DELEGATIONS,
         outOfTurnToolCalls: null,
         hasPrompted: false,
         cancelledTurn: null,
@@ -2350,6 +2408,14 @@ function connectionsReducer(
         // Current state too, and the only way a client that attaches while a
         // delegation runs learns of it: the running frame is one-shot.
         delegatedChildren: action.patch.delegatedChildren,
+        // 同理：远程任务的一帧事件也是一次性的，只有快照能把它交给中途 attach 的
+        // 客户端。只收非终态条目——快照里的终态条目是留给卡片重放的，不是活。
+        remoteDelegations: (action.patch.activeRemoteDelegations ?? []).flatMap(
+          (d) =>
+            isRemoteTerminal(d.status)
+              ? []
+              : [{ taskId: d.task_id, status: d.status }]
+        ),
         sessionFailures: mergedSessionFailures,
         toolApprovals: mergedToolApprovals,
         asyncTasks: mergedAsyncTasks,
@@ -2489,6 +2555,39 @@ function connectionsReducer(
           : conn.delegatedChildren.filter(
               (id) => id !== action.childConnectionId
             ),
+      })
+      return next
+    }
+
+    case "REMOTE_DELEGATION_STATE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const remoteDelegations = withRemoteDelegation(
+        conn.remoteDelegations,
+        action.taskId,
+        action.status
+      )
+      // 参考不变 = 什么都没变，不重渲染。
+      if (remoteDelegations === conn.remoteDelegations) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, remoteDelegations })
+      return next
+    }
+
+    case "REMOTE_DELEGATION_STARTED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if (conn.remoteDelegations.some((t) => t.taskId === action.taskId)) {
+        return state
+      }
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        remoteDelegations: withRemoteDelegation(
+          conn.remoteDelegations,
+          action.taskId,
+          "running"
+        ),
       })
       return next
     }
@@ -6091,6 +6190,32 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             contextKey,
             childConnectionId: e.child_connection_id,
             running: e.running,
+          })
+          break
+        // 远程委派（跨机执行）同样骑在父连接上，同样要让父连接的 busy 信号跟上。
+        // 这三种事件还继续交给 `eventSubscribersRef`（`DelegationProvider`）渲染
+        // 卡片，这里只维护门控用的那个集合。
+        case "remote_delegation_started":
+          dispatch({
+            type: "REMOTE_DELEGATION_STARTED",
+            contextKey,
+            taskId: e.task_id,
+          })
+          break
+        case "remote_delegation_updated":
+          dispatch({
+            type: "REMOTE_DELEGATION_STATE",
+            contextKey,
+            taskId: e.task_id,
+            status: e.status,
+          })
+          break
+        case "remote_delegation_completed":
+          dispatch({
+            type: "REMOTE_DELEGATION_STATE",
+            contextKey,
+            taskId: e.task_id,
+            status: e.status,
           })
           break
         case "async_task": {

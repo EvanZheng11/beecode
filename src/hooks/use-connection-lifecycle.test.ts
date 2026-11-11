@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { shouldDisconnectOnUnmount } from "@/hooks/use-connection-lifecycle"
+import type { RemoteDelegationWork } from "@/lib/connection-teardown"
 import type { AsyncTaskRecord } from "@/lib/types"
 
 // Unmount cleanup (tab closed) must not kill an owner whose agent still has
@@ -17,6 +18,7 @@ const IDLE_OWNER = {
   asyncTasks: [] as AsyncTaskRecord[],
   remoteControl: null,
   delegatedChildren: [] as string[],
+  remoteDelegations: [] as RemoteDelegationWork[],
 }
 
 function asyncTask(state: string): AsyncTaskRecord {
@@ -89,6 +91,35 @@ describe("shouldDisconnectOnUnmount", () => {
     ).toBe(false)
   })
 
+  // 远程委派（跨机执行）在本机没有子连接，`delegatedChildren` 看不到它：任务在
+  // 远端跑着，父连接一断本机就失去唯一的回传通道，远程结果再没有地方落地。
+  it("keeps an owner alive while a remote delegation is still in flight", () => {
+    for (const status of [
+      "reserving",
+      "running",
+      "blocked",
+      "unreachable",
+    ] as const) {
+      expect(
+        shouldDisconnectOnUnmount({
+          ...IDLE_OWNER,
+          remoteDelegations: [{ taskId: "task-1", status }],
+        })
+      ).toBe(false)
+    }
+  })
+
+  it("disconnects an owner whose remote delegations are all terminal", () => {
+    expect(
+      shouldDisconnectOnUnmount({
+        ...IDLE_OWNER,
+        remoteDelegations: (["completed", "failed", "canceled"] as const).map(
+          (status, i) => ({ taskId: `task-${i}`, status })
+        ),
+      })
+    ).toBe(true)
+  })
+
   it("disconnects an idle owner once outstanding has settled to zero", () => {
     expect(shouldDisconnectOnUnmount(IDLE_OWNER)).toBe(true)
   })
@@ -103,6 +134,7 @@ describe("shouldDisconnectOnUnmount", () => {
         asyncTasks: [asyncTask("running")],
         remoteControl: { session_url: null },
         delegatedChildren: ["child-conn"],
+        remoteDelegations: [{ taskId: "task-1", status: "running" }],
       })
     ).toBe(true)
   })

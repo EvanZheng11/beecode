@@ -61,6 +61,7 @@ vi.mock("@/hooks/use-connection", () => {
       asyncTasks: [],
       remoteControl: null,
       delegatedChildren: [],
+      remoteDelegations: [],
     }),
   }
 })

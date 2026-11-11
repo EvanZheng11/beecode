@@ -1098,6 +1098,98 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
     expect(h.acpDisconnect).not.toHaveBeenCalled()
   })
 
+  // 远程委派在本机没有子连接（`delegatedChildren` 看不到它），任务在另一台机器上
+  // 跑着。父连接一断，本机就失去唯一的回传通道，远程结果再没有地方落地。
+  describe("a remote delegation running on another machine", () => {
+    function remoteStarted(seq: number, taskId: string): EventEnvelope {
+      return {
+        seq,
+        connection_id: "spawned-conn",
+        type: "remote_delegation_started",
+        parent_connection_id: "spawned-conn",
+        parent_tool_use_id: "tool-1",
+        task_id: taskId,
+        remote: {
+          connection_id: 3,
+          connection_name: "build-box",
+          run_id: "run-1",
+          conversation_id: null,
+          link: null,
+          worktree: null,
+        },
+      }
+    }
+
+    it("keeps the parent alive until the remote task settles", async () => {
+      const handlers = await connectOwner()
+      emitAcpEvent(handlers, {
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "connected",
+      })
+      emitAcpEvent(handlers, remoteStarted(2, "task-1"))
+
+      await act(async () => {
+        await h.actions!.disconnectIfIdle(TAB)
+      })
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+
+      emitAcpEvent(handlers, {
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "remote_delegation_completed",
+        task_id: "task-1",
+        status: "completed",
+      })
+      await act(async () => {
+        await h.actions!.disconnectIfIdle(TAB)
+      })
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    })
+
+    it("learns a running remote delegation from the snapshot", async () => {
+      const handlers = await connectOwner()
+      h.denormalizeSnapshot.mockReturnValue({
+        ...snapshotBase(),
+        eventSeq: 5,
+        activeRemoteDelegations: [
+          {
+            parent_tool_use_id: "tool-1",
+            task_id: "task-1",
+            remote: {
+              connection_id: 3,
+              connection_name: "build-box",
+              run_id: "run-1",
+            },
+            status: "running",
+          },
+        ],
+      })
+      hydrateSnapshot(handlers, {
+        event_seq: 5,
+      } as unknown as LiveSessionSnapshot)
+
+      await act(async () => {
+        await h.actions!.disconnectIfIdle(TAB)
+      })
+
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+    })
+
+    it("still honours an explicit disconnect while the remote task runs", async () => {
+      const handlers = await connectOwner()
+      emitAcpEvent(handlers, remoteStarted(1, "task-1"))
+
+      await act(async () => {
+        await h.actions!.disconnect(TAB)
+      })
+
+      // 显式断连是用户意图，不受 busy 门控。
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    })
+  })
+
   it("disconnects an IDLE owner right away (the reclaim this release exists for)", async () => {
     const handlers = await connectOwner()
     emitAcpEvent(handlers, {
@@ -1353,6 +1445,62 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
         type: "delegation_child_running",
         child_connection_id: "child-conn",
         running: false,
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // 远程委派跨机执行，本机看不到子连接：只有它上报终态才算工作结束。
+  it("keeps a closed view's parent until its remote delegation settles", async () => {
+    vi.useFakeTimers()
+    try {
+      h.acpFindConnectionForConversation.mockResolvedValue(null)
+      const view = render(tree([{ contextKey: TAB, workingDir: "/tmp/x" }]))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const handlers = latestAttachHandlers()
+      emitAcpEvent(handlers, {
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "connected",
+      })
+      emitAcpEvent(handlers, {
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "remote_delegation_started",
+        parent_connection_id: "spawned-conn",
+        parent_tool_use_id: "tool-1",
+        task_id: "task-1",
+        remote: {
+          connection_id: 3,
+          connection_name: "build-box",
+          run_id: "run-1",
+        },
+      })
+
+      view.rerender(tree([]))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+        )
+      })
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+
+      emitAcpEvent(handlers, {
+        seq: 3,
+        connection_id: "spawned-conn",
+        type: "remote_delegation_completed",
+        task_id: "task-1",
+        status: "completed",
       })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(

@@ -98,8 +98,9 @@ export interface UseConnectionLifecycleReturn {
  * Unmount-cleanup decision: disconnect unless this client OWNS a connection
  * that still has work in flight — a prompting turn, launched-but-unresolved
  * background tasks (async sub-agents / background shells, on either the
- * watcher's count or the AIR task table), Remote Control, or a codeg
- * delegation whose sub-agent is still running. Disconnecting an
+ * watcher's count or the AIR task table), Remote Control, a codeg
+ * delegation whose sub-agent is still running, or a remote delegation still
+ * in flight on another machine. Disconnecting an
  * owner kills the agent CLI, and that work with it; busy owners are left to
  * the idle sweeps, which exempt them until the work settles (or the backend
  * max-age valve expires it). Viewers always tear down: their disconnect only
@@ -204,12 +205,14 @@ export function useConnectionLifecycle({
     asyncTasks,
     remoteControl,
     delegatedChildren,
+    remoteDelegations,
   } = conn
   const liveWorkRef = useRef({
     backgroundOutstanding,
     asyncTasks,
     remoteControl,
     delegatedChildren,
+    remoteDelegations,
   })
   useEffect(() => {
     liveWorkRef.current = {
@@ -217,8 +220,15 @@ export function useConnectionLifecycle({
       asyncTasks,
       remoteControl,
       delegatedChildren,
+      remoteDelegations,
     }
-  }, [backgroundOutstanding, asyncTasks, remoteControl, delegatedChildren])
+  }, [
+    backgroundOutstanding,
+    asyncTasks,
+    remoteControl,
+    delegatedChildren,
+    remoteDelegations,
+  ])
   const contextKeyRef = useRef(contextKey)
   useEffect(() => {
     contextKeyRef.current = contextKey

@@ -64,6 +64,7 @@ const stubs = vi.hoisted(() => {
       asyncTasks: [],
       remoteControl: null,
       delegatedChildren: [],
+      remoteDelegations: [],
       sessionId: null,
     },
     acp: {
