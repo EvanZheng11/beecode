@@ -65,6 +65,164 @@ test("发布前执行桌面同步启动与服务器异步启动回归", () => {
   )
 })
 
+test("桌面 artifact 上传有限重试且最终失败仍阻断发布", () => {
+  const steps = parse(workflow).jobs["build-tauri"].steps
+  const uploads = steps.filter((step) =>
+    step.id?.startsWith("desktop-artifact-")
+  )
+  assert.deepEqual(
+    uploads.map((step) => step.id),
+    [
+      "desktop-artifact-first",
+      "desktop-artifact-second",
+      "desktop-artifact-final",
+    ]
+  )
+  const [first, second, final] = uploads
+  assert.equal(first.if, undefined, "上游构建失败时不得越过默认成功门控")
+  assert.equal(first["continue-on-error"], true)
+  assert.equal(second["continue-on-error"], true)
+  assert.equal(final["continue-on-error"], undefined, "末次失败必须让 job 失败")
+  assert.equal(
+    second.if,
+    "${{ !cancelled() && steps.desktop-artifact-first.outcome == 'failure' }}"
+  )
+  assert.equal(
+    final.if,
+    "${{ !cancelled() && steps.desktop-artifact-second.outcome == 'failure' }}"
+  )
+  for (const upload of uploads) {
+    assert.equal(upload.uses, "actions/upload-artifact@v4")
+    assert.equal(upload["timeout-minutes"], 12)
+    assert.deepEqual(upload.with, {
+      name: "beecode-desktop-${{ matrix.target }}",
+      path: "src-tauri/target/${{ matrix.target }}/release/bundle/installers",
+      "if-no-files-found": "error",
+      "compression-level": 0,
+      overwrite: true,
+    })
+  }
+  for (const [name, next, delay] of [
+    ["等待桌面 artifact 服务恢复（第二次前）", second, "sleep 15"],
+    ["等待桌面 artifact 服务恢复（末次前）", final, "sleep 30"],
+  ]) {
+    const wait = steps.find((step) => step.name === name)
+    assert.equal(wait.if, next.if)
+    assert.equal(wait.run, delay)
+    assert.ok(steps.indexOf(wait) < steps.indexOf(next))
+  }
+
+  // 按解析出的工作流属性演算重试链，不把 continue-on-error 的 conclusion
+  // 当作 outcome；否则真实失败会被误判成功，第二次根本不会运行。
+  function simulate(
+    results,
+    { canceled = false, cancelAfter = Infinity, upstreamFailed = false } = {}
+  ) {
+    const outcomes = new Map()
+    let failed = upstreamFailed
+    const attempted = []
+    for (const upload of uploads) {
+      if (attempted.length >= cancelAfter) canceled = true
+      const previous = upload.if?.match(/steps\.([\w-]+)\.outcome/)[1]
+      const enabled = previous
+        ? !canceled && outcomes.get(previous) === "failure"
+        : !canceled && !failed
+      if (!enabled) {
+        outcomes.set(upload.id, "skipped")
+        continue
+      }
+      const outcome = results[attempted.length]
+      assert.ok(["success", "failure"].includes(outcome))
+      attempted.push(upload.id)
+      outcomes.set(upload.id, outcome)
+      if (outcome === "failure" && !upload["continue-on-error"]) failed = true
+    }
+    return { attempted: attempted.length, failed }
+  }
+  assert.deepEqual(simulate(["success"]), { attempted: 1, failed: false })
+  assert.deepEqual(simulate(["failure", "success"]), {
+    attempted: 2,
+    failed: false,
+  })
+  assert.deepEqual(simulate(["failure", "failure", "success"]), {
+    attempted: 3,
+    failed: false,
+  })
+  assert.deepEqual(simulate(["failure", "failure", "failure"]), {
+    attempted: 3,
+    failed: true,
+  })
+  assert.deepEqual(simulate([], { canceled: true }), {
+    attempted: 0,
+    failed: false,
+  })
+  assert.deepEqual(simulate(["failure"], { cancelAfter: 1 }), {
+    attempted: 1,
+    failed: false,
+  })
+  assert.deepEqual(simulate([], { upstreamFailed: true }), {
+    attempted: 0,
+    failed: true,
+  })
+  assert.ok(
+    steps.indexOf(final) <
+      steps.findIndex((step) => step.name === "上传桌面校验文件到草稿发布")
+  )
+})
+
+test("Docker 输入 artifact 重试只在 Linux 首次上传失败后启用", () => {
+  const steps = parse(workflow).jobs["build-server"].steps
+  const uploads = steps.filter((step) =>
+    step.id?.startsWith("docker-artifact-")
+  )
+  assert.deepEqual(
+    uploads.map((step) => step.id),
+    ["docker-artifact-first", "docker-artifact-second", "docker-artifact-final"]
+  )
+  const [first, second, final] = uploads
+  assert.equal(
+    first.if,
+    "startsWith(matrix.target, 'x86_64-unknown-linux') || startsWith(matrix.target, 'aarch64-unknown-linux')"
+  )
+  assert.equal(first["continue-on-error"], true)
+  assert.equal(second["continue-on-error"], true)
+  assert.equal(final["continue-on-error"], undefined)
+  assert.equal(
+    second.if,
+    "${{ !cancelled() && steps.docker-artifact-first.outcome == 'failure' }}"
+  )
+  assert.equal(
+    final.if,
+    "${{ !cancelled() && steps.docker-artifact-second.outcome == 'failure' }}"
+  )
+  for (const upload of uploads) {
+    assert.equal(upload.uses, "actions/upload-artifact@v4")
+    assert.equal(upload["timeout-minutes"], 12)
+    assert.deepEqual(upload.with, {
+      name: "${{ matrix.artifact }}",
+      path: "dist/${{ matrix.artifact }}",
+      "retention-days": 1,
+      "if-no-files-found": "error",
+      overwrite: true,
+    })
+  }
+  for (const [name, next, delay] of [
+    ["等待 Docker 输入 artifact 服务恢复（第二次前）", second, "sleep 15"],
+    ["等待 Docker 输入 artifact 服务恢复（末次前）", final, "sleep 30"],
+  ]) {
+    const wait = steps.find((step) => step.name === name)
+    assert.equal(wait.if, next.if)
+    assert.equal(wait.run, delay)
+    assert.ok(steps.indexOf(wait) < steps.indexOf(next))
+  }
+  assert.ok(
+    steps.indexOf(final) <
+      steps.findIndex((step) => step.name === "生成服务器包完整性校验（Unix）")
+  )
+  const docker = parse(workflow).jobs["build-docker"]
+  assert.ok(docker.needs.includes("build-server"))
+})
+
 test("服务器签名使用已解析发布标签，并校验可信注释版本", () => {
   for (const name of [
     "用更新签名密钥签服务器包（Unix）",

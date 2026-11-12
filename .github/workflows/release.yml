@@ -1007,12 +1007,55 @@ jobs:
           $lines | Set-Content -Encoding ascii -LiteralPath "$stage/SHA256SUMS-$env:TARGET.txt"
           Write-Host 'SHA256 仅为完整性校验，不是身份认证签名。'
 
+      # artifact 服务偶发返回 HTML 错误页，内部请求重试耗尽后再做有限次整步重试。
+      # 前两次只暂缓失败；末次仍硬失败，不能绕过矩阵、manifest 或发布门禁。
+      # overwrite 处理服务端已创建、客户端没收到成功响应的同名残留。
       - name: 上传桌面安装包与完整性校验文件
+        id: desktop-artifact-first
         uses: actions/upload-artifact@v4
+        continue-on-error: true
+        timeout-minutes: 12
         with:
           name: beecode-desktop-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/installers
           if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+      - name: 等待桌面 artifact 服务恢复（第二次前）
+        if: ${{ !cancelled() && steps.desktop-artifact-first.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: 重试桌面安装包与完整性校验文件（第二次）
+        id: desktop-artifact-second
+        if: ${{ !cancelled() && steps.desktop-artifact-first.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        timeout-minutes: 12
+        with:
+          name: beecode-desktop-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/installers
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+      - name: 等待桌面 artifact 服务恢复（末次前）
+        if: ${{ !cancelled() && steps.desktop-artifact-second.outcome == 'failure' }}
+        shell: bash
+        run: sleep 30
+
+      - name: 重试桌面安装包与完整性校验文件（末次）
+        id: desktop-artifact-final
+        if: ${{ !cancelled() && steps.desktop-artifact-second.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 12
+        with:
+          name: beecode-desktop-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/installers
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
 
       - name: 检出当前发布上传脚本
         if: needs.create-draft-release.outputs.release_id != ''
@@ -1307,12 +1350,52 @@ jobs:
           }
 
       - name: Upload artifact for Docker build (Linux only)
+        id: docker-artifact-first
         if: startsWith(matrix.target, 'x86_64-unknown-linux') || startsWith(matrix.target, 'aarch64-unknown-linux')
         uses: actions/upload-artifact@v4
+        continue-on-error: true
+        timeout-minutes: 12
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
           retention-days: 1
+          if-no-files-found: error
+          overwrite: true
+
+      - name: 等待 Docker 输入 artifact 服务恢复（第二次前）
+        if: ${{ !cancelled() && steps.docker-artifact-first.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: 重试 Docker 输入 artifact（第二次）
+        id: docker-artifact-second
+        if: ${{ !cancelled() && steps.docker-artifact-first.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        timeout-minutes: 12
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
+
+      - name: 等待 Docker 输入 artifact 服务恢复（末次前）
+        if: ${{ !cancelled() && steps.docker-artifact-second.outcome == 'failure' }}
+        shell: bash
+        run: sleep 30
+
+      - name: 重试 Docker 输入 artifact（末次）
+        id: docker-artifact-final
+        if: ${{ !cancelled() && steps.docker-artifact-second.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 12
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
 
       # 完整性校验文件与 minisign 签名（.sig）一起发布；SHA256 只做完整性校验。
       - name: 生成服务器包完整性校验（Unix）
