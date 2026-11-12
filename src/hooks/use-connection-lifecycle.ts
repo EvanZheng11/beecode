@@ -13,6 +13,8 @@ import {
   type ConnectionWork,
 } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
+import { ConversationMovedError } from "@/lib/conversation-moved"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 
@@ -88,7 +90,7 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
-  ) => Promise<boolean>
+  ) => void
   handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
@@ -531,7 +533,7 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      return (async () => {
+      void (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -540,7 +542,6 @@ export function useConnectionLifecycle({
           modeIdRef.current = modeId
         }
         await sendPrompt(draft.blocks, opts)
-        return true
       })().catch((e: unknown) => {
         if (e instanceof TurnBusyError) {
           // A turn was already in flight on the connection (another
@@ -548,7 +549,28 @@ export function useConnectionLifecycle({
           // observed yet). Not an error — the draft is re-queued by the caller
           // so it auto-sends when the current turn finishes.
           onTurnInProgress?.()
-          return false
+          return
+        }
+        if (e instanceof ConversationMovedError) {
+          // The conversation was moved to another project and this connection
+          // still runs in the folder it left. Say where it went and pull the
+          // rows: the tab follows its row to the new folder, which reconnects
+          // the agent there. The message is not resent on its own — the user
+          // sends it again from the new folder.
+          const folder =
+            e.folderId != null
+              ? useAppWorkspaceStore.getState().getFolder(e.folderId)
+              : undefined
+          notify({
+            level: "warning",
+            key: `conversation-moved:${contextKey}`,
+            title: t("errors.conversationMoved", {
+              folder: folder?.alias || folder?.name || "",
+            }),
+          })
+          void useAppWorkspaceStore.getState().refreshConversations()
+          onSendFailed?.(e)
+          return
         }
         console.error("[ConnLifecycle] sendPrompt:", e)
         // The composer already cleared itself (sends are fire-and-forget), so
@@ -570,7 +592,6 @@ export function useConnectionLifecycle({
         // flushing). Runs after the toast so the state rollback can't hide
         // the failure.
         onSendFailed?.(e)
-        return false
       })
     },
     [connSetMode, sendPrompt, contextKey, touchActivity, t]

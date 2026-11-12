@@ -2372,6 +2372,7 @@
         "untitledConversation": "محادثة بدون عنوان",
         "setStatus": "تعيين الحالة…",
         "deleteSelected": "حذف",
+        "moveSelected": "نقل إلى…",
         "noConversations": "لا توجد محادثات في هذا المجلد.",
         "noConversationsWorkspace": "لا توجد محادثات في مساحة العمل.",
         "noMatchingConversations": "لا توجد محادثات مطابقة للفلاتر.",
@@ -2419,7 +2420,8 @@
       "noRecentChats": "لا توجد محادثات دردشة حديثة",
       "noRecentFolders": "لا توجد محادثات مجلدات حديثة",
       "noRecentCli": "لا توجد محادثات حديثة من سطر الأوامر",
-      "recentFilterMenuLabel": "عرض في الأحدث"
+      "recentFilterMenuLabel": "عرض في الأحدث",
+      "originalWorkingDir": "دليل العمل الأصلي"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -2628,6 +2630,24 @@
         "loadFailed": "تعذّرت قراءة الحالة: {message}",
         "openSettings": "فتح الإعدادات الكاملة",
         "refresh": "تحديث"
+      },
+      "webService": {
+        "title": "خدمة الويب",
+        "start": "تشغيل خدمة الويب",
+        "stop": "إيقاف خدمة الويب",
+        "cancel": "إلغاء",
+        "confirmStart": "تشغيل",
+        "confirmTitle": "فتح Codeg لشبكتك؟",
+        "confirmDescription": "ستستمع خدمة الويب على ⁦{address}⁩. سيتمكن أي جهاز على شبكتك من الوصول إلى Codeg — بما في ذلك الطرفيات والوكلاء — باستخدام رمز الوصول.",
+        "tooltipNetwork": "خدمة الويب · تستمع على ⁦{address}⁩ (يمكن الوصول إليها من شبكتك)",
+        "tooltipLocal": "خدمة الويب · تستمع على ⁦{address}⁩ (هذا الحاسوب فقط)",
+        "tooltipStopped": "خدمة الويب · متوقفة",
+        "hintNetwork": "تستمع على ⁦{address}⁩. يمكن للأجهزة على شبكتك فتح Codeg باستخدام رمز الوصول.",
+        "hintLocal": "تستمع على ⁦{address}⁩. هذا الحاسوب فقط يمكنه الوصول إليها.",
+        "hintStoppedNetwork": "متوقفة. عند التشغيل ستستمع على ⁦{address}⁩، ويمكن الوصول إليها من شبكتك.",
+        "hintStoppedLocal": "متوقفة. عند التشغيل ستستمع على ⁦{address}⁩، لهذا الحاسوب فقط.",
+        "copyAddress": "نسخ العنوان",
+        "openSettings": "فتح إعدادات خدمة الويب"
       }
     },
     "auxPanel": {
@@ -3544,7 +3564,8 @@
         },
         "errors": {
           "connectionFailed": "فشل الاتصال",
-          "sendPromptFailed": "فشل إرسال الرسالة: {error}"
+          "sendPromptFailed": "فشل إرسال الرسالة: {error}",
+          "conversationMoved": "نُقلت هذه المحادثة إلى ⁦{folder}⁩. أعد إرسال رسالتك للمتابعة هناك."
         }
       },
       "shared": {
@@ -4090,6 +4111,13 @@
         "htmlPreviewHide": "إخفاء المعاينة"
       },
       "activity": {
+        "oauth": {
+          "waiting": "بانتظار تفويض {server}",
+          "reconnecting": "جارٍ إعادة الاتصال بـ {server}…",
+          "open": "فتح التفويض في متصفح النظام",
+          "verify": "بعد إعادة الاتصال، تحقق من الوصول باستدعاء فعلي لأداة MCP. فتح المتصفح لا يؤكد نجاح التفويض.",
+          "openFailed": "تعذر فتح المتصفح. استخدم رابط التفويض للمحاولة مجددًا."
+        },
         "header": {
           "label": "سير التنفيذ",
           "working": "قيد التنفيذ",
@@ -4316,6 +4344,7 @@
         "resumeDelegation": "استئناف المهمة {task}",
         "resumeDelegationNoId": "استئناف مهمة مفوضة",
         "promptLabel": "التعليمات",
+        "attachmentsLabel": "المرفقات",
         "ackRecorded": "سُجِّل في مهمة العمل",
         "ackNotRecorded": "لم يُسجَّل في مهمة العمل",
         "ackNotRecordedWithReason": "لم يُسجَّل في مهمة العمل: {reason}",
@@ -4448,6 +4477,13 @@
       "proposedPlan": {
         "title": "الخطة المقترحة",
         "planning": "جارٍ التخطيط…"
+      },
+      "liveRuns": {
+        "count": "{count} قيد التشغيل",
+        "awaiting": "وكيل فرعي ينتظر ردك",
+        "groupDelegations": "المهام المفوَّضة",
+        "background": "في الخلفية",
+        "delegatedFallback": "وكيل فرعي مفوَّض"
       }
     },
     "diffPreview": {
@@ -4509,6 +4545,33 @@
     },
     "toasts": {
       "cloneFailed": "فشل استنساخ المستودع"
+    },
+    "moveConversation": {
+      "menuLabel": "نقل إلى",
+      "title": "نقل المحادثة",
+      "titleMany": "نقل {count, plural, zero {# محادثة} one {محادثة واحدة} two {محادثتين} few {# محادثات} many {# محادثة} other {# محادثة}}",
+      "intro": "ستُنقل «⁦{title}⁩» إلى هذا المجلد:",
+      "introMany": "{count, plural, zero {لن تُنقل أي محادثة} one {ستُنقل المحادثة المحددة} two {ستُنقل المحادثتان المحددتان} few {ستُنقل # محادثات محددة} many {ستُنقل # محادثة محددة} other {ستُنقل # محادثة محددة}} إلى هذا المجلد:",
+      "untitledConversation": "محادثة بدون عنوان",
+      "explain": "بدءًا من الرسالة التالية، يعمل الوكيل في هذا المجلد، ويبقى السجل كما هو. إذا تعذّر على الوكيل استئناف الجلسة هنا، فسيُعرض عليك إعادة تحميلها أو بدء جلسة جديدة.",
+      "chatFilesNote": "تبقى الملفات التي أُنشئت أثناء الدردشة في دليلها المؤقت ⁦{path}⁩، ولا تُنقل إلى المجلد.",
+      "chatFilesNoteMany": "تبقى الملفات التي أُنشئت أثناء هذه الدردشات في أدلتها المؤقتة، ولا تُنقل إلى المجلد.",
+      "noTargets": "لا يوجد مجلد مفتوح آخر",
+      "targetUnavailable": "أُغلق هذا المجلد أو أُزيل — اختر مجلدًا آخر.",
+      "cancel": "إلغاء",
+      "move": "نقل",
+      "toastMoved": "{count, plural, zero {لم تُنقل أي محادثة} one {نُقلت محادثة واحدة} two {نُقلت محادثتان} few {نُقلت # محادثات} many {نُقلت # محادثة} other {نُقلت # محادثة}} إلى ⁦{folder}⁩",
+      "toastSkipped": "{count, plural, zero {لم تُنقل أي محادثة} one {لم تُنقل محادثة واحدة} two {لم تُنقل محادثتان} few {لم تُنقل # محادثات} many {لم تُنقل # محادثة} other {لم تُنقل # محادثة}}",
+      "toastFailed": "تعذّر النقل: {message}",
+      "skipReason": {
+        "not_found": "لم تعد موجودة",
+        "not_movable": "تنتقل المحادثات الفرعية مع محادثتها الأم",
+        "already_there": "موجودة بالفعل في هذا المجلد",
+        "task_owned": "تابعة لمهمة",
+        "busy": "يعمل وكيل عليها الآن — أعد المحاولة عند انتهائه",
+        "conflict": "تغيّرت أثناء النقل — أعد المحاولة",
+        "target_unavailable": "أُغلق المجلد أو أُزيل"
+      }
     }
   },
   "ProjectBoot": {
@@ -4620,7 +4683,12 @@
       "permissionDenied": "الصلاحيات غير كافية. استخدم منفذاً أعلى من 1024 أو شغّل التطبيق بصلاحيات أعلى.",
       "addressUnavailable": "هذا العنوان غير متاح على هذا الجهاز",
       "bindFailed": "فشل ربط العنوان"
-    }
+    },
+    "bindHost": "الاستماع على",
+    "bindHostAll": "كل الواجهات (⁦0.0.0.0⁩)",
+    "bindHostLocal": "هذا الحاسوب فقط (⁦127.0.0.1⁩)",
+    "bindHostAllHint": "يمكن للأجهزة على شبكتك المحلية الوصول إلى الخدمة باستخدام رمز الوصول.",
+    "bindHostLocalHint": "هذا الحاسوب فقط يمكنه الوصول إلى الخدمة — مثلًا خلف وكيل عكسي أو Tailscale Serve."
   },
   "DirectoryBrowser": {
     "title": "تصفح المجلد",
@@ -6491,6 +6559,11 @@
     "completeDescription": "لم تغيّر هذه المهمة أي ملف، لذا لا يوجد ما يُدمج — سيتم وضع علامة مكتملة عليها مباشرة.",
     "completeDescriptionNoWorktree": "تمت إزالة worktree هذه المهمة، فلم يعد الدمج ممكنًا — سيتم وضع علامة مكتملة عليها مباشرة. يُحتفظ بفرع العمل إذا كان لا يزال يحوي إيداعات غير مدمجة.",
     "completeDeleteWorktree": "حذف worktree بعد الإنهاء",
+    "threadCommentLabel": "التعليق في نقاش العنصر عند انتهاء المهمة",
+    "threadCommentLabelSeveral": "التعليق في نقاش كل مشكلة عند انتهاء المهمة",
+    "threadCommentReplyLabel": "الرد على #{number}",
+    "threadCommentPlaceholder": "اتركه فارغًا لنشر طريقة تسليم العمل فقط.",
+    "threadCommentHint": "صاغه الوكيل — راجعه قبل أن يصبح علنيًا. يضيف Codeg سطرًا يبيّن كيف سُلِّم العمل، وتوقيع Codeg إذا كان مفعّلًا في إعدادات المستودع.",
     "completeSubmit": "إنهاء",
     "settingsTitle": "إعدادات المهام",
     "settingsDescription": "الإعدادات الافتراضية لمهام {folder}.",
@@ -6550,6 +6623,9 @@
     "preflightRunning": "{name} قيد التشغيل…",
     "detailDescription": "تفاصيل المهمة",
     "detailSummary": "النتيجة",
+    "detailThreadReply": "الرد في النقاش",
+    "detailThreadReplyHint": "يُنشر عند قبول المهمة، ويمكنك تعديله في مربع القبول.",
+    "detailThreadReplyOffHint": "لن يُنشر: التعليق متوقف لهذه المهمة. يمكنك تشغيله في مربع القبول.",
     "detailFiles": "الملفات المتغيرة",
     "detailFilesIncludesPr": "يشمل تغييرات طلب السحب نفسه",
     "detailFilesIncludesMr": "يشمل تغييرات طلب الدمج نفسه",
@@ -7163,7 +7239,11 @@
     "errors": {
       "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع.",
       "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab و Gitea و CNB فقط، و{host} لا يُعرَف كأي منها. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab أو Gitea أو Forgejo أو CNB، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
-      "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا."
+      "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا.",
+      "approveHeadChanged": "أُضيفت إيداعات جديدة إلى طلب السحب هذا منذ مراجعتك له. حدّث الصفحة وراجعه مجدداً ثم وافق.",
+      "approveAmbiguous": "لا يمكن ربط عمليات التشغيل هذه بطلب السحب هذا وحده. وافق عليها على GitHub.",
+      "approveForbidden": "لا يُسمح لهذا الحساب بالموافقة على عمليات التشغيل هنا. يحتاج إلى صلاحية الكتابة، ويحتاج الرمز إلى صلاحية Actions (كتابة) أو نطاق repo.",
+      "approveNotOpen": "لم يعد طلب السحب هذا مفتوحاً."
     },
     "addAccount": "إضافة حساب",
     "empty": "لا يوجد شيء هنا",
@@ -7336,7 +7416,7 @@
     "combineScenarioFixHint": "يحكم الوكيل أولاً على كل بلاغ، ثم يصلح الصحيح منها في تغيير واحد؛ ولا يمس غير الصحيح، ويعيد إليك النتيجة لتقرر.",
     "combineScenarioPlanFirstHint": "يحكم الوكيل أولاً على كل بلاغ، ثم يقدّم خطة واحدة للبلاغات الصحيحة ويتوقف؛ وافق عليها بإعادة المهمة لتنفيذها.",
     "combineWritebackLabel": "التعليق بالنتيجة على كل مشكلة",
-    "combineWritebackHint": "عند انتهاء المهمة، ينشر codeg تعليقًا واحدًا على كل مشكلة من هذه المشكلات: النتيجة والرابط وأعداد الفروق.",
+    "combineWritebackHint": "عند انتهاء المهمة، ينشر codeg تعليقًا واحدًا على كل مشكلة من هذه المشكلات: الرد الذي يصوغه الوكيل لها (تراجعها عند قبول المهمة) وكيف سُلِّم العمل.",
     "combineTooFew": "تحتاج المعالجة المشتركة إلى مشكلتين على الأقل؛ لمعالجة مشكلة واحدة ابدأها من صفّها.",
     "combineConflictsBody": "بعض هذه المشكلات تعالجها مهام نشطة بالفعل:",
     "combineConflictItem": "#{number} — {title} ({status})",
@@ -7420,7 +7500,7 @@
     "autoAutoStart": "البدء فورًا",
     "autoAutoStartHint": "تُضاف كل مهمة جديدة إلى قائمة الانتظار فورًا — ويحدد حد التزامن في إعدادات المهام متى تعمل. عند الإيقاف: تنتظر في «للتنفيذ».",
     "autoWriteback": "التعليق بالنتيجة",
-    "autoWritebackHint": "عند انتهاء المهمة، يُنشر تعليق الحالة القصير نفسه الذي ينشره مفتاح نافذة البدء.",
+    "autoWritebackHint": "عند انتهاء المهمة، انشر التعليق نفسه الذي ينشره مفتاح مربع البدء: رد الوكيل الذي راجعته عند قبول المهمة، وكيف سُلِّم العمل.",
     "autoActivity": "النشاط",
     "autoScanNow": "افحص الآن",
     "autoScanNowOff": "شغّل مشغّلًا واحفظ لتتمكن من الفحص.",
@@ -7448,7 +7528,26 @@
     "autoSkipExcludedAuthor": "مؤلف مستبعد",
     "autoSkipMissingLabel": "لا وسم مطابق",
     "autoSkipAuthorNotIncluded": "مؤلف غير مدرج",
-    "save": "حفظ"
+    "save": "حفظ",
+    "checksNeutralCount": "{count} بلا نتيجة",
+    "settingsCommentFooter": "توقيع التعليقات باسم Codeg",
+    "settingsCommentFooterHint": "إنهاء كل تعليق ينشره codeg بعبارة «🤖 Generated with Codeg» مع رابط إلى مستودع Codeg.",
+    "checksAwaitingApproval": "{count} من مسارات العمل بانتظار الموافقة",
+    "checksApprovalShort": "تحتاج إلى موافقة",
+    "approveUnknownTitle": "قد تكون هناك مسارات عمل بانتظار الموافقة",
+    "approveExplain": "طلب السحب هذا من fork، ولن تعمل مسارات العمل الخاصة به حتى يوافق عليها شخص لديه صلاحية الكتابة. الموافقة تشغّل هذه الشيفرة على CI المستودع — راجع التغييرات أولاً.",
+    "approveIncompleteHint": "تعذّر فحص جميع عمليات التشغيل؛ قد يكون هناك المزيد بانتظار الموافقة على GitHub.",
+    "approveBlockedAmbiguous": "هناك طلب سحب آخر مفتوح من الفرع نفسه، لذا لا يمكن ربط عمليات التشغيل هذه بهذا الطلب وحده. وافق عليها على GitHub.",
+    "approveBlockedPermission": "لا يستطيع هذا الحساب الدفع إلى المستودع، لذا لا يمكنه الموافقة على مسارات العمل.",
+    "approveOpenOnForge": "فتح على GitHub",
+    "approveWorkflows": "الموافقة على تشغيل مسارات العمل",
+    "approving": "جارٍ الموافقة…",
+    "approveConfirmTitle": "الموافقة على تشغيل مسارات العمل؟",
+    "approveConfirmBody": "ستشغّل {count} من مسارات العمل شيفرة طلب السحب هذا (الإيداع {sha}) على CI المستودع. لا توافق إلا بعد مراجعة التغييرات.",
+    "approveDone": "تمت الموافقة على {count} من مسارات العمل",
+    "approvePartial": "تعذّرت الموافقة على بعض مسارات العمل: {names}",
+    "approveNothingHeld": "لم تعد هناك مسارات عمل بانتظار الموافقة.",
+    "mergeWorkflowsAwaiting": "هناك مسارات عمل بانتظار الموافقة"
   },
   "Canvas": {
     "title": "لوحة لا نهائية",

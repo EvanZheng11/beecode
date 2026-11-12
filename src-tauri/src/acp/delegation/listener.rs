@@ -95,6 +95,11 @@ pub trait ParentSessionLookup: Send + Sync {
 pub struct TokenEntry {
     pub parent_connection_id: String,
     pub working_dir: PathBuf,
+    /// The caller runs with `CODEG_ACP_HOST_TOOLS=agent`: its own sandbox, not
+    /// codeg, governs what it may read (see
+    /// [`crate::acp::host_tools_policy::HostToolsPolicy::Agent`]). Anything that
+    /// would have codeg touch a file on this caller's behalf must not.
+    pub agent_hosts_tools: bool,
 }
 
 #[derive(Default)]
@@ -1256,6 +1261,7 @@ impl DelegationListener {
                 &entry.parent_connection_id,
                 &req.verdict,
                 req.summary.as_deref(),
+                &req.thread_replies,
             )
             .await
     }
@@ -1295,6 +1301,7 @@ impl DelegationListener {
         Ok(AuthoringContext {
             conversation_id,
             working_dir: entry.working_dir,
+            host_reads_files: !entry.agent_hosts_tools,
         })
     }
 
@@ -2434,6 +2441,7 @@ mod tests {
             _parent: &str,
             _verdict: &str,
             _summary: Option<&str>,
+            _thread_replies: &[crate::acp::delegation::transport::ThreadReply],
         ) -> TaskReportAck {
             TaskReportAck::rejected("no task engine in this process")
         }
@@ -2693,6 +2701,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "other-parent".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2717,6 +2726,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2769,6 +2779,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2800,6 +2811,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2874,6 +2886,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3026,6 +3039,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3132,6 +3146,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3181,6 +3196,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3295,6 +3311,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3362,6 +3379,7 @@ mod tests {
             .register(
                 "t1".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3371,6 +3389,7 @@ mod tests {
             .register(
                 "t2".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3380,6 +3399,7 @@ mod tests {
             .register(
                 "t3".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p2".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3418,6 +3438,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3495,6 +3516,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3543,6 +3565,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3584,6 +3607,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3675,6 +3699,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/repo/app"),
                 },
@@ -3722,6 +3747,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/repo/app"),
                 },
@@ -3740,6 +3766,7 @@ mod tests {
                 prompt: "the retry test is flaky".into(),
                 agent_type: None,
                 folder_path: None,
+                attachments: Vec::new(),
             },
         });
         write_frame(&mut client, &msg).await.unwrap();
@@ -3751,7 +3778,53 @@ mod tests {
         let calls = authoring.work_tasks.lock().await;
         let (ctx, spec) = calls.first().expect("impl was called");
         assert_eq!(ctx.conversation_id, None);
+        assert!(
+            ctx.host_reads_files,
+            "a codeg-hosted caller may attach by value"
+        );
         assert_eq!(spec.title, "Fix the flake");
+    }
+
+    /// A caller launched with `CODEG_ACP_HOST_TOOLS=agent` reaches the impl
+    /// with host reads switched off, so its attachments are never read by
+    /// codeg's own (unsandboxed) process.
+    #[tokio::test]
+    async fn create_work_task_from_a_self_sandboxed_agent_forbids_host_reads() {
+        let authoring = Arc::new(StubAuthoring::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/repo/app"),
+                    agent_hosts_tools: true,
+                },
+            )
+            .await;
+        let listener = make_authoring_listener(tokens, authoring.clone(), None);
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        let msg = BrokerMessage::CreateWorkTask(BrokerCreateWorkTaskRequest {
+            token: "tok".into(),
+            spec: NewWorkTaskSpec {
+                title: "t".into(),
+                prompt: "p".into(),
+                agent_type: None,
+                folder_path: None,
+                attachments: vec!["/secret.png".into()],
+            },
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let _: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+
+        let calls = authoring.work_tasks.lock().await;
+        let (ctx, _) = calls.first().expect("impl was called");
+        assert!(!ctx.host_reads_files);
     }
 
     /// An invalid token is a soft refusal that NEVER reaches the impl — nothing
@@ -3799,6 +3872,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3964,6 +4038,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -4026,6 +4101,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -4643,6 +4719,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "conn-1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -5450,6 +5527,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -5838,6 +5916,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },

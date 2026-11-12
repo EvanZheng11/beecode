@@ -101,6 +101,7 @@ impl codeg_lib::acp::work_task_tools::WorkTaskToolAccess for NoTaskTools {
         _parent: &str,
         _verdict: &str,
         _summary: Option<&str>,
+        _thread_replies: &[codeg_lib::acp::delegation::transport::ThreadReply],
     ) -> codeg_lib::acp::work_task_tools::TaskReportAck {
         codeg_lib::acp::work_task_tools::TaskReportAck::rejected("no engine")
     }
@@ -202,6 +203,7 @@ async fn end_to_end_named_pipe_happy_path() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },
@@ -312,6 +314,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },

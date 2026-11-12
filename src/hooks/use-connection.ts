@@ -24,6 +24,7 @@ import type {
   RemoteControlInfo,
   SessionConfigOptionInfo,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   SessionFailureRecord,
   SessionModeStateInfo,
   PromptInputBlock,
@@ -47,6 +48,8 @@ const EMPTY_STEERED_MESSAGE_IDS: string[] = []
 // for every connection that has no async tasks — i.e. almost all of them.
 const EMPTY_ASYNC_TASKS: AsyncTaskRecord[] = []
 const EMPTY_DELEGATED_CHILDREN: string[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+
 const EMPTY_REMOTE_DELEGATIONS: RemoteDelegationWork[] = []
 
 export interface UseConnectionReturn {
@@ -133,6 +136,10 @@ export interface UseConnectionReturn {
    *  teardown (`shouldDisconnectOnUnmount`) spares a connection whose agent CLI
    *  still has background work to finish. */
   backgroundOutstanding: number
+  /** Those tasks one by one — the background sub-agents the composer's
+   *  running list shows after their turn ended. See
+   *  `ConnectionState.backgroundTasks`. */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /** The codeg delegations this connection still has running (their child
    *  connection ids). Never rendered from here either — a busy signal, because
    *  ending the parent cancels them. See
@@ -327,6 +334,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const configStaleDismissed = connection?.configStaleDismissed ?? false
   const isDelegationChild = connection?.isDelegationChild ?? false
   const backgroundOutstanding = connection?.backgroundOutstanding ?? 0
+  const backgroundTasks = connection?.backgroundTasks ?? EMPTY_BACKGROUND_TASKS
   const delegatedChildren =
     connection?.delegatedChildren ?? EMPTY_DELEGATED_CHILDREN
   const remoteDelegations =
@@ -444,6 +452,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       configStaleDismissed,
       isDelegationChild,
       backgroundOutstanding,
+      backgroundTasks,
       delegatedChildren,
       remoteDelegations,
       connect,
@@ -493,6 +502,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       configStaleDismissed,
       isDelegationChild,
       backgroundOutstanding,
+      backgroundTasks,
       delegatedChildren,
       remoteDelegations,
       connect,

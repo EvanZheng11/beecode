@@ -55,7 +55,10 @@ import {
 } from "@/lib/ask-selection-handoff"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
-import { MessageListView } from "@/components/message/message-list-view"
+import {
+  MessageListView,
+  type LiveRunsSource,
+} from "@/components/message/message-list-view"
 import {
   GoalControlProvider,
   type GoalControlValue,
@@ -1500,7 +1503,7 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
-  /** Stop one AIR async task. Returns the adapter's verdict so the strip can
+  /** Stop one AIR async task. Returns the adapter's verdict so the row can
    *  release its button; `false` (the adapter declined) is reported, because
    *  nothing else would tell the user their click did nothing — a successful
    *  stop announces itself by the row disappearing. */
@@ -2209,6 +2212,32 @@ const ConversationTabView = memo(function ConversationTabView({
   // 负责显示）/ 失败交回 requeueFront 回到当前队首 → finally 清理。失败恢复
   // 保留原始 draft、modeId 和 adoptSendTimeMode 发送时机语义，不做位置记忆
   // （与 TurnBusyError 弹回一致），不记录消息正文。
+  // The work this connection has running beyond the turn, for the "N running"
+  // chip on the live activity row. The stop is for owners of a live connection
+  // only — same gate as the failure actions: a viewer has no connection to send
+  // it on.
+  const canStopAsyncTask = conn.connectionId !== null && !conn.isViewer
+  const runsAgentName = getAgentLabel(selectedAgent)
+  const liveRuns = useMemo<LiveRunsSource>(
+    () => ({
+      connectionId: conn.connectionId,
+      asyncTasks: conn.asyncTasks,
+      backgroundTasks: conn.backgroundTasks,
+      delegatedChildren: conn.delegatedChildren,
+      onStopAsyncTask: canStopAsyncTask ? handleStopAsyncTask : undefined,
+      agentName: runsAgentName,
+    }),
+    [
+      conn.connectionId,
+      conn.asyncTasks,
+      conn.backgroundTasks,
+      conn.delegatedChildren,
+      canStopAsyncTask,
+      handleStopAsyncTask,
+      runsAgentName,
+    ]
+  )
+
   const handleAppendQueuedAsFeedback = useCallback(
     async (id: string) => {
       // 同步短路：同一时刻最多一个追加。ref 先于 state 拒绝同 tick 的
@@ -2267,6 +2296,7 @@ const ConversationTabView = memo(function ConversationTabView({
           connStatus={connStatus}
           isActive={isActive}
           sendSignal={sendSignal}
+          liveRuns={liveRuns}
           detailLoading={detailLoading}
           detailError={detailError}
           acpLoadError={acpLoadError}
@@ -2310,14 +2340,6 @@ const ConversationTabView = memo(function ConversationTabView({
       claudeApiRetry={conn.claudeApiRetry}
       sessionFailures={conn.sessionFailures}
       onSessionFailureDismiss={handleSessionFailureDismiss}
-      asyncTasks={conn.asyncTasks}
-      onStopAsyncTask={
-        // Owners of a live connection only — same gate as the failure actions:
-        // a viewer has no connection to send the stop on.
-        conn.connectionId !== null && !conn.isViewer
-          ? handleStopAsyncTask
-          : undefined
-      }
       remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
       onRemoteControlOff={
         // Owners of a live connection only, like the stop above.

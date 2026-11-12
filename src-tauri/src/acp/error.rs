@@ -98,6 +98,17 @@ pub enum AcpError {
     /// 没有期限（原生 agent 提问），或期限已经过去。前端直接展示错误消息。
     #[error("question deadline cannot be extended: {0}")]
     QuestionDeadlineNotExtendable(String),
+    /// A prompt for a conversation the user moved to another folder arrived on
+    /// a connection that was started in the folder it left. Sending it would
+    /// run the turn in the old directory, so it is refused before any side
+    /// effect; the client re-points its tab at `folder_id` and the next
+    /// connection starts there. The frontend recognizes the stable Display
+    /// text (both transports carry it as the message).
+    #[error("conversation moved to another folder (folder {folder_id})")]
+    ConversationMoved {
+        conversation_id: i32,
+        folder_id: i32,
+    },
 }
 
 impl AcpError {
@@ -155,6 +166,7 @@ impl AcpError {
             Self::AgentAuthRequired(_) => Some("agent_auth_required"),
             Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
             Self::QuestionDeadlineNotExtendable(_) => Some("question_deadline_not_extendable"),
+            Self::ConversationMoved { .. } => Some("conversation_moved"),
             Self::Protocol(_) => None,
         }
     }
