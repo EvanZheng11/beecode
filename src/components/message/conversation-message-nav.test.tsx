@@ -27,16 +27,34 @@ import type {
   DelegationCardModel,
   DelegationCardSource,
 } from "@/hooks/use-delegation-card-model"
+import { resetRemoteConnectionIdsCache } from "@/hooks/use-remote-connection-availability"
 import {
   MessageNavList,
   type MessageNavEntry,
 } from "./conversation-message-nav"
 
-const { openFileTarget, models } = vi.hoisted(() => ({
+const {
+  openFileTarget,
+  openRemoteWorkspace,
+  listRemoteWorkspaceConnections,
+  isLocalDesktop,
+  toastError,
+  models,
+} = vi.hoisted(() => ({
   openFileTarget: vi.fn(async () => {}),
+  openRemoteWorkspace: vi.fn(async () => {}),
+  listRemoteWorkspaceConnections: vi.fn(async () => [{ id: 7 }]),
+  isLocalDesktop: vi.fn(() => true),
+  toastError: vi.fn(),
   models: new Map<string, Partial<DelegationCardModel>>(),
 }))
 
+vi.mock("@/lib/remote-workspace", () => ({
+  openRemoteWorkspace,
+  listRemoteWorkspaceConnections,
+}))
+vi.mock("@/lib/platform", () => ({ isLocalDesktop }))
+vi.mock("sonner", () => ({ toast: { error: toastError } }))
 vi.mock("@/hooks/use-open-file-target", () => ({
   useOpenFileTarget: () => openFileTarget,
 }))
@@ -55,6 +73,7 @@ vi.mock("@/hooks/use-delegation-card-model", () => ({
     errorCode: undefined,
     childConversationId: null,
     childConnectionId: null,
+    remote: null,
     hasModel: true,
     ...models.get(source.parentToolUseId),
   }),
@@ -98,6 +117,20 @@ const ADDED_DIFF =
 const EDIT_DIFF =
   "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -3,2 +3,2 @@\n context\n-old line\n+new line"
 const DELETION_DIFF = "*** Delete File: old.ts\n-a\n-b\n-c\n-d"
+
+const remote: NonNullable<DelegationCardModel["remote"]> = {
+  connectionId: 7,
+  connectionName: "myhome",
+  runId: "remote-run-1",
+  conversationId: 2190,
+  link: null,
+  worktree: null,
+  status: "completed",
+  blockedOn: null,
+  resultPreview: null,
+  errorCode: null,
+  durationMs: null,
+}
 
 function source(id: string, over: Partial<DelegationCardSource> = {}) {
   return { parentToolUseId: id, input: null, ...over }
@@ -229,6 +262,9 @@ function fileBox(name: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetRemoteConnectionIdsCache()
+  isLocalDesktop.mockReturnValue(true)
+  listRemoteWorkspaceConnections.mockResolvedValue([{ id: 7 }])
   models.clear()
   opened.length = 0
   localStorage.clear()
@@ -645,6 +681,134 @@ describe("MessageNavList", () => {
   })
 
   describe("sub-agents", () => {
+    it.each(["running", "ok"] as const)(
+      "opens a %s remote sub-agent without a local viewer",
+      async (status) => {
+        models.set("tu-1", {
+          task: "核对远程任务",
+          childConversationId: null,
+          status,
+          remote,
+        })
+        renderList({}, { host: false })
+        fireEvent.click(messageButton("edit something"))
+        const agent = screen.getByTestId("nav-sub-agent")
+        fireEvent.click(agent)
+        await waitFor(() =>
+          expect(openRemoteWorkspace).toHaveBeenCalledWith(7, {
+            conversationId: 2190,
+          })
+        )
+        expect(agent).toHaveAttribute("title", "Open remote session")
+        expect(opened).toEqual([])
+      }
+    )
+
+    it("reports a remote open failure instead of opening a local conversation", async () => {
+      openRemoteWorkspace.mockRejectedValueOnce(new Error("远程不可达"))
+      models.set("tu-1", { remote, childConversationId: 2190 })
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      fireEvent.click(screen.getByTestId("nav-sub-agent"))
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          "Couldn't open the remote workspace",
+          { description: "远程不可达" }
+        )
+      )
+      expect(opened).toEqual([])
+    })
+
+    it.each(["connectionId", "conversationId"] as const)(
+      "does not open a remote sub-agent without its %s",
+      async (key) => {
+        models.set("tu-1", {
+          remote: { ...remote, [key]: null },
+          childConversationId: 2190,
+        })
+        renderList()
+        fireEvent.click(messageButton("edit something"))
+        fireEvent.click(screen.getByTestId("nav-sub-agent"))
+        await act(async () => {})
+        expect(openRemoteWorkspace).not.toHaveBeenCalled()
+        expect(opened).toEqual([])
+      }
+    )
+
+    it("does not offer remote navigation outside the local desktop", () => {
+      isLocalDesktop.mockReturnValue(false)
+      models.set("tu-1", { remote, childConversationId: 2190 })
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      const agent = screen.getByTestId("nav-sub-agent")
+      expect(agent.tagName).not.toBe("BUTTON")
+      fireEvent.click(agent)
+      expect(listRemoteWorkspaceConnections).not.toHaveBeenCalled()
+      expect(openRemoteWorkspace).not.toHaveBeenCalled()
+      expect(opened).toEqual([])
+    })
+
+    it("disables remote navigation when the saved connection was deleted", async () => {
+      listRemoteWorkspaceConnections.mockResolvedValue([])
+      models.set("tu-1", { remote })
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      await waitFor(() =>
+        expect(screen.getByTestId("nav-sub-agent")).toHaveAttribute(
+          "title",
+          "Remote connection deleted"
+        )
+      )
+      fireEvent.click(screen.getByTestId("nav-sub-agent"))
+      expect(openRemoteWorkspace).not.toHaveBeenCalled()
+      expect(opened).toEqual([])
+    })
+
+    it("still allows remote navigation when checking saved connections fails", async () => {
+      listRemoteWorkspaceConnections.mockRejectedValueOnce(
+        new Error("查询失败")
+      )
+      models.set("tu-1", { remote })
+      renderList()
+      fireEvent.click(messageButton("edit something"))
+      await act(async () => {})
+      fireEvent.click(screen.getByTestId("nav-sub-agent"))
+      expect(openRemoteWorkspace).toHaveBeenCalledWith(7, {
+        conversationId: 2190,
+      })
+    })
+
+    it("routes local and remote siblings independently and shares the connection lookup", async () => {
+      const localSource = source("tu-local")
+      models.set("tu-local", { childConversationId: 9 })
+      models.set("tu-1", { remote })
+      models.set("tu-2", {
+        remote: { ...remote, conversationId: 2191 },
+      })
+      renderList({
+        entries: [
+          {
+            ...entries[1],
+            subAgents: [localSource, source("tu-1"), source("tu-2")],
+          },
+        ],
+      })
+      await act(async () => {})
+      const [local, firstRemote, secondRemote] =
+        screen.getAllByTestId("nav-sub-agent")
+      fireEvent.click(local)
+      expect(opened).toEqual([{ kind: "delegation", source: localSource }])
+      expect(openRemoteWorkspace).not.toHaveBeenCalled()
+      fireEvent.click(firstRemote)
+      fireEvent.click(secondRemote)
+      expect(openRemoteWorkspace.mock.calls).toEqual([
+        [7, { conversationId: 2190 }],
+        [7, { conversationId: 2191 }],
+      ])
+      expect(opened).toHaveLength(1)
+      expect(listRemoteWorkspaceConnections).toHaveBeenCalledTimes(1)
+    })
+
     it("opens a sub-agent's conversation from its card", () => {
       models.set("tu-1", {
         task: "Investigate the flaky test",

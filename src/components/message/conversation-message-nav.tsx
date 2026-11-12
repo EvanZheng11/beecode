@@ -31,6 +31,7 @@ import {
   RotateCw,
 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
+import { toast } from "sonner"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 
 import { CompactDiff } from "@/components/diff/compact-diff"
@@ -53,9 +54,13 @@ import {
 } from "@/hooks/use-delegation-card-model"
 import { useMinuteNow } from "@/hooks/use-minute-now"
 import { useOpenFileTarget } from "@/hooks/use-open-file-target"
+import { useRemoteConnectionAvailability } from "@/hooks/use-remote-connection-availability"
+import { toErrorMessage } from "@/lib/app-error"
 import type { DiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { formatElapsedLabel } from "@/lib/format-elapsed"
 import { formatTimeAgo } from "@/lib/relative-time"
+import { isLocalDesktop } from "@/lib/platform"
+import { openRemoteWorkspace } from "@/lib/remote-workspace"
 import {
   fileNameOf,
   isAddedFileDiff,
@@ -932,13 +937,20 @@ const NavSubAgent = memo(function NavSubAgent({
   const t = useTranslations("Folder.chat.delegation")
   const tActivity = useTranslations("Folder.chat.activity")
   const viewerHost = useSessionViewerHost()
-  const { identity, task, status, errorCode, childConversationId } =
+  const { identity, task, status, errorCode, childConversationId, remote } =
     useDelegationCardModel(source)
+  const remoteAvailability = useRemoteConnectionAvailability(
+    remote?.connectionId ?? null
+  )
+  const remoteDeleted =
+    remote != null &&
+    (remote.connectionId === null || remoteAvailability === "deleted")
   // A `resume_delegation` brought this sub-agent back.
   const resumed = source.taskIdHint != null
-  // The panel brings its own viewer host; without one there is nowhere to
-  // show the conversation, and the line only reports.
-  const openable = childConversationId != null && viewerHost != null
+  // 远程会话在独立远程窗口中打开，不依赖本地子会话或查看器。
+  const openable = remote
+    ? isLocalDesktop() && remote.conversationId != null && !remoteDeleted
+    : childConversationId != null && viewerHost != null
 
   const body = (
     <>
@@ -1000,8 +1012,21 @@ const NavSubAgent = memo(function NavSubAgent({
       <button
         type="button"
         data-testid="nav-sub-agent"
-        title={t("openDetail")}
-        onClick={() => viewerHost.open({ kind: "delegation", source })}
+        title={t(remote ? "remoteGoToSession" : "openDetail")}
+        onClick={() => {
+          if (remote) {
+            if (remote.connectionId === null) return
+            void openRemoteWorkspace(remote.connectionId, {
+              conversationId: remote.conversationId,
+            }).catch((err) => {
+              toast.error(t("remoteOpenFailed"), {
+                description: toErrorMessage(err),
+              })
+            })
+          } else {
+            viewerHost?.open({ kind: "delegation", source })
+          }
+        }}
         className={cn(
           line,
           "group/agent text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -1012,7 +1037,11 @@ const NavSubAgent = memo(function NavSubAgent({
     )
   }
   return (
-    <div data-testid="nav-sub-agent" className={line}>
+    <div
+      data-testid="nav-sub-agent"
+      title={remoteDeleted ? t("remoteConnectionDeleted") : undefined}
+      className={line}
+    >
       {body}
     </div>
   )

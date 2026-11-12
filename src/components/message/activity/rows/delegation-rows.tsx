@@ -1,13 +1,6 @@
 "use client"
 
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react"
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -35,6 +28,10 @@ import {
   type DelegationCardSource,
 } from "@/hooks/use-delegation-card-model"
 import { useTruncation } from "@/hooks/use-truncation"
+import {
+  useRemoteConnectionAvailability,
+  type RemoteAvailability,
+} from "@/hooks/use-remote-connection-availability"
 import { previewLine } from "@/lib/activity/format"
 import type { ActivityStep, StepStatus } from "@/lib/activity/types"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
@@ -55,7 +52,6 @@ import { cn } from "@/lib/utils"
 import { toErrorMessage } from "@/lib/app-error"
 import { isLocalDesktop } from "@/lib/platform"
 import {
-  listRemoteWorkspaceConnections,
   openRemoteWorkspace,
   resyncRemoteDelegation,
 } from "@/lib/remote-workspace"
@@ -75,6 +71,8 @@ import {
 } from "../use-live-elapsed"
 import type { ToolStep } from "./explore-rows"
 import { GenericRow } from "./generic-row"
+
+export { resetRemoteConnectionIdsCache } from "@/hooks/use-remote-connection-availability"
 
 /** Longest result line shown under a finished delegation. */
 const RESULT_PREVIEW_CHARS = 240
@@ -196,85 +194,6 @@ export const DelegationResumeRow = memo(function DelegationResumeRow({
     />
   )
 })
-
-/** 保存的远程连接 id 缓存：一张卡片一个查询太浪费，远端连接列表变化很慢。 */
-let remoteConnectionIdsCache: { at: number; ids: Set<number> } | null = null
-const REMOTE_CONNECTION_IDS_TTL_MS = 15_000
-/** 在途请求：同时挂载的多张远程卡片共用一个，不并发打 N 次 IPC。 */
-let remoteConnectionIdsLoading: Promise<Set<number>> | null = null
-/** 每次重置自增：清空前发出的请求回来时不再写回，免得旧响应覆盖新结果。 */
-let remoteConnectionIdsEpoch = 0
-
-/** 测试用：清掉连接 id 缓存（真实运行不需要）。 */
-export function resetRemoteConnectionIdsCache(): void {
-  remoteConnectionIdsEpoch += 1
-  remoteConnectionIdsCache = null
-  remoteConnectionIdsLoading = null
-}
-
-async function loadRemoteConnectionIds(): Promise<Set<number>> {
-  const now = Date.now()
-  if (
-    remoteConnectionIdsCache &&
-    now - remoteConnectionIdsCache.at < REMOTE_CONNECTION_IDS_TTL_MS
-  ) {
-    return remoteConnectionIdsCache.ids
-  }
-  if (remoteConnectionIdsLoading) return remoteConnectionIdsLoading
-  const epoch = remoteConnectionIdsEpoch
-  const loading = listRemoteWorkspaceConnections()
-    .then((list) => {
-      const ids = new Set(list.map((c) => c.id))
-      if (epoch === remoteConnectionIdsEpoch) {
-        remoteConnectionIdsCache = { at: Date.now(), ids }
-      }
-      return ids
-    })
-    .finally(() => {
-      // 失败不缓存：下一次挂载会重试。已被重置时不要动新一代的在途请求。
-      if (epoch === remoteConnectionIdsEpoch) remoteConnectionIdsLoading = null
-    })
-  remoteConnectionIdsLoading = loading
-  return loading
-}
-
-type RemoteAvailability = "unknown" | "available" | "deleted"
-
-/**
- * 远程卡片引用的连接是否还在（删掉连接的远程任务不再可跳转，按钮禁用）。
- * 列表拿不到时保持 `unknown` —— 不禁用，把失败交给点击时的 toast。
- */
-function useRemoteConnectionAvailability(
-  connectionId: number | null
-): RemoteAvailability {
-  const [known, setKnown] = useState<{
-    connectionId: number
-    availability: RemoteAvailability
-  } | null>(null)
-  useEffect(() => {
-    if (connectionId === null || !isLocalDesktop()) return
-    let cancelled = false
-    void loadRemoteConnectionIds()
-      .then((ids) => {
-        if (cancelled) return
-        setKnown({
-          connectionId,
-          availability: ids.has(connectionId) ? "available" : "deleted",
-        })
-      })
-      .catch(() => {
-        // 查不到就保持 unknown：不禁用按钮，失败由点击时的 toast 说清楚。
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [connectionId])
-  // 换了一个连接就还没有答案，不沿用上一个连接的结果。
-  if (connectionId === null || known?.connectionId !== connectionId) {
-    return "unknown"
-  }
-  return known.availability
-}
 
 /** 「打开远程会话」按钮的统一外观。 */
 const REMOTE_ACTION_CLASS =
