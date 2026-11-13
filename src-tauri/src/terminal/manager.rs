@@ -415,6 +415,12 @@ pub struct SpawnOptions {
     pub temp_files: Vec<std::path::PathBuf>,
 }
 
+// portable-pty 会将无效 cwd 回退到用户目录；只记录配置时确认有效的目录。
+fn monitor_launch_directory(working_dir: &str) -> Option<std::path::PathBuf> {
+    let directory = std::path::Path::new(working_dir);
+    (!working_dir.is_empty() && directory.is_dir()).then(|| directory.to_path_buf())
+}
+
 impl TerminalManager {
     pub fn new() -> Self {
         Self {
@@ -493,6 +499,7 @@ impl TerminalManager {
         let mut cmd = CommandBuilder::new(&shell);
         configure_shell_command(&mut cmd, &shell, opts.initial_command.as_deref());
         cmd.cwd(&opts.working_dir);
+        let launch_directory = monitor_launch_directory(&opts.working_dir);
 
         // Inject extra environment variables (e.g. git credential helper config)
         if let Some(env) = &opts.extra_env {
@@ -588,11 +595,10 @@ impl TerminalManager {
             let manager = self.clone_ref();
             let events = emitter.clone();
             let restart = monitor_options.temp_files.is_empty();
-            let launch_directory = std::path::PathBuf::from(&monitor_options.working_dir);
             crate::resource_monitor::register_terminal(
                 pid,
                 terminal_id.clone(),
-                &launch_directory,
+                launch_directory.as_deref(),
                 restart,
                 Arc::new(move |start, action| {
                     manager
@@ -1387,6 +1393,24 @@ mod tests {
                 "{id}: dropping its record ended a process still running"
             );
         }
+    }
+
+    #[test]
+    fn monitor_directory_validity_is_captured_before_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        assert!(super::monitor_launch_directory("").is_none());
+        assert!(super::monitor_launch_directory(file.to_str().unwrap()).is_none());
+
+        let later = dir.path().join("created-after-configuration");
+        let captured = super::monitor_launch_directory(later.to_str().unwrap());
+        std::fs::create_dir(&later).unwrap();
+        assert!(captured.is_none());
+        assert_eq!(
+            super::monitor_launch_directory(later.to_str().unwrap()),
+            Some(later)
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
