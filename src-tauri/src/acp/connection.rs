@@ -50556,6 +50556,7 @@ mod tests {
             multi_select: false,
             options: vec![],
             is_secret: false,
+            allow_other: true,
         }]
     }
 
