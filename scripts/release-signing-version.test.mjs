@@ -586,7 +586,7 @@ test("BeeCode 安装包校验文件与上传资产同名（Unix）", () => {
 })
 
 // 真实执行创建步骤，模拟分页结果，任何歧义都必须在写入之前终止。
-async function runCreate(releases) {
+async function runCreate(releases, responsePatch = {}) {
   const script = parse(workflow).jobs["create-draft-release"].steps.find(
     (step) => step.id === "release"
   ).with.script
@@ -601,11 +601,19 @@ async function runCreate(releases) {
     },
     createRelease: async (args) => {
       writes.push(args)
-      return { data: { id: 999, html_url: "test" } }
+      return { data: { ...args, ...responsePatch, id: 999, html_url: "test" } }
     },
     updateRelease: async (args) => {
       writes.push(args)
-      return { data: { ...args, id: args.release_id, html_url: "test" } }
+      return {
+        data: {
+          ...releases.find((release) => release.id === args.release_id),
+          ...args,
+          ...responsePatch,
+          id: args.release_id,
+          html_url: "test",
+        },
+      }
     },
   }
   const github = {
@@ -659,6 +667,21 @@ test("分页发现已发布版本时拒绝覆盖，唯一草稿复用固定 ID",
   assert.equal(draft.writes[0].release_id, 43)
   const empty = await runCreate([])
   assert.equal(empty.outputs.release_id, "999")
+})
+
+test("复用草稿更新元数据时显式保留标签和固定源码", async () => {
+  const draft = await runCreate([{ id: 43, tag_name: "v0.41.1", draft: true }])
+  assert.equal(draft.writes[0].tag_name, "v0.41.1")
+  assert.equal(draft.writes[0].target_commitish, "test")
+  assert.equal(draft.writes[0].draft, true)
+})
+
+test("创建或复用后标签漂移或草稿状态错误立即失败", async () => {
+  for (const releases of [[], [{ id: 43, tag_name: "v0.41.1", draft: true }]]) {
+    for (const patch of [{ tag_name: "untagged-drift" }, { draft: false }]) {
+      await assert.rejects(runCreate(releases, patch), /草稿状态或标签不匹配/)
+    }
+  }
 })
 
 test("所有资产上传使用创建步骤的固定 ID，禁止按 tag 重新解析", () => {
@@ -870,6 +893,7 @@ test("发布前按固定 ID 重新分页核验真实资产，缺失、空包、�
   assert.equal(writes.length, 1)
   assert.equal(writes[0].release_id, 43)
   assert.equal(writes[0].draft, false)
+  assert.equal(writes[0].tag_name, "v0.41.1")
   // 每一个包、签名、校验文件与 latest.json 都必须存在。
   for (const name of names) {
     await assert.rejects(

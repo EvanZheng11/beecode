@@ -152,6 +152,9 @@ jobs:
                   owner,
                   repo,
                   release_id: release.id,
+                  tag_name: tag,
+                  target_commitish: process.env.SOURCE_REF,
+                  draft: true,
                   name: releaseName,
                   prerelease,
                   body: releaseBody,
@@ -164,6 +167,7 @@ jobs:
                 owner,
                 repo,
                 tag_name: tag,
+                target_commitish: process.env.SOURCE_REF,
                 name: releaseName,
                 body: releaseBody,
                 draft: true,
@@ -174,6 +178,9 @@ jobs:
               core.info(`已创建草稿发布 #${release.id}`);
             }
 
+            if (!release.draft || release.tag_name !== tag) {
+              throw new Error(`发布 #${release.id} 的草稿状态或标签不匹配，拒绝开始构建。`);
+            }
             core.setOutput("release_id", String(release.id));
             core.setOutput("release_url", release.html_url);
             core.setOutput("release_body", releaseBody);
@@ -1782,6 +1789,7 @@ jobs:
               owner,
               repo,
               release_id: releaseId,
+              tag_name: process.env.TAG,
               draft: false,
               prerelease,
             });
