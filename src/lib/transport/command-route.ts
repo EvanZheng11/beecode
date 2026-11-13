@@ -16,6 +16,11 @@ const MONITOR_ROUTES: Record<string, { path: string; method: string }> = {
     path: "resource-monitor/action",
     method: "POST",
   },
+  // 一键优化与监控开关无关，无参数，POST 空对象。
+  resource_monitor_optimize: {
+    path: "resource-monitor/optimize",
+    method: "POST",
+  },
 }
 
 export function commandRoute(command: string) {

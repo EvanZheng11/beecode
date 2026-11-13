@@ -26,6 +26,7 @@ describe("监控 Web transport", () => {
       "POST",
       { pid: 1, startTime: 2, action: "stop" },
     ],
+    ["resource_monitor_optimize", "optimize", "POST", undefined],
   ])("%s 保留授权并使用对应 REST 路由", async (command, path, method, args) => {
     const transport = new WebTransport("https://example.test/beecode")
     await transport.call(command, args)
@@ -33,7 +34,7 @@ describe("监控 Web transport", () => {
       `https://example.test/beecode/api/resource-monitor/${path}`,
       expect.objectContaining({
         method,
-        body: method === "GET" ? undefined : JSON.stringify(args),
+        body: method === "GET" ? undefined : JSON.stringify(args ?? {}),
         headers: expect.objectContaining({
           Authorization: "Bearer monitor-test",
         }),

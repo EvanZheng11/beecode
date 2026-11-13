@@ -6,6 +6,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type {
   ResourceMonitorAction,
   ResourceMonitorHistoryPoint,
+  ResourceMonitorOptimizeResult,
   ResourceMonitorProcess,
   ResourceMonitorSettings,
   ResourceMonitorSnapshot,
@@ -24,12 +25,17 @@ export function useResourceMonitor() {
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
+  const [optimizeBusy, setOptimizeBusy] = useState(false)
+  const [optimizeResult, setOptimizeResult] =
+    useState<ResourceMonitorOptimizeResult | null>(null)
+  const [optimizeError, setOptimizeError] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
   const mounted = useRef(false)
   const epoch = useRef(0)
   const sampleInFlight = useRef(false)
   const settingsInFlight = useRef(false)
   const actionInFlight = useRef(false)
+  const optimizeInFlight = useRef(false)
   const enabledRef = useRef(false)
 
   const loadSettings = useCallback(async () => {
@@ -208,6 +214,32 @@ export function useResourceMonitor() {
     []
   )
 
+  /**
+   * 一键优化：只调用后端的缓存回收接口，与监控开关无关，关闭监控也能用。
+   * 同一时刻只允许一个请求；重新发起时丢弃旧的展示结果；卸载后不写状态。
+   */
+  const optimize = useCallback(async () => {
+    if (optimizeInFlight.current) return
+    optimizeInFlight.current = true
+    setOptimizeBusy(true)
+    setOptimizeError(null)
+    setOptimizeResult(null)
+    try {
+      const result = await getTransport().call<ResourceMonitorOptimizeResult>(
+        "resource_monitor_optimize"
+      )
+      if (!mounted.current) return
+      setOptimizeResult(result)
+      // 监控开着时立刻刷新一次样本，让回收后的数字尽快反映出来。
+      if (enabledRef.current) setRevision((value) => value + 1)
+    } catch (cause) {
+      if (mounted.current) setOptimizeError(toErrorMessage(cause))
+    } finally {
+      optimizeInFlight.current = false
+      if (mounted.current) setOptimizeBusy(false)
+    }
+  }, [])
+
   const retry = useCallback(() => {
     setActionError(null)
     if (enabledRef.current) setRevision((value) => value + 1)
@@ -223,8 +255,12 @@ export function useResourceMonitor() {
     history,
     error: actionError ?? error,
     actionBusy,
+    optimizeBusy,
+    optimizeResult,
+    optimizeError,
     changeEnabled,
     executeAction,
+    optimize,
     retry,
   }
 }

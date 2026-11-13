@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "Nom",
+      "pid": "PID",
+      "directory": "Dossier de lancement",
+      "uptimeStatus": "Durée / état",
+      "actions": "Actions"
+    },
+    "sortBy": "Trier par {column}",
+    "groupByDirectory": "Regrouper par dossier",
+    "groupCount": "{count} processus",
+    "unknownDirectory": "Dossier inconnu",
+    "optimize": {
+      "title": "Libérer de l’espace",
+      "description": "Supprime le cache que BeeCode peut reconstruire. Les sessions en cours ne sont pas arrêtées.",
+      "button": "Optimiser maintenant",
+      "busy": "Optimisation…",
+      "cacheEntries": "Entrées de cache supprimées",
+      "memory": "Mémoire libérée",
+      "disk": "Disque libéré",
+      "nothing": "Rien à récupérer pour le moment.",
+      "warnings": "Résultat partiel",
+      "note": "Seul le cache reconstructible de BeeCode est supprimé. La mémoire système (RSS) peut ne pas baisser immédiatement ; récupérer 0 octet est normal."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

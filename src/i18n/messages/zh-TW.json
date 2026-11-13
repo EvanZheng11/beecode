@@ -8003,6 +8003,29 @@
     "status": "狀態",
     "uptime": "運行時長",
     "actionBusy": "另一個操作正在進行，請稍候。",
+    "columns": {
+      "name": "名稱",
+      "pid": "PID",
+      "directory": "啟動目錄",
+      "uptimeStatus": "執行時間 / 狀態",
+      "actions": "操作"
+    },
+    "sortBy": "依{column}排序",
+    "groupByDirectory": "依目錄分組",
+    "groupCount": "{count} 個行程",
+    "unknownDirectory": "未知目錄",
+    "optimize": {
+      "title": "清理快取釋放空間",
+      "description": "清理 BeeCode 可重建的快取，不會結束執行中的工作階段。",
+      "button": "一鍵最佳化",
+      "busy": "正在最佳化…",
+      "cacheEntries": "已清快取項目",
+      "memory": "已釋放記憶體",
+      "disk": "已釋放磁碟",
+      "nothing": "目前沒有可回收的內容。",
+      "warnings": "部分完成",
+      "note": "只清理 BeeCode 自身可重建的快取；系統記憶體（RSS）不保證立即下降，回收為 0 也屬正常。"
+    },
     "action": {
       "stop": "關閉",
       "kill": "強制結束",

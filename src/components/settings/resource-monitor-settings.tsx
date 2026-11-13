@@ -34,6 +34,7 @@ export function ResourceMonitorSettings() {
         {...monitor}
         onEnabledChange={(enabled) => void monitor.changeEnabled(enabled)}
         onRetry={monitor.retry}
+        onOptimize={() => void monitor.optimize()}
         onRequestAction={(process, action) => {
           if (monitor.actionBusy) return
           confirmed.current = false

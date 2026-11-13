@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "名前",
+      "pid": "PID",
+      "directory": "起動フォルダ",
+      "uptimeStatus": "稼働時間 / 状態",
+      "actions": "操作"
+    },
+    "sortBy": "{column}で並べ替え",
+    "groupByDirectory": "フォルダでグループ化",
+    "groupCount": "{count} 件のプロセス",
+    "unknownDirectory": "不明なフォルダ",
+    "optimize": {
+      "title": "容量を解放",
+      "description": "BeeCode が再生成できるキャッシュを削除します。実行中のセッションは終了しません。",
+      "button": "今すぐ最適化",
+      "busy": "最適化中…",
+      "cacheEntries": "削除したキャッシュ項目",
+      "memory": "解放したメモリ",
+      "disk": "解放したディスク",
+      "nothing": "現在、解放できるものはありません。",
+      "warnings": "一部のみ完了",
+      "note": "BeeCode 自身の再生成可能なキャッシュのみ削除します。システムメモリ（RSS）がすぐに減るとは限らず、0 バイトでも正常です。"
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

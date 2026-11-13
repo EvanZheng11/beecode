@@ -8003,6 +8003,29 @@
     "status": "状态",
     "uptime": "运行时长",
     "actionBusy": "另一个操作正在进行，请稍候。",
+    "columns": {
+      "name": "名称",
+      "pid": "PID",
+      "directory": "启动目录",
+      "uptimeStatus": "运行时间 / 状态",
+      "actions": "操作"
+    },
+    "sortBy": "按{column}排序",
+    "groupByDirectory": "按目录分组",
+    "groupCount": "{count} 个进程",
+    "unknownDirectory": "未知目录",
+    "optimize": {
+      "title": "清理缓存释放空间",
+      "description": "清理 BeeCode 可重建的缓存，不会结束正在运行的会话。",
+      "button": "一键优化",
+      "busy": "正在优化…",
+      "cacheEntries": "已清缓存条目",
+      "memory": "已释放内存",
+      "disk": "已释放磁盘",
+      "nothing": "当前没有可回收的内容。",
+      "warnings": "部分完成",
+      "note": "只清理 BeeCode 自身可重建的缓存；系统内存（RSS）不保证立即下降，回收为 0 也属正常。"
+    },
     "action": {
       "stop": "关闭",
       "kill": "强制结束",

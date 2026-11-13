@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "Name",
+      "pid": "PID",
+      "directory": "Startordner",
+      "uptimeStatus": "Laufzeit / Status",
+      "actions": "Aktionen"
+    },
+    "sortBy": "Nach {column} sortieren",
+    "groupByDirectory": "Nach Ordner gruppieren",
+    "groupCount": "{count} Prozesse",
+    "unknownDirectory": "Unbekannter Ordner",
+    "optimize": {
+      "title": "Speicherplatz freigeben",
+      "description": "Löscht Cache, den BeeCode neu aufbauen kann. Laufende Sitzungen werden nicht beendet.",
+      "button": "Jetzt optimieren",
+      "busy": "Wird optimiert…",
+      "cacheEntries": "Gelöschte Cache-Einträge",
+      "memory": "Freigegebener Arbeitsspeicher",
+      "disk": "Freigegebener Speicherplatz",
+      "nothing": "Derzeit gibt es nichts freizugeben.",
+      "warnings": "Teilweise abgeschlossen",
+      "note": "Nur der neu aufbaubare Cache von BeeCode wird entfernt. Der Systemspeicher (RSS) sinkt möglicherweise nicht sofort; 0 Byte sind normal."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

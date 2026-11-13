@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "الاسم",
+      "pid": "PID",
+      "directory": "مجلد التشغيل",
+      "uptimeStatus": "مدة التشغيل / الحالة",
+      "actions": "الإجراءات"
+    },
+    "sortBy": "الفرز حسب {column}",
+    "groupByDirectory": "التجميع حسب المجلد",
+    "groupCount": "{count} عملية",
+    "unknownDirectory": "مجلد غير معروف",
+    "optimize": {
+      "title": "تحرير المساحة",
+      "description": "يحذف الذاكرة المؤقتة التي يستطيع BeeCode إعادة بنائها. لا ينهي الجلسات الجارية.",
+      "button": "تحسين الآن",
+      "busy": "جارٍ التحسين…",
+      "cacheEntries": "عناصر الذاكرة المؤقتة المحذوفة",
+      "memory": "الذاكرة المحرَّرة",
+      "disk": "مساحة القرص المحرَّرة",
+      "nothing": "لا يوجد ما يمكن استعادته الآن.",
+      "warnings": "نتيجة جزئية",
+      "note": "تُحذف ذاكرة BeeCode المؤقتة القابلة لإعادة البناء فقط. قد لا تنخفض ذاكرة النظام (RSS) فورًا، واستعادة 0 بايت أمر طبيعي."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

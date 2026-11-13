@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "Name",
+      "pid": "PID",
+      "directory": "Launched from",
+      "uptimeStatus": "Uptime / status",
+      "actions": "Actions"
+    },
+    "sortBy": "Sort by {column}",
+    "groupByDirectory": "Group by directory",
+    "groupCount": "{count} processes",
+    "unknownDirectory": "Unknown directory",
+    "optimize": {
+      "title": "Reclaim space",
+      "description": "Clears cache that BeeCode can rebuild. Running sessions are not affected.",
+      "button": "Optimize now",
+      "busy": "Optimizing…",
+      "cacheEntries": "Cache entries cleared",
+      "memory": "Memory reclaimed",
+      "disk": "Disk reclaimed",
+      "nothing": "Nothing could be reclaimed right now.",
+      "warnings": "Partial result",
+      "note": "Only the rebuildable cache of BeeCode itself is removed. System memory (RSS) may not drop immediately, and reclaiming 0 bytes is normal."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

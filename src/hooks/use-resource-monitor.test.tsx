@@ -159,6 +159,7 @@ describe("资源监控按需采样", () => {
       name: "test",
       category: "service" as const,
       ownerLabel: null,
+      launchDirectory: "/work/beecode",
       cpuPercent: 0,
       memoryBytes: 0,
       status: "sleeping",
@@ -195,6 +196,7 @@ describe("资源监控按需采样", () => {
       name: "test",
       category: "process" as const,
       ownerLabel: null,
+      launchDirectory: "/work/beecode",
       cpuPercent: 0,
       memoryBytes: 0,
       status: "sleeping",
@@ -230,5 +232,95 @@ describe("资源监控按需采样", () => {
     ])
     await act(async () => finish())
     expect(result.current.actionBusy).toBe(false)
+  })
+})
+
+const optimizeResult = {
+  clearedCacheEntries: 3,
+  reclaimedMemoryBytes: 2048,
+  reclaimedDiskBytes: 0,
+  warnings: ["磁盘缓存未清理"],
+}
+
+describe("一键优化", () => {
+  it("监控关闭时也能调用，结果独立展示且不发起采样", async () => {
+    call.mockImplementation(async (command: string) => {
+      if (command === "get_resource_monitor_settings") return { enabled: false }
+      if (command === "resource_monitor_optimize") return optimizeResult
+      return sample()
+    })
+    const { result } = renderHook(useResourceMonitor)
+    await settle()
+    expect(result.current.enabled).toBe(false)
+    await act(async () => result.current.optimize())
+    expect(result.current.optimizeResult).toEqual(optimizeResult)
+    expect(result.current.optimizeError).toBeNull()
+    expect(result.current.optimizeBusy).toBe(false)
+    expect(
+      call.mock.calls.filter(([cmd]) => cmd === "get_resource_monitor_snapshot")
+    ).toHaveLength(0)
+  })
+
+  it("监控开启时优化成功后立即刷新一次样本", async () => {
+    call.mockImplementation(
+      async (command: string, args?: { enabled: boolean }) => {
+        if (command === "get_resource_monitor_settings")
+          return { enabled: false }
+        if (command === "set_resource_monitor_enabled") return args
+        if (command === "resource_monitor_optimize") return optimizeResult
+        return sample()
+      }
+    )
+    const { result } = renderHook(useResourceMonitor)
+    await settle()
+    await act(async () => result.current.changeEnabled(true))
+    const before = call.mock.calls.filter(
+      ([cmd]) => cmd === "get_resource_monitor_snapshot"
+    ).length
+    await act(async () => result.current.optimize())
+    expect(
+      call.mock.calls.filter(([cmd]) => cmd === "get_resource_monitor_snapshot")
+        .length
+    ).toBe(before + 1)
+  })
+
+  it("忙碌中忽略重复触发，卸载后不再更新状态", async () => {
+    let finish!: (value: typeof optimizeResult) => void
+    call.mockImplementation((command: string) => {
+      if (command === "get_resource_monitor_settings")
+        return Promise.resolve({ enabled: false })
+      if (command === "resource_monitor_optimize")
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      return Promise.resolve(sample())
+    })
+    const { result, unmount } = renderHook(useResourceMonitor)
+    await settle()
+    act(() => {
+      void result.current.optimize()
+    })
+    expect(result.current.optimizeBusy).toBe(true)
+    await act(async () => result.current.optimize())
+    expect(
+      call.mock.calls.filter(([cmd]) => cmd === "resource_monitor_optimize")
+    ).toHaveLength(1)
+    unmount()
+    await act(async () => finish(optimizeResult))
+  })
+
+  it("失败时说明原因、清空旧结果，且不混入监控错误", async () => {
+    call.mockImplementation(async (command: string) => {
+      if (command === "get_resource_monitor_settings") return { enabled: false }
+      if (command === "resource_monitor_optimize") throw new Error("回收失败")
+      return sample()
+    })
+    const { result } = renderHook(useResourceMonitor)
+    await settle()
+    await act(async () => result.current.optimize())
+    expect(result.current.optimizeError).toBe("回收失败")
+    expect(result.current.optimizeResult).toBeNull()
+    expect(result.current.optimizeBusy).toBe(false)
+    expect(result.current.error).toBeNull()
   })
 })

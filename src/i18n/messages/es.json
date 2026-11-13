@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "Nombre",
+      "pid": "PID",
+      "directory": "Carpeta de inicio",
+      "uptimeStatus": "Tiempo activo / estado",
+      "actions": "Acciones"
+    },
+    "sortBy": "Ordenar por {column}",
+    "groupByDirectory": "Agrupar por carpeta",
+    "groupCount": "{count} procesos",
+    "unknownDirectory": "Carpeta desconocida",
+    "optimize": {
+      "title": "Liberar espacio",
+      "description": "Borra la caché que BeeCode puede reconstruir. No finaliza las sesiones en curso.",
+      "button": "Optimizar ahora",
+      "busy": "Optimizando…",
+      "cacheEntries": "Entradas de caché borradas",
+      "memory": "Memoria liberada",
+      "disk": "Disco liberado",
+      "nothing": "Ahora mismo no hay nada que recuperar.",
+      "warnings": "Resultado parcial",
+      "note": "Solo se elimina la caché que BeeCode puede reconstruir. La memoria del sistema (RSS) puede no bajar de inmediato y recuperar 0 bytes es normal."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",

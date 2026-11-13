@@ -8003,6 +8003,29 @@
     "status": "Status",
     "uptime": "Uptime",
     "actionBusy": "Another action is in progress. Please wait.",
+    "columns": {
+      "name": "Nome",
+      "pid": "PID",
+      "directory": "Pasta de inicialização",
+      "uptimeStatus": "Tempo ativo / estado",
+      "actions": "Ações"
+    },
+    "sortBy": "Ordenar por {column}",
+    "groupByDirectory": "Agrupar por pasta",
+    "groupCount": "{count} processos",
+    "unknownDirectory": "Pasta desconhecida",
+    "optimize": {
+      "title": "Liberar espaço",
+      "description": "Limpa o cache que o BeeCode consegue recriar. As sessões em execução não são encerradas.",
+      "button": "Otimizar agora",
+      "busy": "Otimizando…",
+      "cacheEntries": "Entradas de cache removidas",
+      "memory": "Memória liberada",
+      "disk": "Disco liberado",
+      "nothing": "Nada a recuperar no momento.",
+      "warnings": "Resultado parcial",
+      "note": "Apenas o cache recriável do próprio BeeCode é removido. A memória do sistema (RSS) pode não cair de imediato; recuperar 0 byte é normal."
+    },
     "action": {
       "stop": "Stop",
       "kill": "Force kill",
