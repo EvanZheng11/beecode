@@ -134,11 +134,11 @@ pub fn identity_matches(pid: u32, start: u64) -> bool {
 pub fn register_terminal(
     pid: u32,
     label: String,
-    directory: &std::path::Path,
+    directory: Option<&std::path::Path>,
     restart: bool,
     handler: ActionHandler,
 ) {
-    register_spawn_in(pid, "terminal", Some(label), Some(directory));
+    register_spawn_in(pid, "terminal", Some(label), directory);
     if let Some(owner) = registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1042,12 +1042,14 @@ mod tests {
 
     #[test]
     fn directory_normalization_only_uses_explicit_launch_configuration() {
-        let cwd = std::env::current_dir().unwrap();
+        // 使用绝对路径，避免与其他测试临时修改进程 cwd 产生竞态。
+        let dir = tempfile::tempdir().unwrap();
+        let explicit = dir.path().join("explicit-launch");
+        assert!(explicit.is_absolute());
         assert_eq!(
-            launch_directory(std::path::Path::new("relative")),
-            cwd.join("relative").to_str().map(str::to_owned)
+            launch_directory(&explicit),
+            explicit.to_str().map(str::to_owned)
         );
-        assert_eq!(launch_directory(&cwd), cwd.to_str().map(str::to_owned));
     }
 
     #[test]
@@ -1210,6 +1212,65 @@ mod tests {
             action: Action::Kill,
         })
         .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn managed_terminal_records_only_valid_configured_directories() {
+        use crate::terminal::manager::{SpawnOptions, TerminalManager};
+        let _guard = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        for (name, working_dir, expected) in [
+            ("empty", "", None),
+            ("missing", missing.to_str().unwrap(), None),
+            ("file", file.to_str().unwrap(), None),
+            ("valid", dir.path().to_str().unwrap(), dir.path().to_str()),
+        ] {
+            let manager = TerminalManager::new();
+            let id = format!("monitor-directory-{name}");
+            manager
+                .spawn_with_id(
+                    SpawnOptions {
+                        terminal_id: id.clone(),
+                        working_dir: working_dir.into(),
+                        owner_window_label: "test".into(),
+                        shell: Some("/bin/sh".into()),
+                        initial_command: Some("exec sleep 60".into()),
+                        extra_env: None,
+                        temp_files: vec![],
+                    },
+                    crate::web::event_bridge::EventEmitter::Noop,
+                )
+                .unwrap();
+            // 启动后才出现的目录不能改变本次启动的登记结果。
+            if name == "missing" {
+                std::fs::create_dir(&missing).unwrap();
+            }
+            let snapshot = Collector::default().snapshot(true);
+            let process = snapshot
+                .processes
+                .iter()
+                .find(|p| p.owner_label.as_deref() == Some(id.as_str()) && p.can_restart)
+                .unwrap();
+            let recorded = process.launch_directory.clone();
+            let wire = serde_json::to_value(process).unwrap();
+            let actual = std::fs::read_link(format!("/proc/{}/cwd", process.pid)).unwrap();
+            manager.kill(&id).unwrap();
+            assert_eq!(recorded.as_deref(), expected, "{name}");
+            assert_eq!(
+                wire["launchDirectory"],
+                serde_json::json!(expected),
+                "{name}"
+            );
+            if expected.is_some() {
+                assert_eq!(actual, dir.path());
+            } else {
+                assert_ne!(actual, std::path::Path::new(working_dir));
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
