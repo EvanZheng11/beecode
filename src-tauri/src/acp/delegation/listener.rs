@@ -2749,6 +2749,7 @@ mod tests {
     async fn pending_question_blocks_new_delegate_and_resume_for_its_parent() {
         let tokens = Arc::new(TokenRegistry::default());
         tokens.register("tok".into(), TokenEntry {
+            agent_hosts_tools: false,
             parent_connection_id: "parent-conn".into(),
             working_dir: PathBuf::from("/tmp"),
         }).await;
@@ -3671,6 +3672,7 @@ mod tests {
         let authoring = Arc::new(StubAuthoring::default());
         let tokens = Arc::new(TokenRegistry::default());
         tokens.register("tok".into(), TokenEntry {
+            agent_hosts_tools: false,
             parent_connection_id: "parent-conn".into(), working_dir: PathBuf::from("/tmp"),
         }).await;
         let listener = make_authoring_listener(tokens, authoring.clone(), Some(42));
@@ -3678,7 +3680,7 @@ mod tests {
         let _pending = listener.questions.register_question("parent-conn", request.questions).await.unwrap();
         let task = listener.process_create_work_task(BrokerCreateWorkTaskRequest {
             token: "tok".into(),
-            spec: NewWorkTaskSpec { title: "任务".into(), prompt: "尚未启动".into(), agent_type: None, folder_path: None },
+            spec: NewWorkTaskSpec { title: "任务".into(), prompt: "尚未启动".into(), agent_type: None, folder_path: None, attachments: Vec::new() },
         }).await;
         assert!(!task.created, "待答时不能创建自动处理器可接走的新任务");
         let automation = listener.process_create_automation(BrokerCreateAutomationRequest {
@@ -3971,6 +3973,7 @@ mod tests {
                         },
                     ],
                     is_secret: false,
+                    allow_other: true,
                 },
                 crate::acp::question::QuestionSpec {
                     id: "qq-2".into(),
@@ -3988,6 +3991,7 @@ mod tests {
                         },
                     ],
                     is_secret: false,
+                    allow_other: true,
                 },
             ],
         })
@@ -4146,6 +4150,7 @@ mod tests {
         });
         let tokens = Arc::new(TokenRegistry::default());
         tokens.register("tok".into(), TokenEntry {
+            agent_hosts_tools: false,
             parent_connection_id: "real-host-cut".into(), working_dir: PathBuf::from("/tmp"),
         }).await;
         let listener = make_question_listener(tokens, access);
@@ -4333,6 +4338,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
