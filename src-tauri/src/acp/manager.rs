@@ -1797,12 +1797,13 @@ impl ConnectionManager {
             let (bound, in_flight, launch_dir) = {
                 let s = conn.state.read().await;
                 (
-                    s.conversation_id.is_some(),
+                    s.conversation_id,
                     s.turn_in_flight
                         || s.pending_question.is_some()
                         || (s.question_timed_out
                             && (!explicit_user_resume
                                 || crate::acp::turn_replace::blocks_are_completion_notice(&blocks))),
+                    s.working_dir.clone(),
                 )
             };
             (
@@ -12810,6 +12811,58 @@ mod tests {
         assert!(mgr.cancel_question("waiting", &reg.question_id).await);
         mgr.send_prompt("waiting", prompt()).await.unwrap();
         assert!(matches!(commands.try_recv(), Ok(ConnectionCommand::Prompt { .. })));
+    }
+
+    #[tokio::test]
+    async fn pending_question_blocks_linked_prompt_before_conversation_creation() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id =
+            crate::db::test_helpers::seed_folder(&db, "/tmp/linked-question-gate").await;
+        let manager = ConnectionManager::new();
+        let mut commands =
+            insert_live_connection(&manager, "linked-waiting", AgentType::Codex, None).await;
+        let registration = manager
+            .register_question_with_timeout(
+                "linked-waiting",
+                q_spec(),
+                Some(Duration::from_secs(600)),
+            )
+            .await
+            .unwrap();
+        let rows_before = count_conversation_rows(&db).await;
+
+        let result = manager
+            .send_prompt_linked(
+                &db,
+                "linked-waiting",
+                one_text_block(),
+                Some(folder_id),
+                None,
+                None,
+            )
+            .await;
+
+        assert!(matches!(result, Err(AcpError::TurnInProgress)));
+        assert_eq!(count_conversation_rows(&db).await, rows_before);
+        assert!(commands.try_recv().is_err(), "待答时不能派出后续提示词");
+        assert!(manager
+            .cancel_question("linked-waiting", &registration.question_id)
+            .await);
+        manager
+            .send_prompt_linked(
+                &db,
+                "linked-waiting",
+                one_text_block(),
+                Some(folder_id),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ConnectionCommand::Prompt { .. })
+        ));
     }
 
     fn q_spec() -> Vec<QuestionSpec> {
