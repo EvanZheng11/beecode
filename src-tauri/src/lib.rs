@@ -1815,6 +1815,7 @@ mod tauri_app {
                 crate::resource_monitor::set_resource_monitor_enabled,
                 crate::resource_monitor::get_resource_monitor_snapshot,
                 crate::resource_monitor::resource_monitor_process_action,
+                crate::resource_monitor::resource_monitor_optimize,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,

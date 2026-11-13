@@ -90,9 +90,57 @@ struct CacheEntry {
 /// by parser identity.
 type Cache = HashMap<AgentType, HashMap<PathBuf, CacheEntry>>;
 
-fn cache() -> &'static Mutex<Cache> {
-    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+#[derive(Default)]
+struct CacheState {
+    entries: Cache,
+    // 清理期间已开始的解析仍可返回结果，但不能把旧一代缓存重新填回。
+    generation: u64,
+}
+
+fn cache() -> &'static Mutex<CacheState> {
+    static CACHE: OnceLock<Mutex<CacheState>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(CacheState::default()))
+}
+
+/// 仅释放缓存持有的副本；调用者已取得的克隆与原始会话文件不受影响。
+/// 字节数只计已知 String 容量，是保守估算，不包含哈希表、路径和分配器开销。
+pub(crate) fn release_memory() -> Result<(usize, u64), &'static str> {
+    release_memory_from(cache())
+}
+
+fn release_memory_from(cache: &Mutex<CacheState>) -> Result<(usize, u64), &'static str> {
+    let entries = {
+        let mut state = cache
+            .lock()
+            .map_err(|_| "摘要缓存锁异常，本次未清理摘要缓存。")?;
+        state.generation = state.generation.wrapping_add(1);
+        std::mem::take(&mut state.entries)
+    };
+    // 计数和析构在锁外，读请求无需等待整张表释放。
+    let count = entries.values().map(HashMap::len).sum();
+    let bytes = entries
+        .values()
+        .flat_map(HashMap::values)
+        .fold(0u64, |total, entry| {
+            let s = &entry.summary;
+            let strings = [
+                Some(&s.id),
+                s.folder_path.as_ref(),
+                s.folder_name.as_ref(),
+                s.title.as_ref(),
+                s.model.as_ref(),
+                s.git_branch.as_ref(),
+                s.parent_id.as_ref(),
+                s.parent_tool_use_id.as_ref(),
+                s.delegation_call_id.as_ref(),
+            ];
+            strings
+                .into_iter()
+                .flatten()
+                .fold(total, |n, s| n.saturating_add(s.capacity() as u64))
+        });
+    drop(entries);
+    Ok((count, bytes))
 }
 
 fn file_token(path: &Path) -> Option<FileToken> {
@@ -162,6 +210,19 @@ pub(crate) fn get_or_parse_with_companions<F>(
 where
     F: FnOnce() -> Result<Option<ConversationSummary>, ParseError>,
 {
+    get_or_parse_in(cache(), agent_type, path, companions, parse)
+}
+
+fn get_or_parse_in<F>(
+    cache: &Mutex<CacheState>,
+    agent_type: AgentType,
+    path: &Path,
+    companions: &[&Path],
+    parse: F,
+) -> Result<Option<ConversationSummary>, ParseError>
+where
+    F: FnOnce() -> Result<Option<ConversationSummary>, ParseError>,
+{
     // Can't fingerprint (file vanished, permission error, …) ⇒ bypass the cache:
     // parse fresh and store nothing, since there's no token to validate against.
     let Some(fp_before) = fingerprint(path, companions) else {
@@ -170,13 +231,16 @@ where
 
     // Fast path: a live fingerprint match returns the cached summary without
     // reading or parsing the file.
-    if let Ok(map) = cache().lock() {
-        if let Some(entry) = map.get(&agent_type).and_then(|m| m.get(path)) {
+    let generation = if let Ok(state) = cache.lock() {
+        if let Some(entry) = state.entries.get(&agent_type).and_then(|m| m.get(path)) {
             if entry.fingerprint == fp_before {
                 return Ok(Some(entry.summary.clone()));
             }
         }
-    }
+        Some(state.generation)
+    } else {
+        None
+    };
 
     // Miss or stale: parse with the lock released.
     let parsed = parse()?;
@@ -187,14 +251,16 @@ where
     // uncached so the next list re-parses the settled content.
     if let Some(summary) = &parsed {
         if fingerprint(path, companions).as_ref() == Some(&fp_before) {
-            if let Ok(mut map) = cache().lock() {
-                map.entry(agent_type).or_default().insert(
-                    path.to_path_buf(),
-                    CacheEntry {
-                        fingerprint: fp_before,
-                        summary: summary.clone(),
-                    },
-                );
+            if let Ok(mut state) = cache.lock() {
+                if generation == Some(state.generation) {
+                    state.entries.entry(agent_type).or_default().insert(
+                        path.to_path_buf(),
+                        CacheEntry {
+                            fingerprint: fp_before,
+                            summary: summary.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -244,6 +310,63 @@ mod tests {
         let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
         f.write_all(bytes).unwrap();
         f.flush().unwrap();
+    }
+
+    #[test]
+    fn release_is_repeatable_preserves_clones_and_files_and_allows_rebuild() {
+        // 独立缓存避免清空其他并行测试的全局条目。
+        let cache = Mutex::new(CacheState::default());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        write(&path, b"history");
+        let run = || {
+            get_or_parse_in(&cache, AgentType::Pi, &path, &[], || {
+                Ok(Some(dummy("retained")))
+            })
+            .unwrap()
+            .unwrap()
+        };
+        let retained = run();
+        let (count, bytes) = release_memory_from(&cache).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(bytes, "retained".len() as u64);
+        assert_eq!(retained.id, "retained");
+        assert_eq!(std::fs::read(&path).unwrap(), b"history");
+        assert_eq!(release_memory_from(&cache).unwrap(), (0, 0));
+        assert_eq!(run().id, "retained");
+        assert_eq!(release_memory_from(&cache).unwrap().0, 1);
+    }
+
+    #[test]
+    fn release_during_parse_does_not_deadlock_or_repopulate_old_generation() {
+        let cache = Mutex::new(CacheState::default());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        write(&path, b"history");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let cache_ref = &cache;
+            let path_ref = &path;
+            let reader = scope.spawn(move || {
+                get_or_parse_in(cache_ref, AgentType::Pi, path_ref, &[], || {
+                    started_tx.send(()).unwrap();
+                    continue_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    Ok(Some(dummy("in-flight")))
+                })
+                .unwrap()
+                .unwrap()
+            });
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(release_memory_from(&cache).unwrap(), (0, 0));
+            continue_tx.send(()).unwrap();
+            assert_eq!(reader.join().unwrap().id, "in-flight");
+        });
+        assert_eq!(release_memory_from(&cache).unwrap(), (0, 0));
     }
 
     #[test]

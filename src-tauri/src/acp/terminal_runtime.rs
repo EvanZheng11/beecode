@@ -646,6 +646,11 @@ impl TerminalRuntime {
         let can_retry_through_shell = request.args.is_empty()
             && (request.command.contains(char::is_whitespace)
                 || classify_shell_family(&fallback_shell).resolves_bare_builtins());
+        let mut launch_directory = direct
+            .as_std()
+            .get_current_dir()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok());
         let spawned = crate::process::spawn_retrying_exec_busy(|| direct.spawn()).await;
         let mut child = match spawned {
             Ok(child) => child,
@@ -657,6 +662,11 @@ impl TerminalRuntime {
             {
                 let mut shell = shell_wrapped_command(&fallback_shell, &request.command);
                 self.configure_command(&mut shell, &request);
+                launch_directory = shell
+                    .as_std()
+                    .get_current_dir()
+                    .map(std::path::Path::to_path_buf)
+                    .or_else(|| std::env::current_dir().ok());
                 crate::process::spawn_retrying_exec_busy(|| shell.spawn())
                     .await
                     .map_err(|err| {
@@ -675,10 +685,11 @@ impl TerminalRuntime {
         };
 
         if let Some(pid) = child.id() {
-            crate::resource_monitor::register_spawn(
+            crate::resource_monitor::register_spawn_in(
                 pid,
                 "terminal",
                 Some(request.session_id.to_string()),
+                launch_directory.as_deref(),
             );
         }
         let stdout = child.stdout.take();

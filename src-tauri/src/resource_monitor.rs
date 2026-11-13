@@ -56,6 +56,7 @@ pub struct Process {
     name: String,
     category: String,
     owner_label: Option<String>,
+    launch_directory: Option<String>,
     cpu_percent: f32,
     memory_bytes: u64,
     status: String,
@@ -74,6 +75,7 @@ struct Owner {
     start: u64,
     category: String,
     label: Option<String>,
+    launch_directory: Option<String>,
     controllable: bool,
     handler: Option<ActionHandler>,
     restart: bool,
@@ -86,6 +88,16 @@ fn registry() -> &'static Mutex<HashMap<u32, Owner>> {
 
 /// 启动挂点只读取启动标识，不采集 CPU/内存；监控关闭期间也记录归属。
 pub fn register_spawn(pid: u32, category: &str, label: Option<String>) {
+    register_spawn_in(pid, category, label, None);
+}
+
+/// 仅由启动挂点传入实际使用的 cwd；未记录时不拿当前 cwd 或 exe 路径猜测。
+pub fn register_spawn_in(
+    pid: u32,
+    category: &str,
+    label: Option<String>,
+    directory: Option<&std::path::Path>,
+) {
     if let Some(start) = identity(pid) {
         let mut owners = registry().lock().unwrap_or_else(|e| e.into_inner());
         // 只在启动事件清理失效身份，避免监控长期关闭时积累已结束的启动配置。
@@ -96,6 +108,7 @@ pub fn register_spawn(pid: u32, category: &str, label: Option<String>) {
                 start,
                 category: category.into(),
                 label,
+                launch_directory: directory.and_then(launch_directory),
                 controllable: matches!(category, "session" | "terminal" | "service"),
                 handler: None,
                 restart: false,
@@ -104,13 +117,28 @@ pub fn register_spawn(pid: u32, category: &str, label: Option<String>) {
     }
 }
 
+fn launch_directory(directory: &std::path::Path) -> Option<String> {
+    let absolute = if directory.is_absolute() {
+        directory.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(directory)
+    };
+    absolute.to_str().map(str::to_owned)
+}
+
 pub fn identity_matches(pid: u32, start: u64) -> bool {
     identity(pid) == Some(start)
 }
 
 /// 终端操作通过管理器持有的原始子进程句柄执行，支持各平台生命周期。
-pub fn register_terminal(pid: u32, label: String, restart: bool, handler: ActionHandler) {
-    register_spawn(pid, "terminal", Some(label));
+pub fn register_terminal(
+    pid: u32,
+    label: String,
+    directory: &std::path::Path,
+    restart: bool,
+    handler: ActionHandler,
+) {
+    register_spawn_in(pid, "terminal", Some(label), Some(directory));
     if let Some(owner) = registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -158,6 +186,7 @@ impl Collector {
                     start,
                     category: "backend".into(),
                     label: Some("BeeCode".into()),
+                    launch_directory: None,
                     controllable: false,
                     handler: None,
                     restart: false,
@@ -202,6 +231,7 @@ impl Collector {
                             start,
                             category: category.into(),
                             label: parent.label.clone(),
+                            launch_directory: parent.launch_directory.clone(),
                             controllable: parent.controllable && !frontend && category != "plugin",
                             handler: None,
                             restart: false,
@@ -275,6 +305,7 @@ impl Collector {
                 name: p.name().to_string_lossy().into_owned(),
                 category: owner.category.clone(),
                 owner_label: owner.label.clone(),
+                launch_directory: owner.launch_directory.clone(),
                 cpu_percent: cpu,
                 memory_bytes: memory,
                 status: p.status().to_string(),
@@ -344,6 +375,8 @@ fn discover_responsible_processes_with(
                 start,
                 category: if frontend { "frontend" } else { "process" }.into(),
                 label: root.label.clone(),
+                // 系统归属不等于父子启动链，不能推断该辅助进程的启动目录。
+                launch_directory: None,
                 // XPC 由系统管理生命周期，只展示，不继承会话或终端的进程控制权限。
                 controllable: false,
                 handler: None,
@@ -517,6 +550,40 @@ pub async fn get_snapshot(conn: &sea_orm::DatabaseConnection) -> Result<Snapshot
     .map_err(|_| AppCommandError::task_execution_failed("资源采集任务失败"))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeResult {
+    cleared_cache_entries: usize,
+    reclaimed_memory_bytes: u64,
+    reclaimed_disk_bytes: u64,
+    warnings: Vec<String>,
+}
+
+/// 独立于监控开关，不初始化采集器、不扫描进程，也不调用磁盘清理入口。
+pub async fn optimize() -> Result<OptimizeResult, AppCommandError> {
+    tokio::task::spawn_blocking(|| {
+        let mut result = OptimizeResult {
+            cleared_cache_entries: 0,
+            reclaimed_memory_bytes: 0,
+            reclaimed_disk_bytes: 0,
+            warnings: vec![
+                "仅清理可重建的会话摘要内存缓存；未删除任何磁盘数据，磁盘回收量为 0。".into(),
+                "内存回收量仅估算已释放缓存字符串的容量，不含路径、哈希表和分配器开销；并发请求可能重新构建缓存，分配器不保证 RSS 下降。".into(),
+            ],
+        };
+        match crate::parsers::summary_cache::release_memory() {
+            Ok((entries, bytes)) => {
+                result.cleared_cache_entries = entries;
+                result.reclaimed_memory_bytes = bytes;
+            }
+            Err(warning) => result.warnings.push(warning.into()),
+        }
+        result
+    })
+    .await
+    .map_err(|_| AppCommandError::task_execution_failed("缓存优化任务失败"))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
@@ -650,11 +717,22 @@ fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn verified_child(pid: u32, parent: u32, parent_start: u64) -> Option<u64> {
-    // 这些平台的后代仅展示，控制只允许已登记并持有原始句柄的终端。
-    if identity(parent) != Some(parent_start) {
+    // 这些平台的后代仅展示；重新读取父 PID 并前后校验身份，不能信任旧发现表。
+    let start = identity(pid)?;
+    if start < parent_start || identity(parent) != Some(parent_start) {
         return None;
     }
-    identity(pid).filter(|start| *start >= parent_start)
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let current_parent = system.process(Pid::from_u32(pid))?.parent()?.as_u32();
+    (current_parent == parent
+        && identity(pid) == Some(start)
+        && identity(parent) == Some(parent_start))
+        .then_some(start)
 }
 
 #[cfg(test)]
@@ -803,6 +881,7 @@ mod tests {
                 start: 100,
                 category: "backend".into(),
                 label: Some("BeeCode".into()),
+                launch_directory: None,
                 controllable: false,
                 handler: None,
                 restart: false,
@@ -930,6 +1009,47 @@ mod tests {
         assert!(owners[&20].controllable && owners[&20].restart);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn launch_directory_is_recorded_at_spawn_and_not_guessed_from_executable() {
+        let _guard = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let child = TestChild(
+            Command::new("/bin/sleep")
+                .arg("60")
+                .current_dir(dir.path())
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
+        register_spawn_in(pid, "session", None, Some(dir.path()));
+        let snapshot = Collector::default().snapshot(true);
+        let p = snapshot.processes.iter().find(|p| p.pid == pid).unwrap();
+        assert_eq!(p.launch_directory.as_deref(), dir.path().to_str());
+        assert_eq!(
+            serde_json::to_value(p).unwrap()["launchDirectory"],
+            dir.path().to_str().unwrap()
+        );
+
+        // 相同 PID 的旧身份被裁剪后，不能把旧目录带给新身份。
+        registry().lock().unwrap().get_mut(&pid).unwrap().start += 1;
+        let snapshot = Collector::default().snapshot(true);
+        let p = snapshot.processes.iter().find(|p| p.pid == pid).unwrap();
+        assert!(p.launch_directory.is_none());
+        register_spawn(pid, "session", None);
+        assert!(registry().lock().unwrap()[&pid].launch_directory.is_none());
+    }
+
+    #[test]
+    fn directory_normalization_only_uses_explicit_launch_configuration() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            launch_directory(std::path::Path::new("relative")),
+            cwd.join("relative").to_str().map(str::to_owned)
+        );
+        assert_eq!(launch_directory(&cwd), cwd.to_str().map(str::to_owned));
+    }
+
     #[test]
     fn authorization_rejects_external_pid_reuse_core_and_restart() {
         let mut owners = HashMap::new();
@@ -940,6 +1060,7 @@ mod tests {
                 start: 123,
                 category: "terminal".into(),
                 label: None,
+                launch_directory: None,
                 controllable: true,
                 handler: None,
                 restart: false,
@@ -1048,8 +1169,10 @@ mod tests {
     fn observed_service_survives_parent_exit_and_disabled_snapshot() {
         use std::io::{BufRead, BufReader};
         let _guard = test_lock();
+        let dir = tempfile::tempdir().unwrap();
         let mut parent = TestChild(
             Command::new("/bin/sh")
+                .current_dir(dir.path())
                 .arg("-c")
                 .arg("sleep 60 & echo $!; read hold")
                 .stdin(Stdio::piped())
@@ -1062,20 +1185,25 @@ mod tests {
             .read_line(&mut line)
             .unwrap();
         let pid: u32 = line.trim().parse().unwrap();
-        register_spawn(parent.0.id(), "terminal", Some("归属测试".into()));
+        register_spawn_in(
+            parent.0.id(),
+            "terminal",
+            Some("归属测试".into()),
+            Some(dir.path()),
+        );
         let mut collector = Collector::default();
         let before = collector.snapshot(true);
         let child = before.processes.iter().find(|p| p.pid == pid).unwrap();
         assert!(child.can_kill);
+        assert_eq!(child.launch_directory.as_deref(), dir.path().to_str());
         let start = child.start_time;
         parent.0.kill().unwrap();
         parent.0.wait().unwrap();
         collector.snapshot(false);
         let after = collector.snapshot(true);
-        assert!(after
-            .processes
-            .iter()
-            .any(|p| p.pid == pid && p.start_time == start));
+        assert!(after.processes.iter().any(|p| p.pid == pid
+            && p.start_time == start
+            && p.launch_directory.as_deref() == dir.path().to_str()));
         process_action(ActionParams {
             pid,
             start_time: start,
@@ -1291,6 +1419,9 @@ pub mod http {
     ) -> Result<Json<Snapshot>, AppCommandError> {
         get_snapshot(&state.db.conn).await.map(Json)
     }
+    pub async fn optimize() -> Result<Json<OptimizeResult>, AppCommandError> {
+        super::optimize().await.map(Json)
+    }
     pub async fn action(
         Extension(state): Extension<Arc<AppState>>,
         Json(params): Json<ActionParams>,
@@ -1328,6 +1459,10 @@ mod desktop {
         db: tauri::State<'_, AppDatabase>,
     ) -> Result<Snapshot, AppCommandError> {
         get_snapshot(&db.conn).await
+    }
+    #[tauri::command]
+    pub async fn resource_monitor_optimize() -> Result<OptimizeResult, AppCommandError> {
+        optimize().await
     }
     #[tauri::command]
     pub async fn resource_monitor_process_action(
