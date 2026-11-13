@@ -12882,6 +12882,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         }]
     }
 
