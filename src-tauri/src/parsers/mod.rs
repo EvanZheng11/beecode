@@ -21,7 +21,7 @@ pub mod opencode;
 mod opencode_context_window;
 pub mod pi;
 pub mod qoder;
-mod summary_cache;
+pub(crate) mod summary_cache;
 mod trae_usage;
 
 use std::collections::{HashMap, HashSet};

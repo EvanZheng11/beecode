@@ -718,9 +718,15 @@ impl<Counterpart: AcpAgentCounterpartRole> ConnectTo<Counterpart> for AcpAgent {
         use futures::StreamExt;
         use futures::io::BufReader;
 
+        let inherited_directory = std::env::current_dir().ok();
         let (child_stdin, child_stdout, child_stderr, child) = self.spawn_process()?;
         if let Some(pid) = child.id() {
-            crate::resource_monitor::register_spawn(pid, "session", None);
+            crate::resource_monitor::register_spawn_in(
+                pid,
+                "session",
+                None,
+                self.current_dir.as_deref().or(inherited_directory.as_deref()),
+            );
         }
 
         // Publish the OS pid to the spawn callback so the host can kill the

@@ -64,6 +64,10 @@ pub fn build_router_with_proxy_auth(
             "/resource-monitor/action",
             post(crate::resource_monitor::http::action),
         )
+        .route(
+            "/resource-monitor/optimize",
+            post(crate::resource_monitor::http::optimize),
+        )
         .route("/health", post(health_check))
         // Debug endpoint: operator-facing snapshot of `EventBusMetrics`
         // (emit volume, lag/eviction counts, attach decision counts).

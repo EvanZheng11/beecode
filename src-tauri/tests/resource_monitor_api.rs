@@ -53,6 +53,41 @@ async fn monitor_routes_require_authentication() {
 }
 
 #[tokio::test]
+async fn optimize_requires_auth_and_works_repeatedly_while_monitor_disabled() {
+    let (server, data, _assets) = server().await;
+    let user_file = data.path().join("history-must-survive.json");
+    std::fs::write(&user_file, b"user history").unwrap();
+    assert_eq!(
+        server
+            .post("/api/resource-monitor/optimize")
+            .await
+            .status_code(),
+        401
+    );
+    for _ in 0..2 {
+        let response = server
+            .post("/api/resource-monitor/optimize")
+            .add_header("authorization", format!("Bearer {TOKEN}"))
+            .await;
+        assert_eq!(response.status_code(), 200);
+        let result = response.json::<Value>();
+        assert_eq!(result.as_object().unwrap().len(), 4);
+        assert!(result["clearedCacheEntries"].as_u64().is_some());
+        assert!(result["reclaimedMemoryBytes"].as_u64().is_some());
+        assert_eq!(result["reclaimedDiskBytes"], 0);
+        assert!(!result["warnings"].as_array().unwrap().is_empty());
+        assert_eq!(std::fs::read(&user_file).unwrap(), b"user history");
+    }
+    let snapshot = server
+        .get("/api/resource-monitor/snapshot")
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .await
+        .json::<Value>();
+    assert_eq!(snapshot["enabled"], false);
+    assert_eq!(snapshot["sampledAt"], 0);
+}
+
+#[tokio::test]
 async fn monitor_defaults_disabled_and_returns_empty_snapshot() {
     let (server, _data, _assets) = server().await;
     let settings = server

@@ -588,9 +588,11 @@ impl TerminalManager {
             let manager = self.clone_ref();
             let events = emitter.clone();
             let restart = monitor_options.temp_files.is_empty();
+            let launch_directory = std::path::PathBuf::from(&monitor_options.working_dir);
             crate::resource_monitor::register_terminal(
                 pid,
                 terminal_id.clone(),
+                &launch_directory,
                 restart,
                 Arc::new(move |start, action| {
                     manager
