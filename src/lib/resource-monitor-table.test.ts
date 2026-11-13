@@ -148,6 +148,8 @@ describe("normalizeDirectory", () => {
     expect(normalizeDirectory("/work/a///")).toBe("/work/a")
     expect(normalizeDirectory("/")).toBe("/")
     expect(normalizeDirectory("C:\\work\\a\\")).toBe("C:\\work\\a")
+    expect(normalizeDirectory("C:\\")).toBe("C:\\")
+    expect(normalizeDirectory("D:/")).toBe("D:/")
     expect(normalizeDirectory("")).toBeNull()
     expect(normalizeDirectory("   ")).toBeNull()
     expect(normalizeDirectory(null)).toBeNull()

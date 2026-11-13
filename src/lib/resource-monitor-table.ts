@@ -62,6 +62,8 @@ export function normalizeDirectory(
 ): string | null {
   const trimmed = value?.trim()
   if (!trimmed) return null
+  // 盘符根目录的分隔符有语义：C: 是相对路径，不能替代 C:\。
+  if (/^[a-z]:[\\/]$/i.test(trimmed)) return trimmed
   const stripped = trimmed.length > 1 ? trimmed.replace(/[\\/]+$/, "") : trimmed
   return stripped || "/"
 }
