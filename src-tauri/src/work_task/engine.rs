@@ -14740,7 +14740,7 @@ mod tests {
 
             let err = f
                 .engine
-                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
                 .await
                 .expect_err("nothing was published");
             assert!(err.contains(expected), "got {err}");
@@ -14764,7 +14764,7 @@ mod tests {
             // 故障修好，换个清单重试就走得通。
             *inject.lock().await = None;
             f.engine
-                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]))
+                .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]), None)
                 .await
                 .unwrap_or_else(|e| panic!("retry after {expected}: {e}"));
             let task = row(&f.engine, f.task_id).await;
@@ -14788,7 +14788,7 @@ mod tests {
         as_issues_task(&f).await;
         let err = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
             .await
             .expect_err("the answer never came back");
         assert!(err.contains("could not open the pull request"), "{err}");
@@ -14805,7 +14805,7 @@ mod tests {
         *f.forge.create_error.lock().await = Some("422 no commits".into());
         let err = f
             .engine
-            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]))
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
             .await
             .expect_err("the forge refused");
         assert!(err.contains("could not open the pull request"), "{err}");
@@ -14824,7 +14824,7 @@ mod tests {
             f.forge.existing.lock().await.push(pr);
             let _ = f
                 .engine
-                .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![7]))
+                .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![7]), None)
                 .await;
             assert_eq!(
                 source_record(&row(&f.engine, f.task_id).await).pr_closes,
@@ -14859,7 +14859,7 @@ mod tests {
             *f.forge.push_error.lock().await = Some("remote rejected".into());
             let err = f
                 .engine
-                .deliver_pr_closing(f.task_id, None, false, false, true, None)
+                .deliver_pr_closing(f.task_id, None, false, false, true, None, None)
                 .await
                 .expect_err("the push was refused");
             assert!(err.contains("could not push"), "{err}");
@@ -14890,7 +14890,7 @@ mod tests {
             let task_id = f.task_id;
             async move {
                 engine
-                    .deliver_pr_closing(task_id, None, false, false, true, Some(vec![7]))
+                    .deliver_pr_closing(task_id, None, false, false, true, Some(vec![7]), None)
                     .await
             }
         });
