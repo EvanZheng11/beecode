@@ -16,6 +16,7 @@ import {
   nextHeaderAfter,
   pointerYToTargetIndex,
   RECENT_PAGE_SIZE,
+  FOLDER_PAGE_SIZE,
   reuseSelected,
   reuseSet,
   sectionHeaderFlatIndices,
@@ -1252,6 +1253,149 @@ describe("buildRows — Recent section", () => {
       })
     })
   })
+})
+
+describe("buildRows — folder paging", () => {
+  const folderArgs = (convs: DbConversationSummary[]) => ({
+    pinned: [],
+    pinnedExpanded: true,
+    orderedFolderIds: [10],
+    byFolder: new Map([[10, convs]]),
+    folderExpanded: { 10: true },
+    folderTotalCounts: new Map([[10, convs.length]]),
+    foldersExpanded: true,
+    chatConversations: [],
+    chatsExpanded: true,
+  })
+  const rowsIn = (rows: SidebarRow[], folderId: number) =>
+    rows.filter(
+      (r) => r.kind === "conversation" && r.conversation.folder_id === folderId
+    ).length
+
+  it("emits every row — and no footer — at or below the first page", () => {
+    const five = Array.from({ length: FOLDER_PAGE_SIZE }, (_, i) =>
+      conv(i + 1, 10)
+    )
+    const rows = buildRows({ ...folderArgs(five), folderLimits: {} })
+    expect(rowsIn(rows, 10)).toBe(FOLDER_PAGE_SIZE)
+    expect(rows.some((r) => r.kind === "folder-more")).toBe(false)
+  })
+
+  it("keeps the first page and appends its own footer past it", () => {
+    const seven = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+    const rows = buildRows({ ...folderArgs(seven), folderLimits: {} })
+    expect(rowsIn(rows, 10)).toBe(FOLDER_PAGE_SIZE)
+    expect(rows).toContainEqual({
+      kind: "folder-more",
+      folderId: 10,
+      remaining: 2,
+      depth: 1,
+    })
+  })
+
+  it("folds back to the first page from a reset-only footer", () => {
+    const seven = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+    const rows = buildRows({
+      ...folderArgs(seven),
+      folderLimits: { 10: FOLDER_PAGE_SIZE + RECENT_PAGE_SIZE },
+    })
+    expect(rowsIn(rows, 10)).toBe(7)
+    expect(rows).toContainEqual({
+      kind: "folder-more",
+      folderId: 10,
+      remaining: 0,
+      depth: 1,
+      canReset: true,
+    })
+  })
+
+  it("pages each folder independently", () => {
+    const many = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+    const rows = buildRows({
+      pinned: [],
+      pinnedExpanded: true,
+      orderedFolderIds: [10, 20],
+      byFolder: new Map([
+        [10, many],
+        [20, [conv(31, 20)]],
+      ]),
+      folderExpanded: { 10: true, 20: true },
+      folderTotalCounts: new Map([
+        [10, many.length],
+        [20, 1],
+      ]),
+      foldersExpanded: true,
+      chatConversations: [],
+      chatsExpanded: true,
+      folderLimits: { 10: FOLDER_PAGE_SIZE + RECENT_PAGE_SIZE },
+    })
+    expect(rowsIn(rows, 10)).toBe(7)
+    expect(rowsIn(rows, 20)).toBe(1)
+    expect(rows.filter((r) => r.kind === "folder-more")).toEqual([
+      {
+        kind: "folder-more",
+        folderId: 10,
+        remaining: 0,
+        depth: 1,
+        canReset: true,
+      },
+    ])
+  })
+
+  it("emits every row when no folderLimits is given", () => {
+    const seven = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+    const rows = buildRows(folderArgs(seven))
+    expect(rowsIn(rows, 10)).toBe(7)
+    expect(rows.some((r) => r.kind === "folder-more")).toBe(false)
+  })
+
+  it("carries the folder's own depth on the footer", () => {
+    // A grouped folder's rows sit one level deeper, and the footer follows so
+    // the chevron stays on the same rail as the cards above it.
+    const seven = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+    const rows = buildRows({
+      ...folderArgs(seven),
+      folderLimits: {},
+      layout: {
+        top: [{ kind: "group", id: 7 }],
+        membersByGroup: new Map([[7, [10]]]),
+      },
+    })
+    expect(rows).toContainEqual({
+      kind: "folder-more",
+      folderId: 10,
+      remaining: 2,
+      depth: 2,
+    })
+  })
+})
+
+it("pages a worktree sub-group's own bucket, not the repo's", () => {
+  const rootConvs = Array.from({ length: 7 }, (_, i) => conv(i + 1, 10))
+  const wtConvs = Array.from({ length: 6 }, (_, i) => conv(100 + i, 11))
+  const rows = buildRows({
+    pinned: [],
+    pinnedExpanded: true,
+    orderedFolderIds: [10],
+    byFolder: new Map([
+      [10, rootConvs],
+      [11, wtConvs],
+    ]),
+    folderExpanded: { 10: true, 11: true },
+    folderTotalCounts: new Map([
+      [10, rootConvs.length],
+      [11, wtConvs.length],
+    ]),
+    foldersExpanded: true,
+    chatConversations: [],
+    chatsExpanded: true,
+    containerChildren: new Map([[10, [11]]]),
+    folderLimits: {},
+  })
+  expect(rows.filter((r) => r.kind === "folder-more")).toEqual([
+    { kind: "folder-more", folderId: 10, remaining: 2, depth: 2 },
+    { kind: "folder-more", folderId: 11, remaining: 1, depth: 2 },
+  ])
 })
 
 describe("buildRows — Show worktrees container tree", () => {

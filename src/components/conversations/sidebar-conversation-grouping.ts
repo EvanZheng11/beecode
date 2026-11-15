@@ -21,6 +21,11 @@ import {
 // first page from an expanded one.
 export const RECENT_PAGE_SIZE = 10
 
+// 文件夹下默认最多直接显示的会话数，超出部分折叠到该文件夹自己的"查看更多"行。
+// 5 是产品决定：侧栏一眼要能扫完一个目录；每次"查看更多"仍按
+// {@link RECENT_PAGE_SIZE} 追加，与最近段落同一套手势。
+export const FOLDER_PAGE_SIZE = 5
+
 export function parseTimestamp(value: string): number {
   const timestamp = Date.parse(value)
   return Number.isNaN(timestamp) ? 0 : timestamp
@@ -1026,6 +1031,24 @@ export interface RecentMoreRow {
 }
 
 /**
+ * One folder's own paging footer: the same gesture as {@link RecentMoreRow},
+ * scoped to that folder's bucket (a folder with more than
+ * {@link FOLDER_PAGE_SIZE} visible sessions shows a page and this row). Per
+ * folder, so each expands and folds back independently.
+ */
+export interface FolderMoreRow {
+  kind: "folder-more"
+  folderId: number
+  /** 与 {@link RecentMoreRow.remaining} 同义：该文件夹还有多少条没显示。 */
+  remaining: number
+  /** 该行在文件夹内的缩进层级（与它的会话行同层），让"查看更多"跟着
+   *  文件夹 / worktree / 分组的嵌套一起右移。 */
+  depth: number
+  /** 仅在已展开超过第一页时写入，语义同 {@link RecentMoreRow.canReset}。 */
+  canReset?: true
+}
+
+/**
  * A collapsible section heading. Four exist: "pinned" (always on top, shown only
  * when there are pinned conversations) plus the three user-reorderable ones —
  * "folders" (wraps the whole folder list), "chats" (a flat list of folderless
@@ -1099,6 +1122,7 @@ export type SidebarRow =
   | FoldersEmptyRow
   | RecentEmptyRow
   | RecentMoreRow
+  | FolderMoreRow
   | SubsessionLoadingRow
 
 const MAX_RENDER_DEPTH = 32
@@ -1276,6 +1300,10 @@ export function buildRows(args: {
    *  footer row carries `canReset` once it is past the first page so the list
    *  can be folded back to {@link RECENT_PAGE_SIZE}. */
   recentLimit?: number
+  /** 文件夹分页：给出该参数即开启（每个文件夹默认 {@link FOLDER_PAGE_SIZE} 条），
+   *  值是该文件夹当前展开到的条数。键缺失的文件夹按默认值处理，所以"查看更多"
+   *  与"收起"只需写被点击的那个文件夹。省略 = 不分页（历史行为，测试仍按此）。 */
+  folderLimits?: Readonly<Record<number, number>>
   /** Vertical order of the Folders / Chat / Recent sections. The Pinned section
    *  (when present) always stays on top regardless. Normalized defensively, so
    *  a partial or repeated list still renders each section exactly once.
@@ -1344,6 +1372,7 @@ export function buildRows(args: {
     recentExpanded = true,
     showRecent = false,
     recentLimit,
+    folderLimits,
     sectionOrder = DEFAULT_SECTION_ORDER,
     conversationExpanded = EMPTY_EXPANDED,
     childrenByParent = EMPTY_CHILDREN,
@@ -1408,7 +1437,12 @@ export function buildRows(args: {
       })
       return
     }
-    for (const conv of convs) {
+    // 分页只裁"该文件夹自己的会话行"：子会话属于父行，随父行走。
+    // 计数用的是已过滤排序后的桶，所以"5 条"始终指当前符合显示条件的会话。
+    const limit =
+      folderLimits == null ? null : (folderLimits[folderId] ?? FOLDER_PAGE_SIZE)
+    const shown = limit == null ? convs : convs.slice(0, Math.max(0, limit))
+    for (const conv of shown) {
       pushConversationRow(
         rows,
         conv,
@@ -1417,6 +1451,20 @@ export function buildRows(args: {
         childrenByParent,
         childrenLoading
       )
+    }
+    if (limit == null) return
+    const remaining = convs.length - shown.length
+    // 与最近段落同一门禁：按"屏幕上已超过一页"判断，而不是按 limit 数值。
+    const canReset = shown.length > FOLDER_PAGE_SIZE
+    if (remaining > 0 || canReset) {
+      const row: FolderMoreRow = {
+        kind: "folder-more",
+        folderId,
+        remaining,
+        depth: baseDepth + 1,
+      }
+      if (canReset) row.canReset = true
+      rows.push(row)
     }
   }
 
