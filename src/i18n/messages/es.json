@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "Confirmar y enviar"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "¿Sobrescribir las habilidades existentes?",
+      "description": "Se encontraron {count} habilidades duplicadas. ¿Sobrescribir su contenido? Se conservará la configuración de activación de los agentes.",
+      "confirm": "Sobrescribir",
+      "skip": "No sobrescribir"
+    },
     "batchImport": {
       "directory": "Importar un directorio",
       "remote": "Importar desde una URL",

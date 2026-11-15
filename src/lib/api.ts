@@ -1859,22 +1859,24 @@ export async function customDuplicateSkill(params: {
 
 /** 递归扫描目录，逐项返回导入、跳过和失败结果。 */
 export async function customImportDirectory(
-  sourcePath: string
+  sourcePath: string,
+  overwriteIds?: string[]
 ): Promise<CustomImportResult[]> {
   return getTransport().call(
     "custom_import_directory",
-    { sourcePath },
+    { sourcePath, overwriteIds: overwriteIds ?? [] },
     { timeoutMs: 300_000 }
   )
 }
 
 /** 远程下载、解包后复用目录扫描导入。 */
 export async function customImportRemote(
-  url: string
+  url: string,
+  overwriteIds?: string[]
 ): Promise<CustomImportResult[]> {
   return getTransport().call(
     "custom_import_remote",
-    { url },
+    { url, overwriteIds: overwriteIds ?? [] },
     { timeoutMs: 90_000 }
   )
 }
@@ -1892,15 +1894,17 @@ export async function customImportSkill(params: {
 /**
  * Import an agent's own (global-scope) skills into the shared central store so
  * they can be re-enabled for any agent. Returns one result per id; skills
- * already in the store are reported as `skipped`, not errors.
+ * already in the store are reported as `skipped` until explicitly confirmed.
  */
 export async function customImportFromAgent(params: {
   agentType: AgentType
   ids: string[]
+  overwriteIds?: string[]
 }): Promise<CustomImportResult[]> {
   return getTransport().call("custom_import_from_agent", {
     agentType: params.agentType,
     ids: params.ids,
+    overwriteIds: params.overwriteIds ?? [],
   })
 }
 

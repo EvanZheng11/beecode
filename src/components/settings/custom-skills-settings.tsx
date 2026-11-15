@@ -133,6 +133,11 @@ async function loadReservedSkillIds(): Promise<Set<string>> {
 
 type EditorMode = "create" | "edit"
 
+interface PendingSkillOverwrite {
+  results: CustomImportResult[]
+  retry: (ids: string[]) => Promise<CustomImportResult[]>
+}
+
 export function CustomSkillsBody({
   onRegisterRefresh,
 }: {
@@ -163,6 +168,9 @@ export function CustomSkillsBody({
   const [importResults, setImportResults] = useState<
     CustomImportResult[] | null
   >(null)
+  const [pendingOverwrite, setPendingOverwrite] =
+    useState<PendingSkillOverwrite | null>(null)
+  const [overwriting, setOverwriting] = useState(false)
   // Import-from-agent dialog (multi-select an agent's own global skills).
   const [agentImportOpen, setAgentImportOpen] = useState(false)
   const [agentImportAgent, setAgentImportAgent] = useState<AgentType | null>(
@@ -273,8 +281,7 @@ export function CustomSkillsBody({
     [skills]
   )
 
-  // Ids already in the central store — used to mark an agent's skills that are
-  // already available so they can't be re-imported.
+  // 标记库中已有技能，但仍允许选择以确认覆盖。
   const libraryIds = useMemo(() => new Set(skills.map((s) => s.id)), [skills])
 
   // ─── Authoring handlers ─────────────────────────────────────────────
@@ -331,6 +338,50 @@ export function CustomSkillsBody({
     }
   }, [editorContent, editorId, editorMode, invalidateAll, refresh, t])
 
+  const presentImportResults = useCallback(
+    (results: CustomImportResult[], retry: PendingSkillOverwrite["retry"]) => {
+      if (results.some((result) => result.skipped)) {
+        setPendingOverwrite({ results, retry })
+      } else {
+        setImportResults(results)
+      }
+    },
+    []
+  )
+
+  const skipOverwrite = useCallback(() => {
+    if (!pendingOverwrite || overwriting) return
+    setImportResults(pendingOverwrite.results)
+    setPendingOverwrite(null)
+  }, [pendingOverwrite, overwriting])
+
+  const confirmOverwrite = useCallback(async () => {
+    if (!pendingOverwrite || overwriting) return
+    setOverwriting(true)
+    try {
+      const ids = pendingOverwrite.results
+        .filter((result) => result.skipped)
+        .map((result) => result.id)
+      const replacements = await pendingOverwrite.retry(ids)
+      const byId = new Map(replacements.map((result) => [result.id, result]))
+      // 第二轮会跳过首轮新建的技能，只替换首轮冲突项的结果。
+      setImportResults(
+        pendingOverwrite.results.map((result) =>
+          result.skipped ? (byId.get(result.id) ?? result) : result
+        )
+      )
+      setPendingOverwrite(null)
+      invalidateAll()
+      await refresh()
+    } catch (err) {
+      toast.error(t("toasts.importFailed"), {
+        description: toErrorMessage(err),
+      })
+    } finally {
+      setOverwriting(false)
+    }
+  }, [pendingOverwrite, overwriting, invalidateAll, refresh, t])
+
   const handleImport = useCallback(
     async (path: string, remote = false) => {
       setImportOpen(false)
@@ -341,7 +392,11 @@ export function CustomSkillsBody({
           ? await customImportRemote(path.trim())
           : await customImportDirectory(path)
         setRemoteImportOpen(false)
-        setImportResults(results)
+        presentImportResults(results, (ids) =>
+          remote
+            ? customImportRemote(path.trim(), ids)
+            : customImportDirectory(path, ids)
+        )
         invalidateAll()
         await refresh()
       } catch (err) {
@@ -352,7 +407,7 @@ export function CustomSkillsBody({
         setImporting(false)
       }
     },
-    [invalidateAll, refresh, t]
+    [invalidateAll, presentImportResults, refresh, t]
   )
 
   // Local desktop → native OS folder picker. Web / remote workspace → the
@@ -380,45 +435,39 @@ export function CustomSkillsBody({
 
   // ─── Import from agent (multi-select) ───────────────────────────────
 
-  const loadAgentSkills = useCallback(
-    async (agentType: AgentType) => {
-      setAgentImportLoading(true)
-      setAgentImportError(null)
-      setAgentImportUnsupported(false)
-      setAgentImportSkills([])
-      setAgentImportSelected(new Set())
-      try {
-        const [result, reserved] = await Promise.all([
-          acpListAgentSkills({ agentType }),
-          loadReservedSkillIds(),
-        ])
-        if (!result.supported) {
-          setAgentImportUnsupported(true)
-          return
-        }
-        // Only global-scope skills belong in the shared store (project skills
-        // are workspace-specific). We pass no workspace, so the result is
-        // already global-only; filter defensively. Also drop codeg's own
-        // built-in pack skills (experts / office / science / ui-render): once
-        // enabled they symlink into the agent's dir and would otherwise appear
-        // here, but they aren't the user's own skills to re-import.
-        const globals = result.skills.filter(
-          (s) => s.scope === "global" && !reserved.has(s.id)
-        )
-        setAgentImportSkills(globals)
-        // Pre-select everything not already in the central library so the common
-        // "import all" case is a single click.
-        setAgentImportSelected(
-          new Set(globals.filter((s) => !libraryIds.has(s.id)).map((s) => s.id))
-        )
-      } catch (err) {
-        setAgentImportError(toErrorMessage(err))
-      } finally {
-        setAgentImportLoading(false)
+  const loadAgentSkills = useCallback(async (agentType: AgentType) => {
+    setAgentImportLoading(true)
+    setAgentImportError(null)
+    setAgentImportUnsupported(false)
+    setAgentImportSkills([])
+    setAgentImportSelected(new Set())
+    try {
+      const [result, reserved] = await Promise.all([
+        acpListAgentSkills({ agentType }),
+        loadReservedSkillIds(),
+      ])
+      if (!result.supported) {
+        setAgentImportUnsupported(true)
+        return
       }
-    },
-    [libraryIds]
-  )
+      // Only global-scope skills belong in the shared store (project skills
+      // are workspace-specific). We pass no workspace, so the result is
+      // already global-only; filter defensively. Also drop codeg's own
+      // built-in pack skills (experts / office / science / ui-render): once
+      // enabled they symlink into the agent's dir and would otherwise appear
+      // here, but they aren't the user's own skills to re-import.
+      const globals = result.skills.filter(
+        (s) => s.scope === "global" && !reserved.has(s.id)
+      )
+      setAgentImportSkills(globals)
+      // 已有技能也可导入，覆盖前会单独确认。
+      setAgentImportSelected(new Set(globals.map((s) => s.id)))
+    } catch (err) {
+      setAgentImportError(toErrorMessage(err))
+    } finally {
+      setAgentImportLoading(false)
+    }
+  }, [])
 
   const openAgentImport = useCallback(() => {
     const first = agentImportAgent ?? agents[0]?.agent_type ?? null
@@ -469,22 +518,16 @@ export function CustomSkillsBody({
         agentType: agentImportAgent,
         ids: [...agentImportSelected],
       })
-      const ok = results.filter((r) => r.ok).length
-      const skipped = results.filter((r) => r.skipped).length
-      const failed = results.filter((r) => !r.ok && !r.skipped)
+      setAgentImportOpen(false)
+      presentImportResults(results, (ids) =>
+        customImportFromAgent({
+          agentType: agentImportAgent,
+          ids,
+          overwriteIds: ids,
+        })
+      )
       invalidateAll()
       await refresh()
-      if (failed.length > 0) {
-        toast.warning(
-          t("toasts.importedFromAgentPartial", { ok, failed: failed.length }),
-          { description: failed[0]?.error ?? undefined }
-        )
-      } else if (ok > 0) {
-        toast.success(t("toasts.importedFromAgent", { count: ok }))
-      } else {
-        toast.info(t("toasts.importFromAgentAllSkipped", { count: skipped }))
-      }
-      setAgentImportOpen(false)
     } catch (err) {
       toast.error(t("toasts.importFromAgentFailed"), {
         description: toErrorMessage(err),
@@ -492,7 +535,14 @@ export function CustomSkillsBody({
     } finally {
       setAgentImporting(false)
     }
-  }, [agentImportAgent, agentImportSelected, invalidateAll, refresh, t])
+  }, [
+    agentImportAgent,
+    agentImportSelected,
+    invalidateAll,
+    presentImportResults,
+    refresh,
+    t,
+  ])
 
   const openDuplicate = useCallback((id: string) => {
     setDuplicateSource(id)
@@ -649,10 +699,7 @@ export function CustomSkillsBody({
 
   const preview = parseYamlFrontMatter(editorContent)
 
-  // Agent skills the user can still import (those not already in the store).
-  const importableAgentSkills = agentImportSkills.filter(
-    (s) => !libraryIds.has(s.id)
-  )
+  const importableAgentSkills = agentImportSkills
   const allImportableSelected =
     importableAgentSkills.length > 0 &&
     importableAgentSkills.every((s) => agentImportSelected.has(s.id))
@@ -1057,17 +1104,12 @@ export function CustomSkillsBody({
                       return (
                         <label
                           key={`${skill.scope}:${skill.id}`}
-                          className={cn(
-                            "flex items-start gap-2.5 px-3 py-2.5",
-                            already
-                              ? "cursor-default opacity-60"
-                              : "cursor-pointer hover:bg-muted/40"
-                          )}
+                          className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-muted/40"
                         >
                           <Checkbox
                             className="mt-0.5"
-                            checked={already ? false : checked}
-                            disabled={already}
+                            checked={checked}
+                            disabled={agentImporting}
                             onCheckedChange={() => toggleAgentSkill(skill.id)}
                           />
                           <div className="min-w-0 flex-1">
@@ -1128,6 +1170,50 @@ export function CustomSkillsBody({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={pendingOverwrite !== null}
+        onOpenChange={(open) => {
+          if (!open) skipOverwrite()
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("overwrite.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("overwrite.description", {
+                count:
+                  pendingOverwrite?.results.filter((r) => r.skipped).length ??
+                  0,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="max-h-[12rem] overflow-y-auto text-sm break-words">
+            {pendingOverwrite?.results
+              .filter((r) => r.skipped)
+              .map((result, index) => (
+                <li key={`${result.id}:${index}`}>
+                  {result.name || result.id}
+                </li>
+              ))}
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={overwriting} onClick={skipOverwrite}>
+              {t("overwrite.skip")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={overwriting}
+              onClick={(event) => {
+                event.preventDefault()
+                void confirmOverwrite()
+              }}
+            >
+              {overwriting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {t("overwrite.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete confirm (single or batch). */}
       <AlertDialog

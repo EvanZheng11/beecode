@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "Commitar e enviar"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "Substituir as habilidades existentes?",
+      "description": "Foram encontradas {count} habilidades duplicadas. Substituir o conteúdo? As configurações de ativação dos agentes serão mantidas.",
+      "confirm": "Substituir",
+      "skip": "Não substituir"
+    },
     "batchImport": {
       "directory": "Importar um diretório",
       "remote": "Importar de um endereço remoto",

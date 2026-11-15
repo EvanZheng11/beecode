@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "Commit and push"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "Overwrite existing skills?",
+      "description": "Found {count} duplicate skills. Overwrite their contents? Existing agent enablement settings will stay unchanged.",
+      "confirm": "Overwrite",
+      "skip": "Don't overwrite"
+    },
     "batchImport": {
       "directory": "Import a directory",
       "remote": "Import from a URL",

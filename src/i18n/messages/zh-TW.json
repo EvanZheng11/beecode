@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "提交並推送"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "覆蓋現有技能？",
+      "description": "發現 {count} 個重複技能。是否覆蓋其內容？原有智慧體的啟用設定保持不變。",
+      "confirm": "覆蓋",
+      "skip": "不覆蓋"
+    },
     "batchImport": {
       "directory": "批次匯入目錄",
       "remote": "從遠端位址匯入",

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -10,6 +10,9 @@ import type { AcpAgentInfo, AgentSkillItem } from "@/lib/types"
 const generativeUiSkillInfo = vi.fn<() => Promise<GenerativeUiSkillInfo>>()
 const customImportDirectory = vi.fn()
 const customImportRemote = vi.fn()
+const customImportFromAgent = vi.fn()
+const customList = vi.fn()
+const customApplyLinks = vi.fn()
 
 function skill(id: string): AgentSkillItem {
   return {
@@ -24,14 +27,14 @@ function skill(id: string): AgentSkillItem {
 }
 
 vi.mock("@/lib/api", () => ({
-  customList: async () => [],
+  customList: () => customList(),
   customListAllInstallStatuses: async () => [],
-  customApplyLinks: async () => [],
+  customApplyLinks: (...args: unknown[]) => customApplyLinks(...args),
   customReadSkill: async () => "",
   customCreateSkill: vi.fn(),
   customDeleteSkills: vi.fn(),
   customDuplicateSkill: vi.fn(),
-  customImportFromAgent: vi.fn(),
+  customImportFromAgent: (...args: unknown[]) => customImportFromAgent(...args),
   customImportSkill: vi.fn(),
   customImportDirectory: (...args: unknown[]) => customImportDirectory(...args),
   customImportRemote: (...args: unknown[]) => customImportRemote(...args),
@@ -99,13 +102,18 @@ async function openImportFromAgent() {
   })
   await vi.waitFor(() => expect(button).toBeEnabled())
   await userEvent.click(button)
-  await screen.findByText("my-notes", { selector: "span" })
+  await within(screen.getByRole("dialog")).findByText("my-notes", {
+    selector: "span",
+  })
 }
 
 beforeEach(() => {
   generativeUiSkillInfo.mockReset()
   customImportDirectory.mockReset()
   customImportRemote.mockReset()
+  customImportFromAgent.mockReset()
+  customList.mockReset().mockResolvedValue([])
+  customApplyLinks.mockReset().mockResolvedValue([])
 })
 
 describe("importing skills from an agent", () => {
@@ -144,7 +152,7 @@ async function renderImportSettings() {
 }
 
 describe("目录和远程批量导入", () => {
-  it("逐项展示成功、重复跳过和失败", async () => {
+  it("重复技能先询问，选择不覆盖后展示原有结果", async () => {
     customImportDirectory.mockResolvedValue([
       { id: "one", name: "技能甲", ok: true, skipped: false, error: null },
       { id: "two", name: "技能乙", ok: false, skipped: true, error: null },
@@ -159,10 +167,145 @@ describe("目录和远程批量导入", () => {
     await renderImportSettings()
     await userEvent.click(screen.getByRole("button", { name: "批量导入目录" }))
     await userEvent.click(screen.getByRole("button", { name: "选择测试目录" }))
+    const prompt = await screen.findByRole("alertdialog")
+    expect(prompt).toHaveTextContent("技能乙")
+    expect(prompt).toHaveTextContent("智能体的启用配置保持不变")
+    expect(customImportDirectory).toHaveBeenCalledTimes(1)
+    await userEvent.click(screen.getByRole("button", { name: "不覆盖" }))
     await screen.findByText("技能甲 · 已导入")
     expect(screen.getByText("技能乙 · 已存在，跳过")).toBeInTheDocument()
     expect(screen.getByText("frontmatter 无效")).toBeInTheDocument()
     expect(customImportDirectory).toHaveBeenCalledWith("/skills")
+  })
+
+  it("确认后仅授权覆盖重复技能，保留首轮成功和失败结果", async () => {
+    customImportDirectory.mockResolvedValueOnce([
+      { id: "one", name: "技能甲", ok: true, skipped: false, error: null },
+      { id: "two", name: "技能乙", ok: false, skipped: true, error: null },
+      { id: "bad", name: "技能丙", ok: false, skipped: false, error: "无效包" },
+    ])
+    customImportDirectory.mockResolvedValueOnce([
+      { id: "one", name: "技能甲", ok: false, skipped: true, error: null },
+      { id: "two", name: "技能乙", ok: true, skipped: false, error: null },
+    ])
+    await renderImportSettings()
+    await userEvent.click(screen.getByRole("button", { name: "批量导入目录" }))
+    await userEvent.click(screen.getByRole("button", { name: "选择测试目录" }))
+    await userEvent.click(await screen.findByRole("button", { name: "覆盖" }))
+    expect(customImportDirectory).toHaveBeenLastCalledWith("/skills", ["two"])
+    expect(await screen.findByText("技能乙 · 已导入")).toBeInTheDocument()
+    expect(screen.getByText("技能甲 · 已导入")).toBeInTheDocument()
+    expect(screen.getByText("无效包")).toBeInTheDocument()
+  })
+
+  it("远程重复技能需要确认且携带覆盖ID", async () => {
+    customImportRemote.mockResolvedValueOnce([
+      { id: "two", name: "技能乙", ok: false, skipped: true, error: null },
+    ])
+    customImportRemote.mockResolvedValueOnce([
+      { id: "two", name: "技能乙", ok: true, skipped: false, error: null },
+    ])
+    await renderImportSettings()
+    await userEvent.click(
+      screen.getByRole("button", { name: "从远程地址导入" })
+    )
+    await userEvent.type(
+      screen.getByLabelText("远程技能地址"),
+      "https://example.test/skills.zip"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "导入" }))
+    await userEvent.click(await screen.findByRole("button", { name: "覆盖" }))
+    expect(customImportRemote).toHaveBeenLastCalledWith(
+      "https://example.test/skills.zip",
+      ["two"]
+    )
+    expect(await screen.findByText("技能乙 · 已导入")).toBeInTheDocument()
+  })
+
+  it("智能体中已在库的技能仍可选择，确认后覆盖而不修改启用矩阵", async () => {
+    generativeUiSkillInfo.mockResolvedValue({
+      id: "ui-render",
+      conflict: false,
+    })
+    customList.mockResolvedValue([
+      { id: "my-notes", name: "my-notes", description: null },
+    ])
+    customImportFromAgent.mockResolvedValueOnce([
+      {
+        id: "my-notes",
+        name: "my-notes",
+        ok: false,
+        skipped: true,
+        error: null,
+      },
+    ])
+    customImportFromAgent.mockResolvedValueOnce([
+      {
+        id: "my-notes",
+        name: "my-notes",
+        ok: true,
+        skipped: false,
+        error: null,
+      },
+    ])
+    await openImportFromAgent()
+    const row = within(screen.getByRole("dialog"))
+      .getByText("my-notes", { selector: "span" })
+      .closest("label")!
+    const checkbox = row.querySelector("button")!
+    expect(checkbox).toBeEnabled()
+    if (checkbox.getAttribute("aria-checked") !== "true")
+      await userEvent.click(checkbox)
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: t.importFromAgent.confirm.replace("{count}", "1"),
+      })
+    )
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Overwrite" })
+    )
+    expect(customImportFromAgent).toHaveBeenLastCalledWith({
+      agentType: "claude_code",
+      ids: ["my-notes"],
+      overwriteIds: ["my-notes"],
+    })
+    expect(await screen.findByText("my-notes · Imported")).toBeInTheDocument()
+    expect(customApplyLinks).not.toHaveBeenCalled()
+  })
+
+  it("覆盖期间禁止重复提交，失败后仍可重试", async () => {
+    const duplicate = {
+      id: "two",
+      name: "技能乙",
+      ok: false,
+      skipped: true,
+      error: null,
+    }
+    customImportDirectory.mockResolvedValueOnce([duplicate])
+    let reject!: (error: Error) => void
+    customImportDirectory.mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail
+        })
+    )
+    customImportDirectory.mockResolvedValueOnce([
+      { ...duplicate, ok: true, skipped: false },
+    ])
+    await renderImportSettings()
+    await userEvent.click(screen.getByRole("button", { name: "批量导入目录" }))
+    await userEvent.click(screen.getByRole("button", { name: "选择测试目录" }))
+    const confirm = await screen.findByRole("button", { name: "覆盖" })
+    await userEvent.click(confirm)
+    expect(confirm).toBeDisabled()
+    expect(screen.getByRole("button", { name: "不覆盖" })).toBeDisabled()
+    expect(customImportDirectory).toHaveBeenCalledTimes(2)
+    await act(async () => reject(new Error("offline")))
+    await vi.waitFor(() => expect(confirm).toBeEnabled())
+    await userEvent.click(confirm)
+    expect(await screen.findByText("技能乙 · 已导入")).toBeInTheDocument()
+    expect(customImportDirectory).toHaveBeenCalledTimes(3)
+    expect(customApplyLinks).not.toHaveBeenCalled()
   })
 
   it("无有效包时展示明确提示", async () => {
@@ -195,7 +338,7 @@ describe("目录和远程批量导入", () => {
       "https://example.test/skills.zip"
     )
     expect(confirm).toBeDisabled()
-    resolve([])
+    await act(async () => resolve([]))
     expect(await screen.findByText(/未发现有效技能包/)).toBeInTheDocument()
   })
 })

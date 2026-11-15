@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "Commiter et pousser"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "Remplacer les compétences existantes ?",
+      "description": "{count} compétences en double détectées. Remplacer leur contenu ? Les paramètres d’activation des agents resteront inchangés.",
+      "confirm": "Remplacer",
+      "skip": "Ne pas remplacer"
+    },
     "batchImport": {
       "directory": "Importer un dossier",
       "remote": "Importer depuis une URL distante",

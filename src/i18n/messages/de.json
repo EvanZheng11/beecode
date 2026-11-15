@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "Committen und pushen"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "Vorhandene Skills überschreiben?",
+      "description": "{count} doppelte Skills gefunden. Inhalte überschreiben? Die bisherigen Aktivierungseinstellungen der Agenten bleiben erhalten.",
+      "confirm": "Überschreiben",
+      "skip": "Nicht überschreiben"
+    },
     "batchImport": {
       "directory": "Verzeichnis importieren",
       "remote": "Von einer Remote-Adresse importieren",

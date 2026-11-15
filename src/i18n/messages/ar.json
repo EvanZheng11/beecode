@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "إيداع ودفع"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "هل تريد استبدال المهارات الموجودة؟",
+      "description": "تم العثور على {count} مهارات مكررة. هل تريد استبدال محتواها؟ ستبقى إعدادات تفعيل الوكلاء الحالية دون تغيير.",
+      "confirm": "استبدال",
+      "skip": "عدم الاستبدال"
+    },
     "batchImport": {
       "directory": "استيراد مجلد",
       "remote": "الاستيراد من عنوان بعيد",

@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "コミットして push"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "既存のスキルを上書きしますか？",
+      "description": "重複するスキルが {count} 件あります。内容を上書きしますか？各エージェントの有効化設定は変更されません。",
+      "confirm": "上書き",
+      "skip": "上書きしない"
+    },
     "batchImport": {
       "directory": "ディレクトリを一括取り込み",
       "remote": "リモート URL から取り込む",

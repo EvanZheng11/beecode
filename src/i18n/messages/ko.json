@@ -6754,6 +6754,12 @@
     "deliverPrCommitPushSubmit": "커밋 후 푸시"
   },
   "CustomSkillsSettings": {
+    "overwrite": {
+      "title": "기존 스킬을 덮어쓸까요?",
+      "description": "중복 스킬 {count}개를 찾았습니다. 내용을 덮어쓸까요? 기존 에이전트 활성화 설정은 유지됩니다.",
+      "confirm": "덮어쓰기",
+      "skip": "덮어쓰지 않기"
+    },
     "batchImport": {
       "directory": "디렉터리 일괄 가져오기",
       "remote": "원격 주소에서 가져오기",
