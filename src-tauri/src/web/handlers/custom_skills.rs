@@ -46,6 +46,7 @@ pub struct CustomImportParams {
 pub struct CustomImportFromAgentParams {
     pub agent_type: AgentType,
     pub ids: Vec<String>,
+    pub overwrite_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -127,17 +128,20 @@ pub async fn custom_import_skill(
 #[serde(rename_all = "camelCase")]
 pub struct CustomDirectoryImportParams {
     pub source_path: String,
+    pub overwrite_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomRemoteImportParams {
     pub url: String,
+    pub overwrite_ids: Option<Vec<String>>,
 }
 
 pub async fn custom_import_directory(
     Json(params): Json<CustomDirectoryImportParams>,
 ) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {
-    custom_skills_commands::custom_import_directory(params.source_path)
+    custom_skills_commands::custom_import_directory(params.source_path, params.overwrite_ids)
         .await
         .map(Json)
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
@@ -146,7 +150,7 @@ pub async fn custom_import_directory(
 pub async fn custom_import_remote(
     Json(params): Json<CustomRemoteImportParams>,
 ) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {
-    custom_skills_commands::custom_import_remote(params.url)
+    custom_skills_commands::custom_import_remote(params.url, params.overwrite_ids)
         .await
         .map(Json)
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
@@ -155,10 +159,13 @@ pub async fn custom_import_remote(
 pub async fn custom_import_from_agent(
     Json(params): Json<CustomImportFromAgentParams>,
 ) -> Result<Json<Vec<CustomImportResult>>, AppCommandError> {
-    let result =
-        custom_skills_commands::custom_import_from_agent(params.agent_type, params.ids)
-            .await
-            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result = custom_skills_commands::custom_import_from_agent(
+        params.agent_type,
+        params.ids,
+        params.overwrite_ids,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 

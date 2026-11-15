@@ -107,7 +107,70 @@ fn package_id(name: &str) -> String {
     format!("{}-{}", prefix.replace('.', "-"), &digest[..16])
 }
 
+// 只替换中央目录内容，不改动任何智能体的链接或启用配置。
+pub(super) fn replace_package(
+    src: &Path,
+    dst: &Path,
+    markdown: bool,
+) -> Result<(), CustomSkillsError> {
+    let store = dst.parent().ok_or_else(|| invalid("目标目录无效"))?;
+    fs::create_dir_all(store)?;
+    let exists = match fs::symlink_metadata(dst) {
+        Ok(meta) => {
+            if !meta.is_dir() || !fs::symlink_metadata(dst.join("SKILL.md"))?.is_file() {
+                return Err(invalid("只能覆盖普通自定义技能目录"));
+            }
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let source = fs::canonicalize(src)?;
+    if exists && source == fs::canonicalize(dst)? {
+        return Ok(());
+    }
+    if fs::canonicalize(store)?.starts_with(&source) {
+        return Err(invalid("技能源目录不能包含技能存储目录"));
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".skill-import-")
+        .tempdir_in(store)?;
+    let package = staging.path().join("package");
+    if markdown {
+        copy_markdown_as_skill(src, &package)?;
+    } else {
+        copy_package(src, &package)?;
+    }
+    if !fs::symlink_metadata(package.join("SKILL.md"))?.is_file() {
+        return Err(invalid("新技能包缺少普通 SKILL.md 文件"));
+    }
+    let backup = staging.path().join("previous");
+    if exists {
+        fs::rename(dst, &backup)?;
+    }
+    if let Err(error) = fs::rename(&package, dst) {
+        if exists {
+            if let Err(rollback) = fs::rename(&backup, dst) {
+                let recovery = staging.keep();
+                tracing::error!(?recovery, %rollback, "技能覆盖回滚失败，保留恢复目录");
+                return Err(invalid("技能覆盖及回滚失败，旧内容已保留在恢复目录"));
+            }
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn import_package(src: &Path, store: &Path) -> CustomImportResult {
+    import_package_confirmed(src, store, &[])
+}
+
+fn import_package_confirmed(
+    src: &Path,
+    store: &Path,
+    overwrite_ids: &[String],
+) -> CustomImportResult {
     let name = match validated_name(&src.join("SKILL.md")) {
         Ok(name) => name,
         Err(error) => return failed(src, error),
@@ -125,21 +188,13 @@ fn import_package(src: &Path, store: &Path) -> CustomImportResult {
         return result;
     }
     let dst = store.join(&id);
-    if fs::symlink_metadata(&dst).is_ok() {
+    if fs::symlink_metadata(&dst).is_ok() && !overwrite_ids.contains(&id) {
         result.skipped = true;
         return result;
     }
     let copied = (|| {
         ensure_custom_id(&id)?;
-        fs::create_dir_all(store)?;
-        if fs::canonicalize(store)?.starts_with(fs::canonicalize(src)?) {
-            return Err(invalid("技能源目录不能包含技能存储目录"));
-        }
-        let staging = tempfile::Builder::new()
-            .prefix(".skill-import-")
-            .tempdir_in(store)?;
-        copy_package(src, &staging.path().join("package"))?;
-        fs::rename(staging.path().join("package"), &dst)?;
+        replace_package(src, &dst, false)?;
         Ok::<_, CustomSkillsError>(())
     })();
     match copied {
@@ -149,7 +204,16 @@ fn import_package(src: &Path, store: &Path) -> CustomImportResult {
     result
 }
 
+#[cfg(test)]
 fn scan_import(root: &Path, store: &Path) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
+    scan_import_confirmed(root, store, &[])
+}
+
+fn scan_import_confirmed(
+    root: &Path,
+    store: &Path,
+    overwrite_ids: &[String],
+) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
     if !fs::symlink_metadata(root)?.is_dir() {
         return Err(invalid("请选择普通目录，不能使用符号链接"));
     }
@@ -157,7 +221,7 @@ fn scan_import(root: &Path, store: &Path) -> Result<Vec<CustomImportResult>, Cus
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
         if fs::symlink_metadata(dir.join("SKILL.md")).is_ok() {
-            results.push(import_package(&dir, store));
+            results.push(import_package_confirmed(&dir, store, overwrite_ids));
         }
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -190,11 +254,16 @@ fn scan_import(root: &Path, store: &Path) -> Result<Vec<CustomImportResult>, Cus
 
 pub(super) async fn import_directory(
     source_path: String,
+    overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
     let guard = mutation_lock().lock().await;
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
-        scan_import(Path::new(source_path.trim()), &central_experts_dir())
+        scan_import_confirmed(
+            Path::new(source_path.trim()),
+            &central_experts_dir(),
+            &overwrite_ids.unwrap_or_default(),
+        )
     })
     .await
     .map_err(|_| invalid("技能目录导入任务失败"))?
@@ -459,6 +528,7 @@ fn validate_copy_budget(root: &Path) -> Result<(), CustomSkillsError> {
 
 pub(super) async fn import_remote(
     url: String,
+    overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
     let source = remote_source(&url)?;
     let temp = tempfile::Builder::new()
@@ -469,7 +539,11 @@ pub(super) async fn import_remote(
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let _temp = prepared.0;
-        scan_import(&prepared.1, &central_experts_dir())
+        scan_import_confirmed(
+            &prepared.1,
+            &central_experts_dir(),
+            &overwrite_ids.unwrap_or_default(),
+        )
     })
     .await
     .map_err(|_| invalid("远程技能导入任务失败"))?
@@ -510,6 +584,54 @@ async fn prepare_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confirmed_overwrite_replaces_entire_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("source");
+        let store = temp.path().join("store");
+        package(&src, "replacement");
+        assert!(import_package(&src, &store).ok);
+        fs::write(store.join("replacement/obsolete"), "old").unwrap();
+        fs::write(src.join("new"), "new").unwrap();
+        assert!(import_package(&src, &store).skipped);
+        assert!(store.join("replacement/obsolete").exists());
+        assert!(import_package_confirmed(&src, &store, &["other".into()]).skipped);
+        assert!(import_package_confirmed(&src, &store, &["replacement".into()]).ok);
+        assert!(!store.join("replacement/obsolete").exists());
+        assert!(store.join("replacement/new").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_preserves_links_and_rejects_foreign_targets() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        let src = temp.path().join("source");
+        package(&src, "replacement");
+        assert!(import_package(&src, &store).ok);
+        let dst = store.join("replacement");
+        let enabled = temp.path().join("enabled");
+        let disabled = temp.path().join("disabled");
+        symlink(&dst, &enabled).unwrap();
+        let original = fs::read_link(&enabled).unwrap();
+        fs::write(src.join("new"), "new").unwrap();
+        assert!(import_package_confirmed(&src, &store, &["replacement".into()]).ok);
+        assert_eq!(fs::read_link(&enabled).unwrap(), original);
+        assert!(enabled.join("new").is_file());
+        assert!(!disabled.exists());
+        assert!(replace_package(&enabled, &dst, false).is_ok());
+        assert!(dst.join("new").is_file());
+        let foreign = store.join("foreign");
+        symlink(&src, &foreign).unwrap();
+        assert!(replace_package(&src, &foreign, false).is_err());
+        assert!(src.join("new").is_file());
+        assert!(replace_package(&temp.path().join("missing"), &dst, false).is_err());
+        assert!(dst.join("new").is_file());
+        fs::create_dir(store.join("not-skill")).unwrap();
+        assert!(replace_package(&src, &store.join("not-skill"), false).is_err());
+        assert!(import_package_confirmed(&src, &store, &["../replacement".into()]).skipped);
+    }
     use std::net::TcpListener;
     use std::thread;
 

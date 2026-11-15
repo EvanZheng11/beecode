@@ -49,15 +49,17 @@ mod skills_import;
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn custom_import_directory(
     source_path: String,
+    overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
-    skills_import::import_directory(source_path).await
+    skills_import::import_directory(source_path, overwrite_ids).await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn custom_import_remote(
     url: String,
+    overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
-    skills_import::import_remote(url).await
+    skills_import::import_remote(url, overwrite_ids).await
 }
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -610,33 +612,40 @@ pub async fn custom_import_skill(
 /// Import one or more of an agent's **own** (global-scope) skills into the shared
 /// central store, so they can be re-enabled for any agent from the matrix. Locks
 /// once; each id is reported independently (partial success is normal for a
-/// multi-select). A skill that is already in the store — e.g. a linked
-/// expert/science/office skill, or one imported earlier — is reported as
-/// `skipped`, not an error, so re-running is idempotent.
+/// multi-select). 已存在的技能默认返回 skipped；只有明确授权的自定义 ID 才覆盖。
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn custom_import_from_agent(
     agent_type: AgentType,
     ids: Vec<String>,
+    overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
     let _guard = mutation_lock().lock().await;
-    let spec = skill_storage_spec(agent_type)
-        .ok_or(CustomSkillsError::UnsupportedAgent(agent_type))?;
+    let spec =
+        skill_storage_spec(agent_type).ok_or(CustomSkillsError::UnsupportedAgent(agent_type))?;
+    let overwrite_ids = overwrite_ids.unwrap_or_default();
     Ok(ids
         .iter()
-        .map(|id| import_one_from_agent_locked(&spec, id))
+        .map(|id| import_one_from_agent_locked(&spec, id, &overwrite_ids))
         .collect())
 }
 
 /// Copy one of an agent's global skills into the central store. Never bubbles —
 /// returns a per-skill result so the batch keeps going. **Assumes the mutation
 /// lock is held.**
-fn import_one_from_agent_locked(spec: &SkillStorageSpec, raw_id: &str) -> CustomImportResult {
+fn import_one_from_agent_locked(
+    spec: &SkillStorageSpec,
+    raw_id: &str,
+    overwrite_ids: &[String],
+) -> CustomImportResult {
     // Resolve the source on disk (a `<id>/` skill dir or a `<id>.md` file) from
     // the agent's GLOBAL skill dirs. Project-scoped skills are workspace-specific
     // and deliberately excluded from the shared store.
-    let Some(item) =
-        locate_existing_skill_across_dirs(&spec.global_dirs, spec.kind, raw_id, AgentSkillScope::Global)
-    else {
+    let Some(item) = locate_existing_skill_across_dirs(
+        &spec.global_dirs,
+        spec.kind,
+        raw_id,
+        AgentSkillScope::Global,
+    ) else {
         return CustomImportResult {
             id: raw_id.to_string(),
             name: raw_id.to_string(),
@@ -650,11 +659,9 @@ fn import_one_from_agent_locked(spec: &SkillStorageSpec, raw_id: &str) -> Custom
     let id = item.id.clone();
     let name = item.name.clone();
 
-    // Already in the shared store? Covers a linked expert/science/office skill
-    // (its central dir exists) and a previously-imported custom one. Idempotent
-    // skip — not an error.
+    // 未确认覆盖时仅报告冲突，确认后仍需校验自定义 ID 和目标目录。
     let dst = custom_central_path(&id);
-    if dst.exists() || path_is_symlink(&dst) {
+    if (dst.exists() || path_is_symlink(&dst)) && !overwrite_ids.contains(&id) {
         return CustomImportResult {
             id,
             name,
@@ -677,10 +684,11 @@ fn import_one_from_agent_locked(spec: &SkillStorageSpec, raw_id: &str) -> Custom
     }
 
     let src = PathBuf::from(&item.path);
-    let copied = match item.layout {
-        AgentSkillLayout::SkillDirectory => copy_dir_recursive(&src, &dst),
-        AgentSkillLayout::MarkdownFile => copy_markdown_as_skill(&src, &dst),
-    };
+    let copied = skills_import::replace_package(
+        &src,
+        &dst,
+        matches!(item.layout, AgentSkillLayout::MarkdownFile),
+    );
     match copied {
         Ok(()) => CustomImportResult {
             id,
@@ -689,20 +697,13 @@ fn import_one_from_agent_locked(spec: &SkillStorageSpec, raw_id: &str) -> Custom
             skipped: false,
             error: None,
         },
-        Err(err) => {
-            // Roll back a partial copy so a retry sees a clean slate (guarded:
-            // under the store and not a link).
-            if dst.exists() && !path_is_symlink(&dst) && dst.starts_with(central_experts_dir()) {
-                let _ = fs::remove_dir_all(&dst);
-            }
-            CustomImportResult {
-                id,
-                name,
-                ok: false,
-                skipped: false,
-                error: Some(err.to_string()),
-            }
-        }
+        Err(err) => CustomImportResult {
+            id,
+            name,
+            ok: false,
+            skipped: false,
+            error: Some(err.to_string()),
+        },
     }
 }
 
@@ -1037,6 +1038,7 @@ mod tests {
                 "zzz-codeg-custom-import-absent-1".into(),
                 "zzz-codeg-custom-import-absent-2".into(),
             ],
+            None,
         )
         .await
         .expect("batch returns Ok");
@@ -1083,7 +1085,9 @@ mod tests {
     #[test]
     fn validate_skill_id_rejects_traversal_and_separators() {
         // The load-bearing sanitizer every authoring path funnels through.
-        for bad in ["", "  ", "..", "../x", "a/b", "a\\b", ".hidden", "a:b", "a b"] {
+        for bad in [
+            "", "  ", "..", "../x", "a/b", "a\\b", ".hidden", "a:b", "a b",
+        ] {
             assert!(validate_skill_id(bad).is_err(), "must reject {bad:?}");
         }
         for good in ["my-skill", "a.b_c-1", "Skill123"] {
@@ -1169,11 +1173,34 @@ mod tests {
                 )
                 .unwrap();
                 fs::write(source.join("references/proof.txt"), "asset").unwrap();
-                let imported =
-                    custom_import_from_agent(AgentType::ZCode, vec!["zcode-import-fixture".into()])
+                let imported = custom_import_from_agent(
+                    AgentType::ZCode,
+                    vec!["zcode-import-fixture".into()],
+                    None,
+                )
+                .await
+                .unwrap();
+                assert!(imported[0].ok, "{imported:?}");
+                let imported_id = "zcode-import-fixture";
+                let central = custom_central_path(imported_id);
+                fs::write(central.join("obsolete"), "old").unwrap();
+                fs::write(source.join("new"), "new").unwrap();
+                let skipped =
+                    custom_import_from_agent(AgentType::ZCode, vec![imported_id.into()], None)
                         .await
                         .unwrap();
-                assert!(imported[0].ok, "{imported:?}");
+                assert!(skipped[0].skipped);
+                assert!(central.join("obsolete").exists());
+                let replaced = custom_import_from_agent(
+                    AgentType::ZCode,
+                    vec![imported_id.into()],
+                    Some(vec![imported_id.into()]),
+                )
+                .await
+                .unwrap();
+                assert!(replaced[0].ok, "{replaced:?}");
+                assert!(!central.join("obsolete").exists());
+                assert!(central.join("new").exists());
                 assert_eq!(
                     fs::read_to_string(
                         central_experts_dir().join("zcode-import-fixture/references/proof.txt")
@@ -1369,12 +1396,12 @@ mod tests {
             )
             .await
             .expect("batch returns Ok");
-            assert!(
-                del.iter().all(|r| !r.ok && r.error.is_some()),
-                "{del:?}"
-            );
+            assert!(del.iter().all(|r| !r.ok && r.error.is_some()), "{del:?}");
 
-            assert!(sentinel.is_file(), "sentinel outside the store must survive");
+            assert!(
+                sentinel.is_file(),
+                "sentinel outside the store must survive"
+            );
             assert_eq!(fs::read_to_string(&sentinel).unwrap(), "keep me");
         })
         .await;
