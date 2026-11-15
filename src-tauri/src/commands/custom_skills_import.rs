@@ -113,11 +113,24 @@ pub(super) fn replace_package(
     dst: &Path,
     markdown: bool,
 ) -> Result<(), CustomSkillsError> {
+    replace_package_with_rename(src, dst, markdown, |from, to| fs::rename(from, to))
+}
+
+fn replace_package_with_rename(
+    src: &Path,
+    dst: &Path,
+    markdown: bool,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), CustomSkillsError> {
     let store = dst.parent().ok_or_else(|| invalid("目标目录无效"))?;
     fs::create_dir_all(store)?;
     let exists = match fs::symlink_metadata(dst) {
         Ok(meta) => {
-            if !meta.is_dir() || !fs::symlink_metadata(dst.join("SKILL.md"))?.is_file() {
+            // Windows junction 会被识别为目录，也必须按外部链接拒绝。
+            if read_link_target(dst).is_some()
+                || !meta.is_dir()
+                || !fs::symlink_metadata(dst.join("SKILL.md"))?.is_file()
+            {
                 return Err(invalid("只能覆盖普通自定义技能目录"));
             }
             true
@@ -146,11 +159,11 @@ pub(super) fn replace_package(
     }
     let backup = staging.path().join("previous");
     if exists {
-        fs::rename(dst, &backup)?;
+        rename(dst, &backup)?;
     }
-    if let Err(error) = fs::rename(&package, dst) {
+    if let Err(error) = rename(&package, dst) {
         if exists {
-            if let Err(rollback) = fs::rename(&backup, dst) {
+            if let Err(rollback) = rename(&backup, dst) {
                 let recovery = staging.keep();
                 tracing::error!(?recovery, %rollback, "技能覆盖回滚失败，保留恢复目录");
                 return Err(invalid("技能覆盖及回滚失败，旧内容已保留在恢复目录"));
@@ -584,6 +597,61 @@ async fn prepare_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_install_restores_previous_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("source");
+        let store = temp.path().join("store");
+        package(&src, "replacement");
+        assert!(import_package(&src, &store).ok);
+        let dst = store.join("replacement");
+        fs::write(dst.join("old-only"), "keep").unwrap();
+        fs::write(src.join("new-only"), "new").unwrap();
+        let mut calls = 0;
+        let result = replace_package_with_rename(&src, &dst, false, |from, to| {
+            calls += 1;
+            if calls == 2 {
+                return Err(io::Error::other("模拟安装重命名失败"));
+            }
+            fs::rename(from, to)
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 3);
+        assert_eq!(fs::read_to_string(dst.join("old-only")).unwrap(), "keep");
+        assert!(!dst.join("new-only").exists());
+    }
+
+    #[test]
+    fn failed_rollback_keeps_recovery_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("source");
+        let store = temp.path().join("store");
+        package(&src, "replacement");
+        assert!(import_package(&src, &store).ok);
+        let dst = store.join("replacement");
+        fs::write(dst.join("old-only"), "keep").unwrap();
+        let mut calls = 0;
+        let result = replace_package_with_rename(&src, &dst, false, |from, to| {
+            calls += 1;
+            if calls > 1 {
+                return Err(io::Error::other("模拟安装及回滚失败"));
+            }
+            fs::rename(from, to)
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 3);
+        assert!(!dst.exists());
+        let recovery = fs::read_dir(&store)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.join("previous/old-only").is_file())
+            .expect("回滚失败后保留旧内容的恢复目录");
+        assert_eq!(
+            fs::read_to_string(recovery.join("previous/old-only")).unwrap(),
+            "keep"
+        );
+    }
     #[test]
     fn confirmed_overwrite_replaces_entire_package() {
         let temp = tempfile::tempdir().unwrap();
@@ -599,6 +667,28 @@ mod tests {
         assert!(import_package_confirmed(&src, &store, &["replacement".into()]).ok);
         assert!(!store.join("replacement/obsolete").exists());
         assert!(store.join("replacement/new").is_file());
+    }
+
+    #[test]
+    fn confirmed_scan_does_not_replace_first_pass_successes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        let store = temp.path().join("store");
+        let first = root.join("a");
+        let conflict = root.join("b");
+        package(&first, "new-skill");
+        package(&conflict, "existing-skill");
+        assert!(import_package(&conflict, &store).ok);
+        let results = scan_import(&root, &store).unwrap();
+        assert!(results[0].ok);
+        assert!(results[1].skipped);
+        fs::write(first.join("unconfirmed"), "must not copy").unwrap();
+        fs::write(conflict.join("confirmed"), "copy").unwrap();
+        let results = scan_import_confirmed(&root, &store, &["existing-skill".into()]).unwrap();
+        assert!(results[0].skipped);
+        assert!(results[1].ok);
+        assert!(!store.join("new-skill/unconfirmed").exists());
+        assert!(store.join("existing-skill/confirmed").is_file());
     }
 
     #[cfg(unix)]
@@ -631,6 +721,21 @@ mod tests {
         fs::create_dir(store.join("not-skill")).unwrap();
         assert!(replace_package(&src, &store.join("not-skill"), false).is_err());
         assert!(import_package_confirmed(&src, &store, &["../replacement".into()]).skipped);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn overwrite_rejects_junction_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        let src = temp.path().join("source");
+        package(&src, "replacement");
+        fs::create_dir(&store).unwrap();
+        let target = store.join("replacement");
+        junction::create(&src, &target).unwrap();
+        assert!(replace_package(&src, &target, false).is_err());
+        assert!(src.join("SKILL.md").is_file());
+        assert!(read_link_target(&target).is_some());
     }
     use std::net::TcpListener;
     use std::thread;
