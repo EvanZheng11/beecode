@@ -65,6 +65,7 @@ pub mod stderr_tail;
 pub mod temp_reclaim;
 pub mod terminal_runtime;
 pub mod trae;
+pub(crate) mod turn_end_hold;
 pub mod turn_replace;
 pub mod types;
 pub mod work_task_tools;
