@@ -2647,7 +2647,13 @@ describe("SidebarConversationList — Recent section", () => {
       useAppWorkspaceStore.setState({
         folders,
         allFolders: folders,
-        conversations: Array.from({ length: TOTAL }, (_, i) => conv(i + 1, 1)),
+        // Chat rows, deliberately: these assertions count Recent's slice as
+        // "every card minus the canonical ones", which only holds when the
+        // canonical section is unpaged. Folders have their own page size (and
+        // their own paging tests below), Chat does not.
+        conversations: Array.from({ length: TOTAL }, (_, i) =>
+          conv(i + 1, 99, { kind: "chat" })
+        ),
       })
     })
 
@@ -2675,7 +2681,7 @@ describe("SidebarConversationList — Recent section", () => {
       // 3 pages' worth, so one "show more" click still leaves a remainder and
       // the footer keeps both affordances at once.
       const conversations = Array.from({ length: PAGE * 3 }, (_, i) =>
-        conv(i + 1, 1)
+        conv(i + 1, 99, { kind: "chat" })
       )
       useAppWorkspaceStore.setState({ conversations })
       render(recentTree(true))
@@ -2708,7 +2714,7 @@ describe("SidebarConversationList — Recent section", () => {
       // the reset-only row (whose button survives as "show more").
       useAppWorkspaceStore.setState({
         conversations: Array.from({ length: PAGE * 3 }, (_, i) =>
-          conv(i + 1, 1)
+          conv(i + 1, 99, { kind: "chat" })
         ),
       })
       render(recentTree(true))
@@ -2844,6 +2850,171 @@ describe("SidebarConversationList — Recent section", () => {
       expect(cardsFor(11)).toBe(2)
       expect(cardsFor(12)).toBe(2)
     })
+  })
+})
+
+describe("SidebarConversationList — folder paging", () => {
+  // 一个文件夹最多先显示 5 条，其余折叠到该文件夹自己的“查看更多”行——
+  // 与最近段落同一套手势，但每个文件夹独立计数、独立展开。
+  const PAGE = 5
+  const showMoreLabel = (count: number) =>
+    enMessages.Folder.sidebar.showMoreRecent.replace("{count}", String(count))
+  const resetLabel = enMessages.Folder.sidebar.resetRecentLimit.replace(
+    "{count}",
+    String(PAGE)
+  )
+  // 只看某一个文件夹的会话行，不受其它文件夹干扰。
+  const rowsIn = (folderId: number) => {
+    const ids = new Set(
+      useAppWorkspaceStore
+        .getState()
+        .conversations.filter((c) => c.folder_id === folderId)
+        .map((c) => c.id)
+    )
+    return Array.from(
+      document.querySelectorAll("[data-conversation-id]")
+    ).filter((el) => ids.has(Number(el.getAttribute("data-conversation-id"))))
+  }
+  const buttonsWithText = (text: string) =>
+    Array.from(document.querySelectorAll("button")).filter((b) =>
+      b.textContent?.includes(text)
+    )
+
+  beforeEach(() => {
+    localStorage.clear()
+    probes.card = 0
+    store.activeTabId = null
+    store.tabSpec = []
+  })
+
+  function seed(counts: Record<number, number>) {
+    const ids = Object.keys(counts).map(Number)
+    const folders = ids.map((id) => folder(id, `Repo ${id}`))
+    const conversations: DbConversationSummary[] = []
+    let next = 1
+    for (const id of ids) {
+      for (let i = 0; i < counts[id]; i++) {
+        conversations.push(conv(next++, id))
+      }
+    }
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations,
+    })
+  }
+
+  it("shows every row and no footer when a folder has five", () => {
+    seed({ 1: PAGE })
+    render(tree())
+    expect(rowsIn(1)).toHaveLength(PAGE)
+    // 没有任何“显示更多（n）”页脚，也没有收起图标。
+    expect(
+      Array.from(document.querySelectorAll("button")).filter((b) =>
+        b.textContent?.includes("Show more")
+      )
+    ).toHaveLength(0)
+    expect(document.querySelector(`[aria-label="${resetLabel}"]`)).toBeNull()
+  })
+
+  it("shows exactly five and a footer when a folder has more", () => {
+    seed({ 1: 7 })
+    render(tree())
+    expect(rowsIn(1)).toHaveLength(PAGE)
+    expect(buttonsWithText(showMoreLabel(2))).toHaveLength(1)
+  })
+
+  it("reveals the rest on click and folds back from the footer", () => {
+    seed({ 1: 7 })
+    render(tree())
+    act(() => {
+      fireEvent.click(buttonsWithText(showMoreLabel(2))[0])
+    })
+    expect(rowsIn(1)).toHaveLength(7)
+    // 全部展开后页脚保留为纯收起行（否则最长的列表反而没有退路）。
+    expect(buttonsWithText(showMoreLabel(0))).toHaveLength(0)
+    act(() => {
+      fireEvent.click(buttonsWithText(resetLabel)[0])
+    })
+    expect(rowsIn(1)).toHaveLength(PAGE)
+  })
+
+  it("pages two folders independently", () => {
+    seed({ 1: 7, 2: 6 })
+    render(tree())
+    expect(rowsIn(1)).toHaveLength(PAGE)
+    expect(rowsIn(2)).toHaveLength(PAGE)
+    // 两个文件夹各自一行“查看更多”，剩余条数分别计算。
+    expect(buttonsWithText(showMoreLabel(2))).toHaveLength(1)
+    expect(buttonsWithText(showMoreLabel(1))).toHaveLength(1)
+
+    act(() => {
+      fireEvent.click(buttonsWithText(showMoreLabel(2))[0])
+    })
+    expect(rowsIn(1)).toHaveLength(7)
+    expect(rowsIn(2)).toHaveLength(PAGE)
+  })
+
+  it("counts the filter's survivors, not the folder's total", () => {
+    // 8 条里 3 条已完成；`showCompleted` 关掉后只剩 5 条 → 不需要分页。
+    const conversations = Array.from({ length: 8 }, (_, i) =>
+      conv(i + 1, 1, i < 3 ? { status: "completed" } : {})
+    )
+    const folders = [folder(1, "Repo")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations,
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted={false} sortMode="created" />
+      </NextIntlClientProvider>
+    )
+    expect(rowsIn(1)).toHaveLength(PAGE)
+    expect(buttonsWithText(showMoreLabel(3))).toHaveLength(0)
+  })
+
+  it("reveals a paged-away conversation when the sidebar scrolls to it", () => {
+    // 会话 7 被分页藏在页脚后面；选中它必须能把它带回可视区，而不是定位失败。
+    // 列表按创建时间倒序，所以把 conv-7 做成最老的一条（排在最后）。
+    const now = Date.now()
+    const conversations = Array.from({ length: 7 }, (_, i) =>
+      conv(i + 1, 1, {
+        created_at: new Date(now - (i + 1) * MINUTE).toISOString(),
+      })
+    )
+    const folders = [folder(1, "Repo")]
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations,
+    })
+    store.activeTabId = "tab-7"
+    store.tabSpec = [
+      {
+        id: "tab-7",
+        conversationId: 7,
+        agentType: "claude_code",
+        folderId: 1,
+        title: "conv-7",
+        isPinned: false,
+      },
+    ]
+    const ref = createRef<SidebarConversationListHandle>()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList showCompleted sortMode="created" ref={ref} />
+      </NextIntlClientProvider>
+    )
+    expect(rowsIn(1)).toHaveLength(PAGE)
+    expect(virtuaCtl.scrollToIndex).not.toHaveBeenCalled()
+
+    act(() => {
+      ref.current?.scrollToActive()
+    })
+    expect(rowsIn(1)).toHaveLength(7)
+    expect(virtuaCtl.scrollToIndex).toHaveBeenCalled()
   })
 })
 

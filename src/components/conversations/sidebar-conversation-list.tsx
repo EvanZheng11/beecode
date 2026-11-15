@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Ref,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -134,6 +135,7 @@ import {
   folderHeaderFlatIndices,
   sectionHeaderFlatIndices,
   formatRelative,
+  FOLDER_PAGE_SIZE,
   groupByFolderWithReuse,
   headerIndexForFolder,
   mergeChildrenById,
@@ -1148,6 +1150,29 @@ export function SidebarConversationList({
     () => setRecentLimit((n) => n + RECENT_PAGE_SIZE),
     []
   )
+  // 每个文件夹当前显示到第几条（键缺失 = 默认 {@link FOLDER_PAGE_SIZE}）。
+  // 与 `recentLimit` 一样只是阅读手势：会话内有效、不持久化，文件夹之间独立。
+  const [folderLimits, setFolderLimits] = useState<Record<number, number>>({})
+  const revealMoreFolder = useCallback(
+    (folderId: number) =>
+      setFolderLimits((prev) => ({
+        ...prev,
+        [folderId]: (prev[folderId] ?? FOLDER_PAGE_SIZE) + RECENT_PAGE_SIZE,
+      })),
+    []
+  )
+  // 每个文件夹"查看更多"行的按钮，收起时用来接管焦点（理由同
+  // `recentMoreButtonRef`：右缘收起图标点完就卸载）。
+  const folderMoreButtonEls = useRef(new Map<number, HTMLButtonElement>())
+  const resetFolderLimit = useCallback((folderId: number) => {
+    folderMoreButtonEls.current.get(folderId)?.focus()
+    setFolderLimits((prev) => {
+      if (!(folderId in prev)) return prev
+      const next = { ...prev }
+      delete next[folderId]
+      return next
+    })
+  }, [])
   // The Recent footer's own button, so the reset can hand focus to it.
   const recentMoreButtonRef = useRef<HTMLButtonElement>(null)
   // The way back out. `recentLimit` only ever grew before, so a list expanded a
@@ -1755,6 +1780,7 @@ export function SidebarConversationList({
         recentExpanded,
         showRecent,
         recentLimit,
+        folderLimits,
         sectionOrder,
         conversationExpanded,
         childrenByParent,
@@ -1783,6 +1809,7 @@ export function SidebarConversationList({
       recentExpanded,
       showRecent,
       recentLimit,
+      folderLimits,
       sectionOrder,
       conversationExpanded,
       childrenByParent,
@@ -1984,6 +2011,24 @@ export function SidebarConversationList({
           return
         }
       }
+      // 文件夹分页会把目标会话藏在"查看更多"后面（行不在扁平模型里）。先把
+      // 它所在文件夹展开到覆盖这一条，再走下一轮 scroll。
+      if (!conv.pinned_at && conv.kind !== "chat") {
+        const groupId =
+          displayChildToParent.get(conv.folder_id) ?? conv.folder_id
+        const bucket = byFolder.get(groupId)
+        const limit = folderLimits[groupId] ?? FOLDER_PAGE_SIZE
+        if (bucket && bucket.length > limit) {
+          const at = bucket.findIndex(
+            (c) => c.id === targetId && c.agent_type === targetAgent
+          )
+          if (at >= limit) {
+            setFolderLimits((prev) => ({ ...prev, [groupId]: at + 1 }))
+            pendingScrollRef.current = true
+            return
+          }
+        }
+      }
       // Off-screen virtualized rows are not in the DOM, so resolve the flat row
       // index and let virtua scroll to it.
       const index = flatIndexOfConversation(
@@ -2005,6 +2050,8 @@ export function SidebarConversationList({
   }, [
     selectedConversation,
     conversations,
+    byFolder,
+    folderLimits,
     folderExpanded,
     displayChildToParent,
     showWorktrees,
@@ -3342,14 +3389,15 @@ export function SidebarConversationList({
         </div>
       )
     }
-    if (row.kind === "recent-more") {
-      // Footer of the paged Recent section — a row, not a hint: each click
-      // reveals another page. Its geometry is the conversation card's, so the
-      // section reads as one column — the chevron sits ON the rail axis exactly
-      // where a card's agent icon does (same 0.75rem glyph in the same 0.875rem
-      // box, centred on the var), and the label starts at the card's title
-      // inset (`axis + 0.875rem`). Same row height and full rounding too, so
-      // its hover pill is the one the rows above it use.
+    if (row.kind === "recent-more" || row.kind === "folder-more") {
+      // Footer of a paged list (the Recent section, or one folder's own sessions)
+      // — a row, not a hint: each click reveals another page. Its geometry is
+      // the conversation card's, so the list reads as one column — the chevron
+      // sits ON the rail axis exactly where a card's agent icon does (same
+      // 0.75rem glyph in the same 0.875rem box, centred on the var), and the
+      // label starts at the card's title inset (`axis + 0.875rem`). Same row
+      // height and full rounding too, so its hover pill is the one the rows
+      // above it use.
       //
       // Two directions live here. While pages remain, the row is "show more"
       // and the reset hides at the right edge as an icon, on the same
@@ -3358,13 +3406,43 @@ export function SidebarConversationList({
       // reset alone, and it takes over the row: nothing is left to expand, so a
       // hover-only affordance would be the section's only exit hiding itself.
       const showMore = row.remaining > 0
-      const resetLabel = t("resetRecentLimit", { count: RECENT_PAGE_SIZE })
+      const folderRow = row.kind === "folder-more" ? row : null
+      // 收起目标就是该列表的第一页：最近是 10 条，文件夹是 5 条。
+      const resetLabel = t("resetRecentLimit", {
+        count: folderRow ? FOLDER_PAGE_SIZE : RECENT_PAGE_SIZE,
+      })
       return (
-        <div className="group/recent-more relative h-[2rem]">
+        <div
+          className="group/more relative h-[2rem]"
+          // 文件夹分页行跟随其会话行的缩进（worktree / 分组 / 子会话层级）。
+          style={
+            folderRow && folderRow.depth > 0
+              ? ({
+                  "--conv-rail-axis": `calc(0.875rem + ${folderRow.depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                } as CSSProperties)
+              : undefined
+          }
+        >
           <button
-            ref={recentMoreButtonRef}
+            ref={
+              folderRow
+                ? (el) => {
+                    if (el)
+                      folderMoreButtonEls.current.set(folderRow.folderId, el)
+                    else folderMoreButtonEls.current.delete(folderRow.folderId)
+                  }
+                : recentMoreButtonRef
+            }
             type="button"
-            onClick={showMore ? revealMoreRecent : resetRecentLimit}
+            onClick={
+              folderRow
+                ? showMore
+                  ? () => revealMoreFolder(folderRow.folderId)
+                  : () => resetFolderLimit(folderRow.folderId)
+                : showMore
+                  ? revealMoreRecent
+                  : resetRecentLimit
+            }
             className={cn(
               // Lit from the ROW (`group-hover`), not from this button's own
               // `:hover`. The reset icon is a sibling stacked on top, so with a
@@ -3372,7 +3450,7 @@ export function SidebarConversationList({
               // onto it — the row read as un-hovered while the cursor was still
               // inside it. Same reason the section headers put their group on
               // the row container rather than the toggle button.
-              "relative flex h-[1.9375rem] w-full items-center rounded-md text-left text-xs text-muted-foreground/80 outline-none transition-colors duration-[120ms] group-hover/recent-more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/recent-more:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "relative flex h-[1.9375rem] w-full items-center rounded-md text-left text-xs text-muted-foreground/80 outline-none transition-colors duration-[120ms] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset group-hover/more:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)] group-hover/more:text-sidebar-foreground",
               // Reserved unconditionally (not just while hovered) so revealing
               // the reset icon never reflows the label under the cursor.
               showMore && row.canReset ? "pr-[1.75rem]" : "pr-[0.25rem]"
@@ -3413,10 +3491,14 @@ export function SidebarConversationList({
             // the sidebar lands on the same axis and reads as one family.
             <button
               type="button"
-              onClick={resetRecentLimit}
+              onClick={
+                folderRow
+                  ? () => resetFolderLimit(folderRow.folderId)
+                  : resetRecentLimit
+              }
               title={resetLabel}
               aria-label={resetLabel}
-              className="absolute top-1/2 right-[0.375rem] flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-end rounded-[0.375rem] text-muted-foreground/90 opacity-0 outline-none transition-[color,opacity] duration-150 group-hover/recent-more:opacity-100 hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [@media(hover:none)]:opacity-100"
+              className="absolute top-1/2 right-[0.375rem] flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-end rounded-[0.375rem] text-muted-foreground/90 opacity-0 outline-none transition-[color,opacity] duration-150 group-hover/more:opacity-100 hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [@media(hover:none)]:opacity-100"
             >
               <ChevronsUp className="h-[0.875rem] w-[0.875rem]" />
             </button>
@@ -3494,6 +3576,7 @@ export function SidebarConversationList({
     if (row.kind === "folders-empty") return "folders-empty"
     if (row.kind === "recent-empty") return "recent-empty"
     if (row.kind === "recent-more") return "recent-more"
+    if (row.kind === "folder-more") return `foldermore-${row.folderId}`
     const prefix = row.recent ? "recent-" : ""
     if (row.kind === "subsession-loading") {
       return `${prefix}subloading-${row.parentId}`
