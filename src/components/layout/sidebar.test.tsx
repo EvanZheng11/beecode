@@ -8,6 +8,7 @@ import { Sidebar } from "./sidebar"
 // Type-only (erased at runtime, so it does not defeat the mock below): pins the
 // stub's imperative handle to the real component's contract.
 import type { SidebarConversationListHandle } from "@/components/conversations/sidebar-conversation-list"
+import { HarnessViewProvider } from "@/contexts/harness-view-context"
 import enMessages from "@/i18n/messages/en.json"
 import {
   resetFolderTabsStore,
@@ -140,6 +141,21 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
   }),
 }))
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }))
+vi.mock("@/hooks/use-remote-workspace-connections", () => ({
+  useRemoteWorkspaceConnections: () => ({
+    desktop: mockState.remoteDesktop,
+    connections: mockState.remoteConnections,
+    refresh: spies.refreshRemote,
+    open: spies.openRemote,
+  }),
+}))
+vi.mock("@/lib/browser/use-browser-capabilities", () => ({
+  useBrowserCapabilities: () => ({ available: mockState.browserAvailable }),
+}))
+vi.mock("./remote-workspace-manage-dialog", () => ({
+  RemoteWorkspaceManageDialog: ({ open }: { open: boolean }) =>
+    open ? <div>REMOTE-MANAGE-DIALOG</div> : null,
+}))
 vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
@@ -147,7 +163,9 @@ vi.mock("@/hooks/use-appearance", () => ({
 function renderSidebar() {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <Sidebar />
+      <HarnessViewProvider>
+        <Sidebar />
+      </HarnessViewProvider>
     </NextIntlClientProvider>
   )
 }

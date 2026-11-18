@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react"
 import {
+  DraftingCompass,
   Crosshair,
   Eye,
   Globe,
@@ -34,6 +35,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
@@ -161,12 +163,13 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
 // Icon per optional nav row. The visibility checkboxes in the view-options menu
 // carry the same glyph as the row they switch, so that group reads as a mirror
-// of the nav block rather than three bare labels.
+// of the nav block rather than a column of bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
+  harness: DraftingCompass,
 }
 
 /**
@@ -260,6 +263,7 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const workspaceActions = useOptionalWorkspaceActions()
   const browserCapabilities = useBrowserCapabilities()
@@ -723,6 +727,21 @@ export function Sidebar() {
                 }}
               />
             )}
+            {isNavItemVisible(navItems, "harness") && (
+              <SidebarRailButton
+                icon={DraftingCompass}
+                label={t("harness")}
+                active={routeId === "harness"}
+                onClick={() => {
+                  // Opens on the section the page was last on: which one that is
+                  // lives in HarnessViewProvider, not in the route.
+                  setRoute("harness")
+                }}
+                badge={harnessUpdates > 0 ? harnessUpdates : undefined}
+                badgeClassName={RAIL_BADGE_ATTENTION_CLASS}
+              />
+            )}
+
             {remoteDesktop && (
               <>
                 <div

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { SUGGESTED_SERVERS } from "./mcp-settings"
+import { SUGGESTED_SERVERS } from "./suggested-servers"
 
 /**
  * The one thing about a suggested server that is worth a test.

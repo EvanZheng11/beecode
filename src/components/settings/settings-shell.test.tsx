@@ -29,6 +29,18 @@ describe("settingsNavItemsFor", () => {
     expect(after("browser")).toBe("computer_use")
   })
 
+  it("keeps MCP, Skills and Skill packs in Settings alongside the Harness page", () => {
+    // BeeCode keeps its own Settings pages for these; the workspace's Harness
+    // page is an additional surface, not a replacement, so every address that
+    // led here before still leads somewhere.
+    for (const env of ["tauri", "web"] as const) {
+      const hrefs = settingsNavItemsFor(env).map((item) => item.href)
+      for (const kept of ["/settings/mcp", "/settings/skills", "/settings/skill-packs"]) {
+        expect(hrefs).toContain(kept)
+      }
+    }
+  })
+
   it("keeps every page on the desktop", () => {
     const labels = settingsNavItemsFor("tauri").map((item) => item.labelKey)
     expect(labels).toContain("web_service")

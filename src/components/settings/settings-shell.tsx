@@ -9,8 +9,8 @@ import {
 } from "react"
 import {
   Activity,
-  Bot,
   BookOpenText,
+  Bot,
   Boxes,
   Bubbles,
   Compass,
