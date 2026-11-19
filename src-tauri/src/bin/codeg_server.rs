@@ -887,6 +887,8 @@ async fn async_main(
     state.terminal_manager.kill_all();
     codeg_lib::office_watch::stop_all_office_watches();
     state.connection_manager.disconnect_all().await;
+    #[cfg(target_os = "linux")]
+    codeg_lib::process::owned_jobs::stop_remaining();
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
