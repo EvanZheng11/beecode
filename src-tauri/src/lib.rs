@@ -179,6 +179,7 @@ mod tauri_app {
         // Unpublished first: from here on no CLI may pick this process.
         if let Some(access) = app.try_state::<std::sync::Arc<crate::cli_run::CliAccess>>() {
             access.unpublish_now();
+            tauri::async_runtime::block_on(access.stop());
         }
         if let Some(ws) = app.try_state::<web::WebServerState>() {
             tauri::async_runtime::block_on(web::do_stop_web_server(&ws));
@@ -190,6 +191,8 @@ mod tauri_app {
         if let Some(cm) = app.try_state::<ConnectionManager>() {
             tauri::async_runtime::block_on(cm.disconnect_all());
         }
+        #[cfg(target_os = "linux")]
+        process::owned_jobs::stop_remaining();
     }
 
     /// `--open` on the desktop: the conversation opens in THIS process, by the
@@ -780,6 +783,23 @@ mod tauri_app {
                 // do it races the event loop and aborts the process with
                 // `0xC0000374`. See `web::event_bridge::EventEmitter`.
                 web::event_bridge::install_tauri_app_handle(app.handle());
+
+                // 从终端或服务管理器退出时也走 Tauri 的正常退出路径。
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let (mut term, mut interrupt) = tauri::async_runtime::block_on(async {
+                        Ok::<_, std::io::Error>((
+                            signal(SignalKind::terminate())?,
+                            signal(SignalKind::interrupt())?,
+                        ))
+                    })?;
+                    let handle = web::event_bridge::retained_app_handle(app.handle());
+                    tauri::async_runtime::spawn(async move {
+                        tokio::select! { _ = term.recv() => {}, _ = interrupt.recv() => {} }
+                        handle.exit(0);
+                    });
+                }
 
                 let app_data_dir = app.path().app_data_dir()?;
 

@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+pub mod owned_jobs;
+
 #[cfg(windows)]
 use std::path::Path;
 
@@ -27,6 +30,17 @@ pub fn configure_std_command(command: &mut Command) -> &mut Command {
     crate::appimage_env::restore(command);
     set_utf8_env(command);
     command
+}
+
+/// 在释放父进程句柄前结束整棵树；只杀 shell 会让后台服务被重新托管。
+pub(crate) fn force_kill_tree(pid: u32) {
+    let config = kill_tree::Config {
+        signal: "SIGKILL".into(),
+        ..Default::default()
+    };
+    if let Err(err) = kill_tree::blocking::kill_tree_with_config(pid, &config) {
+        tracing::warn!(pid, %err, "failed to terminate process tree");
+    }
 }
 
 pub fn std_command<S>(program: S) -> Command

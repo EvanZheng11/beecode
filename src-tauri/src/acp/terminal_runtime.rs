@@ -573,6 +573,8 @@ impl TerminalRuntime {
         // The base env's PATH is built from codeg's own: an AppImage's
         // launcher put the image in it (see `crate::appimage_env`).
         crate::appimage_env::restore_tokio(command);
+        #[cfg(target_os = "linux")]
+        command.env(crate::process::owned_jobs::KEY, crate::process::owned_jobs::owner());
     }
 
     pub async fn create_terminal(

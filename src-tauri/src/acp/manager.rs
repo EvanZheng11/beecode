@@ -3707,18 +3707,7 @@ impl ConnectionManager {
                 if pid == 0 {
                     continue;
                 }
-                match kill_tree::blocking::kill_tree(pid) {
-                    Ok(_) => {
-                        tracing::info!(
-                            "[ACP] disconnect_all backstop killed process tree pid={pid}"
-                        );
-                    }
-                    Err(e) => {
-                        // The process can still exit between the load and the
-                        // kill; that error is expected, not a failure.
-                        tracing::debug!("[ACP] disconnect_all backstop kill_tree pid={pid}: {e}");
-                    }
-                }
+                crate::process::force_kill_tree(pid);
             }
         })
         .await;

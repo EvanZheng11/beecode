@@ -216,7 +216,7 @@ static RETAINED_APP_HANDLE: std::sync::OnceLock<RetainedAppHandle> = std::sync::
 /// thread, so every later call — including from worker threads — finds the
 /// slot filled and never clones `app`.
 #[cfg(feature = "tauri-runtime")]
-fn retained_app_handle(app: &tauri::AppHandle) -> &'static RetainedAppHandle {
+pub(crate) fn retained_app_handle(app: &tauri::AppHandle) -> &'static RetainedAppHandle {
     RETAINED_APP_HANDLE.get_or_init(|| RetainedAppHandle(Arc::new(app.clone())))
 }
 

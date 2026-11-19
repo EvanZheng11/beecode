@@ -418,6 +418,8 @@ impl AcpAgent {
                 // launcher set up for codeg itself. After the launch env,
                 // whose PATH is built from codeg's own.
                 crate::appimage_env::restore_tokio(&mut cmd);
+                #[cfg(target_os = "linux")]
+                cmd.env(crate::process::owned_jobs::KEY, crate::process::owned_jobs::owner());
                 if let Some(dir) = &self.current_dir {
                     // The `pushd` detour already owns the cwd for this launch,
                     // and handing the same UNC path to `CreateProcess` is the
@@ -507,9 +509,9 @@ impl Drop for ChildGuard {
             return;
         };
 
-        let _ = kill_tree::blocking::kill_tree(pid);
+        crate::process::force_kill_tree(pid);
 
-        // `kill_tree` only signals (SIGTERM on Unix) and does not wait, so the
+        // Tree termination only signals and does not wait, so the
         // process may well outlive this call. Keep OWNING the child until it is
         // really reaped, and report the exit from there.
         //
@@ -1098,13 +1100,10 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    /// The case that makes the whole design necessary: a child that ignores the
-    /// kill signal is STILL RUNNING after `drop`. Its pid must stay published so
-    /// a host's shutdown backstop still sweeps it — reporting an exit here would
-    /// disarm that backstop and leave a real orphan behind.
+    /// Ignoring SIGTERM must not leave an agent behind after disconnect.
     #[cfg(unix)]
     #[test]
-    fn a_child_that_survives_the_kill_keeps_its_pid_published() {
+    fn shutdown_tree_reaps_an_agent_ignoring_sigterm() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1132,7 +1131,6 @@ mod tests {
                 ])
                 .spawn()
                 .expect("spawn sh");
-            let pid = child.id().expect("child has a pid").to_string();
             let guard = ChildGuard {
                 child: Some(child),
                 exit_callback: Some(counting_callback(&calls)),
@@ -1150,29 +1148,6 @@ mod tests {
 
             drop(guard);
 
-            // Well past the signal it ignored. `kill -0` probes for existence
-            // without sending anything (no `libc` dependency in this crate).
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            let alive = std::process::Command::new("kill")
-                .args(["-0", &pid])
-                .status()
-                .expect("run kill -0")
-                .success();
-            assert!(
-                alive,
-                "test setup is wrong — the child was supposed to survive SIGTERM"
-            );
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                0,
-                "a still-running child must keep its pid published"
-            );
-
-            // And once it really dies, the exit is reported — the reaper is
-            // armed the whole time, not abandoned.
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &pid])
-                .status();
             let mut reported = false;
             for _ in 0..200 {
                 if calls.load(Ordering::SeqCst) > 0 {

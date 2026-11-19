@@ -528,6 +528,8 @@ impl TerminalManager {
         // The session's environment, not the one an AppImage's launcher set
         // up for codeg itself.
         crate::appimage_env::restore_pty(&mut cmd);
+        #[cfg(target_os = "linux")]
+        cmd.env(crate::process::owned_jobs::KEY, crate::process::owned_jobs::owner());
 
         let child = pair
             .slave
@@ -800,8 +802,7 @@ impl TerminalManager {
                 let (mut child, input) = lock_completed(&self.completed)
                     .insert_ending(terminal_id.to_string(), instance);
                 drop(terminals);
-                let _ = child.kill();
-                let _ = child.wait();
+                end_terminal_child(child.as_mut());
                 // Only now: closed earlier, the input hands a live program an
                 // Enter and an end-of-input before it dies (a prompt would
                 // take its default), and the echoed "^D" ends up in the
@@ -1042,9 +1043,19 @@ impl TerminalManager {
 }
 
 fn terminate_terminal(instance: &mut TerminalInstance) {
-    let _ = instance._child.kill();
-    let _ = instance._child.wait();
+    end_terminal_child(instance._child.as_mut());
     cleanup_temp_files(&mut instance.temp_files);
+}
+
+fn end_terminal_child(child: &mut (dyn portable_pty::Child + Send)) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    if let Some(pid) = child.process_id() {
+        crate::process::force_kill_tree(pid);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn cleanup_temp_files(files: &mut Vec<std::path::PathBuf>) {
