@@ -209,7 +209,7 @@ fn emit_directory_opened(app: &tauri::AppHandle, path: &Path) {
         tracing::warn!("Finder 目录事件拒绝非 UTF-8 路径：{:?}", path);
         return;
     };
-    let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(app);
     if crate::web::event_bridge::emit_event_checked(
         &emitter,
         FINDER_DIRECTORY_OPENED_EVENT,
@@ -282,7 +282,7 @@ async fn run_emit_retries() {
             continue;
         }
 
-        let emitter = crate::web::event_bridge::EventEmitter::Tauri(retry.app.clone());
+        let emitter = crate::web::event_bridge::EventEmitter::from_app(&retry.app);
         let attempt = retry.attempt.saturating_add(1);
         if crate::web::event_bridge::emit_event_checked(
             &emitter,

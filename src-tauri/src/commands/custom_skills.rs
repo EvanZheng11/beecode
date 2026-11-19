@@ -1234,7 +1234,7 @@ mod tests {
                 "zzz-codeg-custom-import-absent-1".into(),
                 "zzz-codeg-custom-import-absent-2".into(),
             ],
-            None,
+            Vec::new(),
         )
         .await
         .expect("batch returns Ok");

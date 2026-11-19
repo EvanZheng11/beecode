@@ -344,7 +344,7 @@ pub async fn update_question_enabled(
 ) -> Result<QuestionSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         update_question_enabled_core(&db.conn, &config, &emitter, enabled).await
     }
     #[cfg(not(feature = "tauri-runtime"))]
@@ -363,7 +363,7 @@ pub async fn update_question_policy(
 ) -> Result<QuestionSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         update_question_policy_core(&db.conn, &config, &emitter, policy).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

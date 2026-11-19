@@ -65,6 +65,7 @@ fn failed(path: &Path, error: CustomSkillsError) -> CustomImportResult {
         ok: false,
         skipped: false,
         error: Some(error.to_string()),
+        code: Some(error.code().to_string()),
     }
 }
 
@@ -127,7 +128,7 @@ fn replace_package_with_rename(
     let exists = match fs::symlink_metadata(dst) {
         Ok(meta) => {
             // Windows junction 会被识别为目录，也必须按外部链接拒绝。
-            if read_link_target(dst).is_some()
+            if crate::skills::link::inspect(dst) != crate::skills::link::RawEntry::Dir
                 || !meta.is_dir()
                 || !fs::symlink_metadata(dst.join("SKILL.md"))?.is_file()
             {
@@ -195,6 +196,7 @@ fn import_package_confirmed(
         ok: false,
         skipped: false,
         error: None,
+        code: None,
     };
     if let Err(error) = validate_skill_id(&id) {
         result.error = Some(format!("技能标识无效：{error}"));
@@ -206,7 +208,7 @@ fn import_package_confirmed(
         return result;
     }
     let copied = (|| {
-        ensure_custom_id(&id)?;
+        ensure_custom_id_in(store, &id)?;
         replace_package(src, &dst, false)?;
         Ok::<_, CustomSkillsError>(())
     })();
@@ -269,12 +271,13 @@ pub(super) async fn import_directory(
     source_path: String,
     overwrite_ids: Option<Vec<String>>,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
-    let guard = mutation_lock().lock().await;
+    let ctx = SkillsCtx::user();
+    let guard = ctx.lock().await?;
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
         scan_import_confirmed(
             Path::new(source_path.trim()),
-            &central_experts_dir(),
+            &ctx.store,
             &overwrite_ids.unwrap_or_default(),
         )
     })
@@ -548,13 +551,14 @@ pub(super) async fn import_remote(
         .prefix("codeg-skill-import-")
         .tempdir()?;
     let prepared = prepare_remote(source, temp).await?;
-    let guard = mutation_lock().lock().await;
+    let ctx = SkillsCtx::user();
+    let guard = ctx.lock().await?;
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let _temp = prepared.0;
         scan_import_confirmed(
             &prepared.1,
-            &central_experts_dir(),
+            &ctx.store,
             &overwrite_ids.unwrap_or_default(),
         )
     })
