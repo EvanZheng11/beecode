@@ -221,27 +221,56 @@ fn import_package_confirmed(
 
 #[cfg(test)]
 fn scan_import(root: &Path, store: &Path) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
-    scan_import_confirmed(root, store, &[])
+    scan_import_confirmed(root, store, &[], ScanSource::Directory)
+}
+
+enum ScanSource {
+    Directory,
+    Unpacked,
 }
 
 fn scan_import_confirmed(
     root: &Path,
     store: &Path,
     overwrite_ids: &[String],
+    source: ScanSource,
+) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
+    let results = scan_packages(root, store, overwrite_ids, source)?;
+    tracing::info!(
+        "技能批量导入完成：成功 {}，跳过 {}，失败 {}",
+        results.iter().filter(|r| r.ok).count(),
+        results.iter().filter(|r| r.skipped).count(),
+        results.iter().filter(|r| r.error.is_some()).count()
+    );
+    Ok(results)
+}
+
+fn scan_packages(
+    root: &Path,
+    store: &Path,
+    overwrite_ids: &[String],
+    source: ScanSource,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
     if !fs::symlink_metadata(root)?.is_dir() {
         return Err(invalid("请选择普通目录，不能使用符号链接"));
     }
     let mut results = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        if fs::symlink_metadata(dir.join("SKILL.md")).is_ok() {
-            results.push(import_package_confirmed(&dir, store, overwrite_ids));
+    let mut pending = vec![(root.to_path_buf(), true)];
+    while let Some((path, is_dir)) = pending.pop() {
+        if !is_dir {
+            match import_skill_archive(&path, store, overwrite_ids) {
+                Ok(imported) => results.extend(imported),
+                Err(error) => results.push(failed(&path, error)),
+            }
+            continue;
         }
-        let entries = match fs::read_dir(&dir) {
+        if fs::symlink_metadata(path.join("SKILL.md")).is_ok() {
+            results.push(import_package_confirmed(&path, store, overwrite_ids));
+        }
+        let entries = match fs::read_dir(&path) {
             Ok(entries) => entries,
             Err(error) => {
-                results.push(failed(&dir, error.into()));
+                results.push(failed(&path, error.into()));
                 continue;
             }
         };
@@ -249,21 +278,52 @@ fn scan_import_confirmed(
         for entry in entries {
             match entry.and_then(|entry| Ok((entry.file_type()?, entry))) {
                 Ok((kind, entry)) if kind.is_dir() && !ignored(&entry.file_name()) => {
-                    children.push(entry.path())
+                    children.push((entry.path(), true));
+                }
+                Ok((kind, entry)) if kind.is_file() && matches!(source, ScanSource::Directory) => {
+                    let path = entry.path();
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("skill"))
+                    {
+                        children.push((path, false));
+                    }
                 }
                 Ok(_) => {}
-                Err(error) => results.push(failed(&dir, error.into())),
+                Err(error) => results.push(failed(&path, error.into())),
             }
         }
         children.sort();
         pending.extend(children.into_iter().rev());
     }
-    tracing::info!(
-        "技能批量导入完成：成功 {}，跳过 {}，失败 {}",
-        results.iter().filter(|r| r.ok).count(),
-        results.iter().filter(|r| r.skipped).count(),
-        results.iter().filter(|r| r.error.is_some()).count()
+    Ok(results)
+}
+
+fn import_skill_archive(
+    archive: &Path,
+    store: &Path,
+    overwrite_ids: &[String],
+) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
+    let metadata = fs::symlink_metadata(archive)?;
+    if !metadata.is_file() || metadata.len() > EXPANDED_LIMIT {
+        return Err(invalid(".skill 必须是不超过 128 MiB 的普通文件"));
+    }
+    let temp = tempfile::Builder::new()
+        .prefix("codeg-skill-import-")
+        .tempdir()?;
+    let root = temp.path().join(
+        archive
+            .file_name()
+            .ok_or_else(|| invalid(".skill 文件名无效"))?,
     );
+    fs::create_dir(&root)?;
+    unpack(archive, &RemoteKind::Zip, &root)?;
+    validate_copy_budget(&root)?;
+    // 解包后只扫描技能目录，不继续解压包内的 .skill 文件。
+    let results = scan_packages(&root, store, overwrite_ids, ScanSource::Unpacked)?;
+    if results.is_empty() {
+        return Err(invalid(".skill 压缩包未包含 SKILL.md"));
+    }
     Ok(results)
 }
 
@@ -279,6 +339,7 @@ pub(super) async fn import_directory(
             Path::new(source_path.trim()),
             &ctx.store,
             &overwrite_ids.unwrap_or_default(),
+            ScanSource::Directory,
         )
     })
     .await
@@ -512,7 +573,7 @@ fn unpack(file: &Path, kind: &RemoteKind, root: &Path) -> Result<(), CustomSkill
     Ok(())
 }
 
-// 嵌套技能包会重复复制子包内容，远程导入前也限制实际复制总量。
+// 嵌套技能目录会重复复制子包内容，压缩包导入前也限制实际复制总量。
 fn validate_copy_budget(root: &Path) -> Result<(), CustomSkillsError> {
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     let mut bytes = 0u64;
@@ -532,7 +593,7 @@ fn validate_copy_budget(root: &Path) -> Result<(), CustomSkillsError> {
                 entries = entries.saturating_add(copies);
                 bytes = bytes.saturating_add(entry.metadata()?.len().saturating_mul(copies as u64));
             } else {
-                return Err(invalid("远程技能包不允许链接或特殊文件"));
+                return Err(invalid("压缩包不允许链接或特殊文件"));
             }
         }
         if bytes > EXPANDED_LIMIT || entries > ENTRY_LIMIT {
@@ -560,6 +621,7 @@ pub(super) async fn import_remote(
             &prepared.1,
             &ctx.store,
             &overwrite_ids.unwrap_or_default(),
+            ScanSource::Unpacked,
         )
     })
     .await
@@ -688,7 +750,13 @@ mod tests {
         assert!(results[1].skipped);
         fs::write(first.join("unconfirmed"), "must not copy").unwrap();
         fs::write(conflict.join("confirmed"), "copy").unwrap();
-        let results = scan_import_confirmed(&root, &store, &["existing-skill".into()]).unwrap();
+        let results = scan_import_confirmed(
+            &root,
+            &store,
+            &["existing-skill".into()],
+            ScanSource::Directory,
+        )
+        .unwrap();
         assert!(results[0].skipped);
         assert!(results[1].ok);
         assert!(!store.join("new-skill/unconfirmed").exists());
@@ -878,6 +946,103 @@ mod tests {
             writer.write_all(content).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn directory_imports_skill_archives_alongside_skill_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        let store = temp.path().join("store");
+        package(&root.join("plain"), "plain-skill");
+        fs::write(
+            root.join("flat.skill"),
+            zip_bytes("SKILL.md", VALID.as_bytes(), false),
+        )
+        .unwrap();
+        fs::create_dir(root.join("nested")).unwrap();
+        let archive = root.join("nested/download.SKILL");
+        let mut writer = zip::ZipWriter::new(fs::File::create(archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("wrapper/SKILL.md", options).unwrap();
+        writer
+            .write_all(VALID.replace("deep-skill", "wrapped-skill").as_bytes())
+            .unwrap();
+        writer
+            .start_file("wrapper/scripts/run.sh", options.unix_permissions(0o755))
+            .unwrap();
+        writer.write_all(b"echo example").unwrap();
+        writer.finish().unwrap();
+
+        let results = scan_import(&root, &store).unwrap();
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert!(results.iter().all(|result| result.ok), "{results:?}");
+        for id in ["plain-skill", "deep-skill", "wrapped-skill"] {
+            assert!(store.join(id).join("SKILL.md").is_file());
+        }
+        let script = store.join("wrapped-skill/scripts/run.sh");
+        assert_eq!(fs::read_to_string(&script).unwrap(), "echo example");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_skill_archives_fail_individually_and_conflicts_require_confirmation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        let store = temp.path().join("store");
+        package(&store.join("deep-skill"), "deep-skill");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("corrupt.skill"), b"not a zip").unwrap();
+        fs::write(
+            root.join("missing-skill.skill"),
+            zip_bytes("README.md", b"not a skill", false),
+        )
+        .unwrap();
+        fs::write(
+            root.join("invalid-markdown.skill"),
+            zip_bytes("SKILL.md", b"missing frontmatter", false),
+        )
+        .unwrap();
+        fs::write(
+            root.join("valid.skill"),
+            zip_bytes("SKILL.md", VALID.as_bytes(), false),
+        )
+        .unwrap();
+
+        let first = scan_import(&root, &store).unwrap();
+        assert_eq!(first.len(), 4, "{first:?}");
+        for name in [
+            "corrupt.skill",
+            "missing-skill.skill",
+            "invalid-markdown.skill",
+        ] {
+            assert!(
+                first.iter().any(|r| r.name == name && r.error.is_some()),
+                "{first:?}"
+            );
+        }
+        assert!(first.iter().any(|r| r.id == "deep-skill" && r.skipped));
+        assert!(store.join("deep-skill/scripts/run.sh").is_file());
+
+        let second =
+            scan_import_confirmed(&root, &store, &["deep-skill".into()], ScanSource::Directory)
+                .unwrap();
+        assert!(
+            second.iter().any(|r| r.id == "deep-skill" && r.ok),
+            "{second:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(store.join("deep-skill/SKILL.md")).unwrap(),
+            VALID
+        );
+        assert!(!store.join("deep-skill/scripts").exists());
     }
 
     #[test]
