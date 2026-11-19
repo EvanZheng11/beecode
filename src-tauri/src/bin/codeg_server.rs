@@ -1,6 +1,8 @@
+use std::future::{Future, IntoFuture};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codeg_lib::app_state::AppState;
 use codeg_lib::web::event_bridge::{EventEmitter, WebEventBroadcaster};
@@ -222,6 +224,14 @@ fn main() -> ExitCode {
 async fn async_main(
     proxy_auth_config: Option<codeg_lib::web::proxy_auth::ProxyAuthConfig>,
 ) -> ExitCode {
+    let termination = match install_shutdown_signals() {
+        Ok(termination) => termination,
+        Err(err) => {
+            tracing::error!("[SERVER] Failed to install shutdown signal handlers: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Sweep stale ACP binary cache trash (rename-aside fallback artifacts).
     // Detached OS thread: cannot block startup, panics are caught and dropped,
     // errors are silenced, no subprocesses spawned.
@@ -778,7 +788,7 @@ async fn async_main(
         token.clone(),
         proxy_auth,
         static_dir,
-        shutdown_signal,
+        shutdown_signal.clone(),
     );
 
     // Bind
@@ -842,18 +852,77 @@ async fn async_main(
         tracing::info!("  {}", addr);
     }
 
-    // Start serving
-    if let Err(e) = axum::serve(listener, router).await {
-        tracing::error!("[SERVER] Server error: {}", e);
+    let result = {
+        let serve_shutdown = shutdown_signal.clone();
+        let serve = axum::serve(listener, router)
+            .with_graceful_shutdown(async move { serve_shutdown.wait().await })
+            .into_future();
+        tokio::pin!(serve);
+        let completed = tokio::select! {
+            biased;
+            _ = termination => {
+                tracing::info!("[SERVER] Shutdown signal received");
+                None
+            }
+            result = &mut serve => Some(result),
+        };
+
+        state.cli_access.unpublish_now();
+        shutdown_signal.trigger();
+        codeg_lib::web::browser_bridge::configure(None);
         state.cli_access.stop().await;
-        return ExitCode::from(1);
-    }
-    // No CLI may find this process once it is gone.
-    state.cli_access.stop().await;
-    // Graceful shutdown: release any live office watch preview servers
-    // (kill_on_drop is the backstop, but this frees their ports promptly).
+
+        match completed {
+            Some(result) => result,
+            None => match tokio::time::timeout(Duration::from_secs(2), serve).await {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!("[SERVER] Web connections did not drain before shutdown");
+                    Ok(())
+                }
+            },
+        }
+    };
+
+    state.terminal_manager.kill_all();
     codeg_lib::office_watch::stop_all_office_watches();
-    ExitCode::SUCCESS
+    state.connection_manager.disconnect_all().await;
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            tracing::error!("[SERVER] Server error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn install_shutdown_signals() -> std::io::Result<impl Future<Output = ()>> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        })
+    }
+
+    #[cfg(windows)]
+    {
+        let mut interrupt = tokio::signal::windows::ctrl_c()?;
+        let mut ctrl_break = tokio::signal::windows::ctrl_break()?;
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = ctrl_break.recv() => {}
+            }
+        })
+    }
 }
 
 /// Whether whoever runs this server lets it share the screen it runs on with
