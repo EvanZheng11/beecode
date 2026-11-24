@@ -15,32 +15,32 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::browser_tools::{
     BrowserActOutcome, BrowserCaptureOutcome, BrowserConsoleOutcome, BrowserEvalOutcome,
     BrowserSnapshotOutcome, BrowserTabOutcome, BrowserTabsOutcome, BrowserToolAccess,
     ERROR_NO_SUCH_TAB,
 };
 use crate::acp::computer_tools::{
-    ComputerActOutcome, ComputerAppsOutcome, ComputerCaptureOutcome, ComputerSnapshotOutcome,
-    ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome, ERROR_NO_SUCH_TARGET,
+    ComputerActOutcome, ComputerAppsOutcome, ComputerCaptureOutcome, ComputerShareOutcome,
+    ComputerSnapshotOutcome, ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome,
+    ERROR_NO_SUCH_TARGET, ERROR_UNAVAILABLE, NO_DESKTOP_NOTE,
 };
+use crate::acp::delegation::assistants::assistant_not_found_message;
+use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
-    read_frame, write_frame, BrokerAskError, BrokerAskOutcome, BrokerAskRequest,
-    BrokerBrowserActRequest,
-    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
-    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
+    read_frame, validate_computer_share, write_frame, BrokerAskError, BrokerAskOutcome,
+    BrokerAskRequest, BrokerBrowserActRequest, BrokerBrowserCaptureRequest,
+    BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest,
+    BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest, BrokerCancelRequest,
+    BrokerCancelTaskRequest, BrokerCommitFeedbackRequest, BrokerComputerActRequest,
     BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerShareRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
+    BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
     BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
+    BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
     BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
-use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
     delegation_target_from_args, DelegationRequest, DelegationTarget, DelegationTargetError,
     DelegationTaskReport, RemoteDelegationTarget, ResumeDelegationRequest, TaskStatus,
@@ -466,7 +466,12 @@ impl DelegationListener {
                 // before it forwards an `assistant_id` call — see
                 // `BrokerMessage::Ping`.
                 // 仅在远程请求已接入 prepare + broker 生产分支后声明此能力。
-                outcome: serde_json::json!({ "ok": true, "assistants": true, "remote_delegation": true }),
+                outcome: serde_json::json!({
+                    "ok": true,
+                    "assistants": true,
+                    "remote_delegation": true,
+                    "computer_window_sharing": cfg!(feature = "tauri-runtime"),
+                }),
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -747,6 +752,18 @@ impl DelegationListener {
             }
             BrokerMessage::ComputerWindows(req) => {
                 computer_response(&self.process_computer_windows(req).await)?
+            }
+            BrokerMessage::ComputerShare(req) => {
+                // 关闭调用端会撤下仍在等待的桌面确认，不能给已取消的操作留下授权。
+                let wait = self.process_computer_share(req);
+                tokio::pin!(wait);
+                let mut probe = [0u8; 1];
+                let outcome = tokio::select! {
+                    biased;
+                    _ = conn.read(&mut probe) => return Ok(()),
+                    outcome = &mut wait => outcome,
+                };
+                computer_response(&outcome)?
             }
             BrokerMessage::ComputerCapture(req) => {
                 // Like the browser capture: the read runs to its own end, so
@@ -1148,6 +1165,22 @@ impl DelegationListener {
             return ComputerWindowsOutcome::default();
         }
         self.computer.list_windows(req.pid).await
+    }
+
+    async fn process_computer_share(
+        &self,
+        req: BrokerComputerShareRequest,
+    ) -> ComputerShareOutcome {
+        if !cfg!(feature = "tauri-runtime") || self.tokens.lookup(&req.token).await.is_none() {
+            return ComputerShareOutcome::refused(ERROR_UNAVAILABLE, NO_DESKTOP_NOTE);
+        }
+        // Socket 客户端也须通过校验，不能仅依赖 MCP 参数检查。
+        if let Err(note) = validate_computer_share(&req.target_ids, req.level) {
+            return ComputerShareOutcome::refused("computer_invalid_request", note);
+        }
+        self.computer
+            .request_window_sharing(req.target_ids, req.level)
+            .await
     }
 
     /// An invalid token is told the window does not exist — the answer a
@@ -5214,10 +5247,30 @@ mod tests {
     #[derive(Default)]
     struct StubComputer {
         calls: tokio::sync::Mutex<Vec<String>>,
+        share_waiting: tokio::sync::Notify,
     }
 
     #[async_trait]
     impl ComputerToolAccess for StubComputer {
+        async fn request_window_sharing(
+            &self,
+            target_ids: Vec<String>,
+            level: crate::computer::agent::GrantLevel,
+        ) -> ComputerShareOutcome {
+            self.calls
+                .lock()
+                .await
+                .push(format!("share {target_ids:?} {level:?}"));
+            if target_ids == ["w99"] {
+                self.share_waiting.notify_one();
+                std::future::pending::<()>().await;
+            }
+            ComputerShareOutcome {
+                granted: target_ids.into_iter().take(1).collect(),
+                ..Default::default()
+            }
+        }
+
         async fn list_apps(&self) -> ComputerAppsOutcome {
             self.calls.lock().await.push("apps".into());
             ComputerAppsOutcome::default()
@@ -5334,6 +5387,73 @@ mod tests {
             computer,
             Arc::new(crate::acp::result_tool::NoResultTool),
         )
+    }
+
+    #[tokio::test]
+    async fn computer_share_listener_checks_token_device_mode_and_scope() {
+        use crate::computer::agent::GrantLevel;
+        let computer = Arc::new(StubComputer::default());
+        let listener = make_computer_listener(browser_tokens().await, computer.clone());
+        let request = |token: &str, targets: &[&str], level| {
+            BrokerMessage::ComputerShare(BrokerComputerShareRequest {
+                token: token.into(),
+                target_ids: targets.iter().map(|id| (*id).to_string()).collect(),
+                level,
+            })
+        };
+        let check = |msg| browser_round_trip(listener.clone(), msg);
+        let refused = check(request("forged", &["w1"], GrantLevel::Read)).await;
+        assert_eq!(refused.outcome["error"], ERROR_UNAVAILABLE);
+        assert_eq!(refused.outcome["granted"], serde_json::json!([]));
+        for msg in [
+            request("tok", &["a1"], GrantLevel::Control),
+            request("tok", &["w1", "w1"], GrantLevel::Control),
+            request("tok", &["w1"], GrantLevel::None),
+        ] {
+            let invalid = check(msg).await;
+            let expected = if cfg!(feature = "tauri-runtime") {
+                "computer_invalid_request"
+            } else {
+                ERROR_UNAVAILABLE
+            };
+            assert_eq!(invalid.outcome["error"], expected);
+        }
+        assert!(computer.calls.lock().await.is_empty());
+        let valid = check(request("tok", &["w1", "w2"], GrantLevel::Control)).await;
+        if cfg!(feature = "tauri-runtime") {
+            assert_eq!(valid.outcome["granted"], serde_json::json!(["w1"]));
+            assert_eq!(
+                computer.calls.lock().await.as_slice(),
+                &["share [\"w1\", \"w2\"] Control"]
+            );
+        } else {
+            assert_eq!(valid.outcome["error"], ERROR_UNAVAILABLE);
+            assert!(computer.calls.lock().await.is_empty());
+        }
+    }
+
+    #[cfg(feature = "tauri-runtime")]
+    #[tokio::test]
+    async fn computer_share_pending_wait_ends_when_the_socket_closes() {
+        let computer = Arc::new(StubComputer::default());
+        let listener = make_computer_listener(browser_tokens().await, computer.clone());
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let serving = tokio::spawn(async move { listener.serve_one(&mut server).await });
+        let req = BrokerMessage::ComputerShare(BrokerComputerShareRequest {
+            token: "tok".into(),
+            target_ids: vec!["w99".into()],
+            level: crate::computer::agent::GrantLevel::Read,
+        });
+        write_frame(&mut client, &req).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), computer.share_waiting.notified())
+            .await
+            .unwrap();
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(2), serving)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     /// With a valid token every computer message reaches the access impl with
@@ -5618,12 +5738,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ping_announces_assistant_and_remote_support() {
+    async fn ping_announces_listener_capabilities() {
         let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
         let pong = serve(listener, BrokerMessage::Ping).await;
         assert_eq!(
             pong,
-            json!({"ok": true, "assistants": true, "remote_delegation": true})
+            json!({
+                "ok": true,
+                "assistants": true,
+                "remote_delegation": true,
+                "computer_window_sharing": cfg!(feature = "tauri-runtime"),
+            })
         );
     }
 
