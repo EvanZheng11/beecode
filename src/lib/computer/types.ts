@@ -304,14 +304,8 @@ export interface ShareRequestWindow {
   level: GrantLevel
 }
 
-/** `computer://share-request`: an agent needs windows shared, and asks the
- *  person instead of waiting to be handed one by hand.
- *
- *  The list is what it wants to use, at the level it wants: some may already
- *  be shared (`level`), some may not. Nothing is shared until the answer.
- *  Broadcast to every window and shown by the main one — the answer is one
- *  answer, and a second dialog would be a second chance to give a different
- *  one. */
+/** 主窗口从 `computer_share_request_current` 读取的确认内容。
+ *  窗口标题不随事件广播，也不会在未授权时返回给智能体。 */
 export interface ShareRequestPayload {
   /** Names this one question; goes back with the answer. */
   requestId: string
@@ -322,18 +316,16 @@ export interface ShareRequestPayload {
   expiresAt: number
 }
 
-/** `computer://share-request-closed`: that question is no longer waiting —
- *  answered, lapsed, or the agent gave up. After it, an answer for the same
- *  `requestId` is a stale reply and must not be sent. */
-export interface ShareRequestClosedPayload {
+/** 桌面事件只通知哪个请求开始或结束，不携带窗口信息。 */
+export interface ShareRequestSignal {
   requestId: string
 }
 
 /** Every shared window, whenever any grant changes. Desktop only. */
 export const COMPUTER_STATE_EVENT = "computer://state"
-/** {@link ShareRequestPayload}: desktop only, main window only. */
+/** {@link ShareRequestSignal}: 通知主窗口读取待确认请求。 */
 export const COMPUTER_SHARE_REQUEST_EVENT = "computer://share-request"
-/** {@link ShareRequestClosedPayload}. */
+/** {@link ShareRequestSignal}: 请求已结束，不再接受答复。 */
 export const COMPUTER_SHARE_REQUEST_CLOSED_EVENT =
   "computer://share-request-closed"
 export const COMPUTER_GRANT_EVENT = "computer://agent-grant"

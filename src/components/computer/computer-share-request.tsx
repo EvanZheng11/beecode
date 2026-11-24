@@ -48,8 +48,8 @@ import {
 import {
   COMPUTER_SHARE_REQUEST_CLOSED_EVENT,
   COMPUTER_SHARE_REQUEST_EVENT,
-  type ShareRequestClosedPayload,
   type ShareRequestPayload,
+  type ShareRequestSignal,
 } from "@/lib/computer/types"
 import { getShellTransport, isDesktop } from "@/lib/transport"
 
@@ -136,7 +136,7 @@ export function ComputerShareRequestConfirm() {
       // `computer-api.ts`): the windows an agent asks about are of this
       // computer.
       const transport = getShellTransport()
-      const subClosed = await transport.subscribe<ShareRequestClosedPayload>(
+      const subClosed = await transport.subscribe<ShareRequestSignal>(
         COMPUTER_SHARE_REQUEST_CLOSED_EVENT,
         ({ requestId }) => {
           settled.current.add(requestId)
@@ -150,7 +150,7 @@ export function ComputerShareRequestConfirm() {
         return
       }
       unsubscribeClosed = subClosed
-      const sub = await transport.subscribe<ShareRequestClosedPayload>(
+      const sub = await transport.subscribe<ShareRequestSignal>(
         COMPUTER_SHARE_REQUEST_EVENT,
         ({ requestId }) => {
           // 通知只负责唤醒；标题、权限和可选项一律从本机后端读取。
