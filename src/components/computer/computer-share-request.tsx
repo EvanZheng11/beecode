@@ -41,7 +41,10 @@ import {
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { toErrorMessage } from "@/lib/app-error"
-import { computerShareRequestDecide } from "@/lib/computer/computer-api"
+import {
+  computerShareRequestCurrent,
+  computerShareRequestDecide,
+} from "@/lib/computer/computer-api"
 import {
   COMPUTER_SHARE_REQUEST_CLOSED_EVENT,
   COMPUTER_SHARE_REQUEST_EVENT,
@@ -49,13 +52,6 @@ import {
   type ShareRequestPayload,
 } from "@/lib/computer/types"
 import { getShellTransport, isDesktop } from "@/lib/transport"
-
-/** One question, plus the local deadline that takes it off screen. */
-interface Pending extends ShareRequestPayload {
-  /** `expiresAt` as sent, except that one already past lapses now rather
-   *  than never. */
-  lapsesAt: number
-}
 
 /** The windows ticked, and which question they were ticked for: a new
  *  request starts with none, without anything having to remember to clear
@@ -75,7 +71,7 @@ export function ComputerShareRequestConfirm() {
   const t = useTranslations("ComputerUse.request")
   const tLevel = useTranslations("ComputerUse.level")
   const tPicker = useTranslations("ComputerUse.picker")
-  const [pending, setPending] = useState<Pending | null>(null)
+  const [pending, setPending] = useState<ShareRequestPayload | null>(null)
   const [selection, setSelection] = useState<Selection>(NONE)
   const [answering, setAnswering] = useState(false)
   /** Requests this window has answered, or been told are gone. A second
@@ -89,9 +85,7 @@ export function ComputerShareRequestConfirm() {
       settled.current.add(requestId)
       void computerShareRequestDecide(requestId, targetIds)
         .then((ok) => {
-          // `false`: every window named had gone, or none could be shared.
-          // The agent is waiting on the other end, so say so.
-          if (!ok) toast.error(t("failed"))
+          if (!ok && targetIds.length > 0) toast.error(t("failed"))
         })
         .catch((error: unknown) => {
           // A refusal that could not be delivered is still a refusal: the
@@ -119,7 +113,7 @@ export function ComputerShareRequestConfirm() {
   )
 
   const confirm = useCallback(
-    (request: Pending, targetIds: string[]) => {
+    (request: ShareRequestPayload, targetIds: string[]) => {
       setPending((current) =>
         current?.requestId === request.requestId ? null : current
       )
@@ -142,23 +136,6 @@ export function ComputerShareRequestConfirm() {
       // `computer-api.ts`): the windows an agent asks about are of this
       // computer.
       const transport = getShellTransport()
-      const sub = await transport.subscribe<ShareRequestPayload>(
-        COMPUTER_SHARE_REQUEST_EVENT,
-        (request) => {
-          // `null` when there is nothing to answer.
-          if (settled.current.has(request.requestId)) return
-          setPending((current) => {
-            // The same question again is not a new one: the ticks stay as
-            // they were.
-            if (current?.requestId === request.requestId) return current
-            setAnswering(false)
-            return {
-              ...request,
-              lapsesAt: Math.max(Date.now(), request.expiresAt),
-            }
-          })
-        }
-      )
       const subClosed = await transport.subscribe<ShareRequestClosedPayload>(
         COMPUTER_SHARE_REQUEST_CLOSED_EVENT,
         ({ requestId }) => {
@@ -169,13 +146,37 @@ export function ComputerShareRequestConfirm() {
         }
       )
       if (cancelled) {
-        sub()
         subClosed()
-      } else {
-        unsubscribe = sub
-        unsubscribeClosed = subClosed
+        return
       }
-    })()
+      unsubscribeClosed = subClosed
+      const sub = await transport.subscribe<ShareRequestClosedPayload>(
+        COMPUTER_SHARE_REQUEST_EVENT,
+        ({ requestId }) => {
+          // 通知只负责唤醒；标题、权限和可选项一律从本机后端读取。
+          if (settled.current.has(requestId)) return
+          void computerShareRequestCurrent(requestId)
+            .then((request) => {
+              if (
+                cancelled ||
+                !request ||
+                request.requestId !== requestId ||
+                settled.current.has(requestId) ||
+                request.expiresAt <= Date.now()
+              ) {
+                return
+              }
+              setAnswering(false)
+              setPending((current) =>
+                current?.requestId === requestId ? current : request
+              )
+            })
+            .catch(() => {})
+        }
+      )
+      if (cancelled) sub()
+      else unsubscribe = sub
+    })().catch(() => unsubscribeClosed?.())
     return () => {
       cancelled = true
       unsubscribe?.()
@@ -190,7 +191,7 @@ export function ComputerShareRequestConfirm() {
   useEffect(() => {
     if (!pending) return
     const timer = window.setInterval(() => {
-      if (Date.now() < pending.lapsesAt) return
+      if (Date.now() < pending.expiresAt) return
       settled.current.add(pending.requestId)
       setPending((current) =>
         current?.requestId === pending.requestId ? null : current

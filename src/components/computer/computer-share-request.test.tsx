@@ -11,10 +11,12 @@ import {
 
 const mocks = vi.hoisted(() => ({
   decide: vi.fn(() => Promise.resolve(true)),
+  current: vi.fn<(requestId: string) => Promise<ShareRequestPayload | null>>(),
   desktop: true,
   handlers: new Map<string, (payload: unknown) => void>(),
 }))
 vi.mock("@/lib/computer/computer-api", () => ({
+  computerShareRequestCurrent: mocks.current,
   computerShareRequestDecide: mocks.decide,
 }))
 vi.mock("@/lib/transport", () => ({
@@ -54,8 +56,11 @@ function request(over: Partial<ShareRequestPayload> = {}): ShareRequestPayload {
 }
 
 async function ask(payload: ShareRequestPayload) {
+  mocks.current.mockResolvedValueOnce(payload)
   await act(async () => {
-    mocks.handlers.get(COMPUTER_SHARE_REQUEST_EVENT)?.(payload)
+    mocks.handlers.get(COMPUTER_SHARE_REQUEST_EVENT)?.({
+      requestId: payload.requestId,
+    })
   })
 }
 
@@ -77,6 +82,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.handlers.clear()
   mocks.desktop = true
+  mocks.current.mockReset().mockResolvedValue(null)
   mocks.decide.mockResolvedValue(true)
 })
 
@@ -85,6 +91,17 @@ afterEach(() => {
 })
 
 describe("ComputerShareRequestConfirm", () => {
+  it("does not show unverified notification details", async () => {
+    renderConfirm()
+    await act(async () => {})
+    await act(async () => {
+      mocks.handlers.get(COMPUTER_SHARE_REQUEST_EVENT)?.(request())
+    })
+    expect(mocks.current).toHaveBeenCalledWith("r1")
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(mocks.decide).not.toHaveBeenCalled()
+  })
+
   it("shows nothing until an agent asks", async () => {
     renderConfirm()
     await act(async () => {})

@@ -22,6 +22,7 @@ import type {
   PermissionRequestResult,
   PickerWindow,
   ShareManyResult,
+  ShareRequestPayload,
   SharedWindow,
   GrantLevel,
   StopKeyStatus,
@@ -227,10 +228,19 @@ export async function computerShareWindows(
   return getTransport().call("computer_share_windows", { targetIds, level })
 }
 
+/** 只有 BeeCode 主窗口能通过本机 IPC 读取待确认窗口的详情。 */
+export async function computerShareRequestCurrent(
+  requestId: string
+): Promise<ShareRequestPayload | null> {
+  return getShellTransport().call("computer_share_request_current", {
+    requestId,
+  })
+}
+
 /** Answer a `computer://share-request` (`computerShareRequestDecide`):
  *  share these windows at the level that was asked for, or — with no ids —
  *  refuse. Local desktop only: the windows are of this computer, and the
- *  event is emitted to its main window alone. */
+ *  only its main window may answer. */
 export async function computerShareRequestDecide(
   requestId: string,
   selectedTargetIds: string[]
