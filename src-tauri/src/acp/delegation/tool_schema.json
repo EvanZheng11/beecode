@@ -719,7 +719,7 @@
   },
   {
     "name": "computer_list_windows",
-    "description": "List the normal windows on the user's desktop, each with its `targetId`, its application, its position and size, and whether it is shared with you — for reading (`read`), or for reading and acting on it (`control`). READING A WINDOW REQUIRES THE USER TO SHARE THAT WINDOW, AND ACTING ON IT REQUIRES THEM TO SHARE IT FOR CONTROL: they open Computer use in codeg's status bar and press \"Share a window…\"; only they can do it, there is no tool that grants it, and asking again does not help. Sharing is per window — or, when the user chooses, for a whole application: every window of it, the ones it opens later included, its menus and its own shortcuts, marked `with its whole application` — and ends by itself when the window closes, its application quits, or it goes unused for a while. When the user shares the ENTIRE SCREEN (only where they have switched that on), it is listed first, as `d1`, and every window the user can share is shared with it, marked `with the entire screen` — the desktop's own shortcuts are then in reach too, but never the keys that lock the screen, log out, or show every window at once. A window's title is only shown once it is shared, because the title is part of what the window shows. codeg's own windows, and the applications on the user's never-share list (password managers and System Settings unless they took them off), are listed but cannot be shared. A minimized window is listed too, marked `[minimized]`, and so on macOS is a window whose application is hidden (⌘H), marked `[hidden]`; both are shared like any other. The listing ends by saying how actions reach the windows as the user has it set now: in the background, and whether a window may be brought to the front for an action (`delivery: \"foreground\"`) — and which of the two is the default. Call this to find the window to read, or to tell the user which one they need to share.",
+    "description": "List the normal windows on the user's desktop: their `targetId`, application, position, size, and sharing status (`not shared`, `read`, or `control`). Titles are shown only for shared windows. Use the status to tell the user which relevant windows are already shared and which need access. For a needed individual window without sufficient access, use computer_request_window_sharing if available; otherwise the user can open Computer use and press \"Share a window…\". Only the user can approve sharing. Codeg's own windows and the user's never-share applications are listed but cannot be shared. The user can also manually share a whole application (including its menus and future windows) or, where enabled, the entire screen (`d1`); the listing marks those scopes. Sharing ends when the window closes, the application quits, or it goes unused for a while. The list marks minimized and hidden windows and reports the current input delivery settings.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -729,6 +729,33 @@
           "description": "Only this process's windows (a pid from computer_list_apps). Omit for every window."
         }
       }
+    }
+  },
+  {
+    "name": "computer_request_window_sharing",
+    "description": "Ask the user through BeeCode's native desktop confirmation to share specific individual windows you need for the current task. First call computer_list_windows to identify them. Request the least access needed: `read` to view, `control` only to act. This call waits for the user's decision and cannot grant anything itself; a chat reply or generic question answer is not approval. The user can approve a subset. Continue only with the IDs returned in `granted`; do not retry a refusal or timeout automatically. Never request the whole screen, a whole application, or a window marked never shareable. When this tool is unavailable, the user can share manually in Computer use.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targetIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^w[1-9][0-9]{0,19}$"
+          },
+          "description": "Distinct individual window IDs from computer_list_windows."
+        },
+        "level": {
+          "type": "string",
+          "enum": ["read", "control"],
+          "description": "Request `read` for viewing or `control` for viewing and acting."
+        }
+      },
+      "required": ["targetIds", "level"]
     }
   },
   {

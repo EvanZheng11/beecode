@@ -399,6 +399,45 @@ pub struct BrokerComputerWindowsRequest {
     pub pid: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerComputerShareRequest {
+    pub token: String,
+    pub target_ids: Vec<String>,
+    pub level: crate::computer::agent::GrantLevel,
+}
+
+pub(super) fn validate_computer_share(
+    target_ids: &[String],
+    level: crate::computer::agent::GrantLevel,
+) -> Result<(), &'static str> {
+    if !matches!(
+        level,
+        crate::computer::agent::GrantLevel::Read | crate::computer::agent::GrantLevel::Control
+    ) {
+        return Err("`level` must be `read` or `control`");
+    }
+    if !(1..=20).contains(&target_ids.len()) {
+        return Err("`targetIds` must contain 1 to 20 distinct window IDs");
+    }
+    let mut seen = std::collections::HashSet::with_capacity(target_ids.len());
+    for id in target_ids {
+        let valid = id.strip_prefix('w').is_some_and(|digits| {
+            !digits.starts_with('0')
+                && digits.bytes().all(|byte| byte.is_ascii_digit())
+                && digits.parse::<u64>().is_ok()
+        });
+        if !valid {
+            return Err(
+                "`targetIds` must contain only individual window IDs from computer_list_windows",
+            );
+        }
+        if !seen.insert(id) {
+            return Err("`targetIds` must contain 1 to 20 distinct window IDs");
+        }
+    }
+    Ok(())
+}
+
 /// A screenshot of one shared window. Backs `computer_screenshot`; the grant
 /// check, the second check after the capture and the activity line all happen
 /// behind it, in `commands::computer`.
@@ -473,6 +512,7 @@ pub enum BrokerMessage {
     BrowserTabOp(BrokerBrowserTabOpRequest),
     ComputerApps(BrokerComputerAppsRequest),
     ComputerWindows(BrokerComputerWindowsRequest),
+    ComputerShare(BrokerComputerShareRequest),
     ComputerCapture(BrokerComputerCaptureRequest),
     ComputerSnapshot(BrokerComputerSnapshotRequest),
     ComputerVerify(BrokerComputerVerifyRequest),
@@ -622,7 +662,7 @@ const LIVENESS_CHECKS: LivenessChecks = LivenessChecks {
 /// answering, instead of waiting for a reply that cannot come.
 ///
 /// Some round trips are long by design (`get_delegation_status` with
-/// `wait_ms: 0`, `ask_user_question`, `browser_eval`), so no deadline fits
+/// `wait_ms: 0`, `ask_user_question`, `browser_eval`, `computer_request_window_sharing`), so no deadline fits
 /// them all; what tells a long answer from a dead listener is whether the
 /// listener still answers a `Ping`, sent on a connection of its own while the
 /// call waits. A codeg that stopped serving — paused by macOS when memory ran
@@ -928,6 +968,13 @@ pub async fn client_computer_windows_round_trip(
     req: &BrokerComputerWindowsRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ComputerWindows(req.clone())).await
+}
+
+pub async fn client_computer_share_round_trip(
+    socket_path: &str,
+    req: &BrokerComputerShareRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ComputerShare(req.clone())).await
 }
 
 /// Dispatch a `computer_screenshot` request and read back the serialized
