@@ -2182,6 +2182,8 @@ mod tauri_app {
                 crate::commands::computer::computer_open_permission_settings,
                 crate::commands::computer::computer_reveal_helper,
                 crate::commands::computer::computer_list_shareable_windows,
+                crate::commands::computer::window_sharing::computer_share_request_current,
+                crate::commands::computer::window_sharing::computer_share_request_decide,
                 crate::commands::computer::computer_window_thumbnail,
                 crate::commands::computer::computer_share_window,
                 crate::commands::computer::computer_share_windows,

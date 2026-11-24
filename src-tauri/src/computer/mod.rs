@@ -77,6 +77,8 @@ pub mod helper;
 pub mod keys;
 pub mod procinfo;
 pub mod protocol;
+#[cfg(any(feature = "tauri-runtime", test))]
+pub(crate) mod share_consent;
 pub mod stop_shortcut;
 pub mod targets;
 pub mod types;

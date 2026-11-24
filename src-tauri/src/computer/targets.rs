@@ -732,6 +732,30 @@ impl TargetTable {
         me: &SelfIdentity,
         blocklist: &Blocklist,
     ) -> Result<Option<ComputerGrantPayload>, ShareError> {
+        self.share_inner(target_id, level, now, me, blocklist, None)
+    }
+
+    #[cfg(any(feature = "tauri-runtime", test))]
+    pub(crate) fn share_confirmed(
+        &self,
+        shown: &TargetEntry,
+        level: GrantLevel,
+        now: i64,
+        me: &SelfIdentity,
+        blocklist: &Blocklist,
+    ) -> Result<Option<ComputerGrantPayload>, ShareError> {
+        self.share_inner(&shown.target_id, level, now, me, blocklist, Some(shown))
+    }
+
+    fn share_inner(
+        &self,
+        target_id: &str,
+        level: GrantLevel,
+        now: i64,
+        me: &SelfIdentity,
+        blocklist: &Blocklist,
+        shown: Option<&TargetEntry>,
+    ) -> Result<Option<ComputerGrantPayload>, ShareError> {
         let mut inner = self.lock();
         let Inner {
             entries,
@@ -743,6 +767,16 @@ impl TargetTable {
             return Err(ShareError::ScreenShared);
         }
         let entry = entries.get_mut(target_id).ok_or(ShareError::NoSuchTarget)?;
+        // 确认只适用于对话框里显示的身份和权限，不能盖过之后的手动修改。
+        if shown.is_some_and(|shown| {
+            entry.identity != shown.identity
+                || entry.epoch != shown.epoch
+                || entry.title != shown.title
+                || level_of(entry.grant.as_ref()) != level_of(shown.grant.as_ref())
+                || !entry.worth_listing()
+        }) {
+            return Err(ShareError::Gone);
+        }
         let with_app = entry
             .grant
             .as_ref()
@@ -2077,6 +2111,32 @@ mod tests {
         table
             .share(id, level, 1_000, &me(), &Blocklist::new(&[]))
             .expect("shareable")
+    }
+
+    #[test]
+    fn confirmed_sharing_cannot_restore_a_revoked_or_renamed_window() {
+        let table = TargetTable::new();
+        let (entries, _) = table.observe(&[window(12, 100, 2, "Before")], None);
+        let id = &entries[0].target_id;
+        let blocks = Blocklist::new(&[]);
+        share(&table, id, GrantLevel::Read);
+        let shown = table.get(id).unwrap();
+        share(&table, id, GrantLevel::None);
+        assert_eq!(
+            table.share_confirmed(&shown, GrantLevel::Control, 1_001, &me(), &blocks),
+            Err(ShareError::Gone)
+        );
+        let shown = table.get(id).unwrap();
+        table.observe(&[window(12, 100, 2, "After")], None);
+        assert_eq!(
+            table.share_confirmed(&shown, GrantLevel::Control, 1_002, &me(), &blocks),
+            Err(ShareError::Gone)
+        );
+        let shown = table.get(id).unwrap();
+        assert!(table
+            .share_confirmed(&shown, GrantLevel::Read, 1_003, &me(), &blocks)
+            .unwrap()
+            .is_some());
     }
 
     fn read(table: &TargetTable, id: &str) -> Result<String, ReadRefusal> {

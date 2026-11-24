@@ -115,9 +115,10 @@ pub const NO_DESKTOP_NOTE: &str =
     "Computer use is not available in this session: there are no windows to read.";
 
 /// How to share a window, for every refusal that ends in "ask the user".
-const SHARE_HOW: &str = "Ask the user to share it: in BeeCode's status bar they open Computer use \
-                         and press \"Share a window…\". Sharing is theirs to give — there is no \
-                         way to take it, and no point retrying until they have.";
+const SHARE_HOW: &str = "Use computer_request_window_sharing, if available, to ask the user to \
+                         approve this window. Otherwise, ask them to open Computer use in BeeCode's \
+                         status bar and press \"Share a window…\". There is no point retrying until \
+                         the user has granted access.";
 
 /// What `computer_list_apps` answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +221,26 @@ impl ComputerWindowsOutcome {
             windows: Vec::new(),
             screen: None,
             input: None,
+            error: Some(error.to_string()),
+            note: Some(note.into()),
+        }
+    }
+}
+
+/// 仅返回确认并生效的窗口 ID，不返回确认框中显示的未共享标题。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerShareOutcome {
+    pub granted: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl ComputerShareOutcome {
+    pub fn refused(error: &str, note: impl Into<String>) -> Self {
+        Self {
+            granted: Vec::new(),
             error: Some(error.to_string()),
             note: Some(note.into()),
         }
@@ -688,6 +709,18 @@ pub trait ComputerToolAccess: Send + Sync {
 
     /// Every normal window, or `pid`'s only.
     async fn list_windows(&self, pid: Option<u32>) -> ComputerWindowsOutcome;
+
+    /// 只发起用户确认，不接受调用者代答。
+    async fn request_window_sharing(
+        &self,
+        _target_ids: Vec<String>,
+        _level: crate::computer::types::GrantLevel,
+    ) -> ComputerShareOutcome {
+        ComputerShareOutcome::refused(
+            ERROR_UNAVAILABLE,
+            "Window sharing requests require the local BeeCode desktop. Ask the user to share the window manually.",
+        )
+    }
 
     /// A screenshot of one shared window.
     async fn capture(&self, target_id: &str, max_dimension: Option<u32>) -> ComputerCaptureOutcome;

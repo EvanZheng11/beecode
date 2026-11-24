@@ -107,6 +107,9 @@ use crate::computer::types::{
 };
 use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
 
+#[cfg(feature = "tauri-runtime")]
+pub(crate) mod window_sharing;
+
 /// How often lapsed grants are swept, so the panel shows a window as no
 /// longer shared when its time runs out rather than at the next read.
 const EXPIRY_SWEEP: Duration = Duration::from_secs(30);
@@ -493,6 +496,7 @@ struct DesktopUi {
     stop_key: StopKey,
     indicator: Indicator,
     marker: Marker,
+    share_consent: crate::computer::share_consent::WindowShareConsent,
 }
 
 /// Where a computer-use service runs.
@@ -604,6 +608,7 @@ impl ComputerService {
                 stop_key: StopKey::new(),
                 indicator: Indicator::start(app.clone()),
                 marker: Marker::start(app.clone()),
+                share_consent: Default::default(),
                 app,
             }),
             ComputerHost::Server { .. } => None,
@@ -688,6 +693,8 @@ impl ComputerService {
             let _gate = self.grant_gate.lock().unwrap_or_else(|p| p.into_inner());
             *self.policy.lock().unwrap_or_else(|p| p.into_inner()) = SharingPolicy::of(after);
             if before.enabled && !after.enabled {
+                #[cfg(feature = "tauri-runtime")]
+                self.cancel_share_request();
                 self.targets.revoke_all(GrantChange::Disabled)
             } else {
                 let mut ended =
@@ -887,6 +894,8 @@ impl ComputerService {
         let (ended, stop) = {
             let _gate = self.grant_gate.lock().unwrap_or_else(|p| p.into_inner());
             let stop = self.stops.fetch_add(1, Ordering::AcqRel) + 1;
+            #[cfg(feature = "tauri-runtime")]
+            self.cancel_share_request();
             // The backend holds actions to it from this moment, not from
             // when its `Halt` goes out below.
             self.backend.note_stop(stop);
@@ -2271,6 +2280,15 @@ impl ComputerToolAccess for McpComputerTools {
         self.service.agent_list_windows(pid).await
     }
 
+    #[cfg(feature = "tauri-runtime")]
+    async fn request_window_sharing(
+        &self,
+        target_ids: Vec<String>,
+        level: GrantLevel,
+    ) -> crate::acp::computer_tools::ComputerShareOutcome {
+        self.service.agent_request_window_sharing(target_ids, level).await
+    }
+
     async fn capture(&self, target_id: &str, max_dimension: Option<u32>) -> ComputerCaptureOutcome {
         self.service.agent_capture(target_id, max_dimension).await
     }
@@ -2754,7 +2772,12 @@ pub async fn computer_share_app(
 
 /// Stop sharing every window.
 pub fn computer_revoke_all_core(service: &ComputerService) {
-    let ended = service.targets.revoke_all(GrantChange::Revoked);
+    let ended = {
+        let _gate = service.grant_gate.lock().unwrap_or_else(|p| p.into_inner());
+        #[cfg(feature = "tauri-runtime")]
+        service.cancel_share_request();
+        service.targets.revoke_all(GrantChange::Revoked)
+    };
     service.announce_change(ended);
 }
 
