@@ -6057,6 +6057,13 @@
     },
     "share": "Partager une fenêtre…",
     "openSettings": "Ouvrir les réglages détaillés",
+    "request": {
+      "title": "Un agent demande à utiliser ces fenêtres",
+      "description": "Cocher une fenêtre la partage en « {level} » dans les fenêtres partagées de cet ordinateur : la même liste que celle du panneau « Utilisation de l’ordinateur », utilisable par tout agent disposant des outils, pas seulement celui-ci. Les fenêtres non cochées restent inchangées. Rien n’est partagé avant votre confirmation.",
+      "deny": "Ne pas partager",
+      "confirm": "Partager la sélection",
+      "failed": "Ces fenêtres n’ont pas pu être partagées."
+    },
     "picker": {
       "title": "Partager une fenêtre avec les agents",
       "description": "Les agents de toutes les conversations peuvent lire les fenêtres que vous partagez, et cliquer et taper dans celles où vous les laissez agir. Le partage prend fin quand vous l'arrêtez, que la fenêtre se ferme ou qu'elle reste inutilisée pendant la durée définie dans les réglages.",

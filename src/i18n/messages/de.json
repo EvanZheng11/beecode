@@ -6057,6 +6057,13 @@
     },
     "share": "Fenster freigeben …",
     "openSettings": "Alle Einstellungen öffnen",
+    "request": {
+      "title": "Ein Agent bittet um diese Fenster",
+      "description": "Angehakte Fenster werden mit „{level}“ zu den freigegebenen Fenstern dieses Computers hinzugefügt – dieselbe Liste, die das Bedienfeld „Computerbedienung“ zeigt, und für jeden Agenten mit Tool-Rechten nutzbar, nicht nur für diesen. Nicht angehakte Fenster bleiben, wie sie sind. Bis du bestätigst, wird nichts freigegeben.",
+      "deny": "Nicht freigeben",
+      "confirm": "Auswahl freigeben",
+      "failed": "Diese Fenster konnten nicht freigegeben werden."
+    },
     "picker": {
       "title": "Ein Fenster für Agenten freigeben",
       "description": "Agenten in jeder Unterhaltung können die Fenster lesen, die du freigibst, und in denen klicken und tippen, in denen du sie handeln lässt. Eine Freigabe endet, wenn du sie beendest, das Fenster geschlossen wird oder es so lange ungenutzt bleibt wie in den Einstellungen festgelegt.",
