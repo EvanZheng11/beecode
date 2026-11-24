@@ -10,7 +10,7 @@
 import { useEffect, useSyncExternalStore } from "react"
 
 import { isLocalDesktop, onTransportReconnect } from "@/lib/platform"
-import { getTransport } from "@/lib/transport"
+import { getShellTransport, getTransport } from "@/lib/transport"
 
 import type {
   ComputerDelivery,
@@ -225,6 +225,23 @@ export async function computerShareWindows(
   level: GrantLevel
 ): Promise<ShareManyResult> {
   return getTransport().call("computer_share_windows", { targetIds, level })
+}
+
+/** Answer a `computer://share-request` (`computerShareRequestDecide`):
+ *  share these windows at the level that was asked for, or — with no ids —
+ *  refuse. Local desktop only: the windows are of this computer, and the
+ *  event is emitted to its main window alone. */
+export async function computerShareRequestDecide(
+  requestId: string,
+  selectedTargetIds: string[]
+): Promise<boolean> {
+  // The shell transport, not `getTransport()`: this command only exists in
+  // the desktop app's own backend (the windows are of this computer), and a
+  // remote-workspace window has no such command to route it to.
+  return getShellTransport().call("computer_share_request_decide", {
+    requestId,
+    selectedTargetIds,
+  })
 }
 
 /** Share an application as a whole at `level`, or end its share at `none`:

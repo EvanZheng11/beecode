@@ -6057,6 +6057,13 @@
     },
     "share": "Compartir una ventana…",
     "openSettings": "Abrir ajustes detallados",
+    "request": {
+      "title": "Un agente pide usar estas ventanas",
+      "description": "Marcar una ventana la comparte en «{level}» dentro de las ventanas compartidas de este equipo: la misma lista que muestra el panel «Uso del ordenador», y cualquier agente con permiso de herramientas puede usarla, no solo este. Las ventanas sin marcar quedan como están. No se comparte nada hasta que confirmes.",
+      "deny": "No compartir",
+      "confirm": "Compartir selección",
+      "failed": "No se pudieron compartir estas ventanas."
+    },
     "picker": {
       "title": "Compartir una ventana con los agentes",
       "description": "Los agentes de cualquier conversación pueden leer las ventanas que compartas y hacer clic y escribir en aquellas en las que les permitas actuar. El uso compartido termina cuando lo detienes, la ventana se cierra o pasa sin uso el tiempo fijado en los ajustes.",

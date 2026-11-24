@@ -6057,6 +6057,13 @@
     },
     "share": "Share a window…",
     "openSettings": "Open full settings",
+    "request": {
+      "title": "An agent asks to use these windows",
+      "description": "Checking a window shares it, at {level}, on this computer's shared windows — the same list the Computer use panel shows, and every agent with the tools can use it, not only this one. Windows left unchecked stay as they are. Nothing is shared until you confirm.",
+      "deny": "Don’t share",
+      "confirm": "Share selected",
+      "failed": "The windows could not be shared."
+    },
     "picker": {
       "title": "Share a window with agents",
       "description": "Agents in every conversation can read the windows you share, and click and type in the ones you let them act on. Sharing ends when you stop it, the window closes, or it goes unused for the time set in Settings.",

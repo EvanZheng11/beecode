@@ -293,8 +293,49 @@ export interface ComputerStatePayload {
   screen?: SharedScreen
 }
 
+/** One window an agent asked the person to share (`computer://share-request`).
+ *  A title is the window's own text: shown, never read as anything else. */
+export interface ShareRequestWindow {
+  targetId: string
+  appName: string
+  title: string
+  /** What it is shared for now — the whole grant, whoever asked for it, not
+   *  just this request's. */
+  level: GrantLevel
+}
+
+/** `computer://share-request`: an agent needs windows shared, and asks the
+ *  person instead of waiting to be handed one by hand.
+ *
+ *  The list is what it wants to use, at the level it wants: some may already
+ *  be shared (`level`), some may not. Nothing is shared until the answer.
+ *  Broadcast to every window and shown by the main one — the answer is one
+ *  answer, and a second dialog would be a second chance to give a different
+ *  one. */
+export interface ShareRequestPayload {
+  /** Names this one question; goes back with the answer. */
+  requestId: string
+  /** The level the agent asks for on every window it named. */
+  requestedLevel: Exclude<GrantLevel, "none">
+  windows: ShareRequestWindow[]
+  /** Unix milliseconds at which it lapses into a refusal. */
+  expiresAt: number
+}
+
+/** `computer://share-request-closed`: that question is no longer waiting —
+ *  answered, lapsed, or the agent gave up. After it, an answer for the same
+ *  `requestId` is a stale reply and must not be sent. */
+export interface ShareRequestClosedPayload {
+  requestId: string
+}
+
 /** Every shared window, whenever any grant changes. Desktop only. */
 export const COMPUTER_STATE_EVENT = "computer://state"
+/** {@link ShareRequestPayload}: desktop only, main window only. */
+export const COMPUTER_SHARE_REQUEST_EVENT = "computer://share-request"
+/** {@link ShareRequestClosedPayload}. */
+export const COMPUTER_SHARE_REQUEST_CLOSED_EVENT =
+  "computer://share-request-closed"
 export const COMPUTER_GRANT_EVENT = "computer://agent-grant"
 export const COMPUTER_ACTIVITY_EVENT = "computer://agent-activity"
 export const COMPUTER_BACKEND_STATUS_EVENT = "computer://backend-status"

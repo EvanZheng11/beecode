@@ -6057,6 +6057,13 @@
     },
     "share": "Compartilhar uma janela…",
     "openSettings": "Abrir ajustes detalhados",
+    "request": {
+      "title": "Um agente pede para usar estas janelas",
+      "description": "Marcar uma janela a compartilha em «{level}» nas janelas compartilhadas deste computador — a mesma lista do painel «Uso do computador», que qualquer agente com permissão de ferramentas pode usar, não só este. As janelas não marcadas ficam como estão. Nada é compartilhado antes de você confirmar.",
+      "deny": "Não compartilhar",
+      "confirm": "Compartilhar seleção",
+      "failed": "Não foi possível compartilhar estas janelas."
+    },
     "picker": {
       "title": "Compartilhar uma janela com os agentes",
       "description": "Os agentes de qualquer conversa podem ler as janelas que você compartilhar, e clicar e digitar naquelas em que você deixar que ajam. O compartilhamento termina quando você o interrompe, a janela fecha ou fica sem uso pelo tempo definido nos ajustes.",

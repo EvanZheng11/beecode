@@ -12,6 +12,7 @@ import { BrowserScreenshotMarkupHost } from "@/components/browser/browser-screen
 import { BrowserServiceBridge } from "@/components/browser/browser-service-bridge"
 import { BrowserTabsPersistence } from "@/components/browser/browser-tabs-persistence"
 import { BrowserTabsSuspender } from "@/components/browser/browser-tabs-suspender"
+import { ComputerShareRequestConfirm } from "@/components/computer/computer-share-request"
 import {
   Suspense,
   useMemo,
@@ -1543,6 +1544,10 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                           an agent asks to run code on is usually not the one
                           the person is looking at. */}
                       <BrowserEvalConfirm />
+                      {/* Likewise here and not in the status bar's Computer
+                          use popover: that one is closed most of the time,
+                          and a question nobody sees lapses unanswered. */}
+                      <ComputerShareRequestConfirm />
                       {/* Here and not in the browser tab it is opened from:
                           only the tab on screen is mounted, and a tab opening
                           on its own would take the marks with it. */}
