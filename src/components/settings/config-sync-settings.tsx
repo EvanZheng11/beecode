@@ -1079,10 +1079,10 @@ export function ConfigSyncSettings() {
             {conflict ? (
               <div
                 role="alert"
-                className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3"
+                className="space-y-2 rounded-lg border border-tone-warning/40 bg-tone-warning/5 p-3"
               >
                 <div className="flex items-start gap-2">
-                  <TriangleAlert className="h-4 w-4 shrink-0 text-amber-600" />
+                  <TriangleAlert className="h-4 w-4 shrink-0 text-tone-warning" />
                   <div className="space-y-1">
                     <p className="text-xs font-medium">{t("conflictTitle")}</p>
                     <p className="text-2xs text-muted-foreground leading-5">

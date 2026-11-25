@@ -311,7 +311,7 @@ export function DeepSeekProviderRoutesEditor() {
           {t("loadFailed")}
         </p>
       ) : state.error ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+        <div className="flex items-start gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <div className="min-w-0 space-y-1">
             <p>{t("unreadable")}</p>
@@ -326,7 +326,7 @@ export function DeepSeekProviderRoutesEditor() {
       ) : (
         <>
           {state.invalid && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+            <div className="flex items-start gap-2 rounded-md border border-tone-warning/30 bg-tone-warning/5 px-3 py-2 text-2xs text-tone-warning">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <div className="min-w-0 space-y-1">
                 <p>{t("invalidStored")}</p>
@@ -400,7 +400,7 @@ export function DeepSeekProviderRoutesEditor() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="mt-0.5 h-7 w-7 shrink-0 text-muted-foreground hover:text-red-500"
+                        className="mt-0.5 h-7 w-7 shrink-0 text-muted-foreground hover:text-tone-danger"
                         disabled={saving}
                         onClick={() => {
                           setExpanded(null)
