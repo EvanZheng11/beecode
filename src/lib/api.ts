@@ -270,7 +270,11 @@ export async function acpConnect(
   workingDir?: string,
   sessionId?: string,
   preferredModeId?: string | null,
-  preferredConfigValues?: Record<string, string> | null
+  preferredConfigValues?: Record<string, string> | null,
+  /** The existing conversation this connect opens (a real row id). Its own
+   *  stored selection then wins over the preferences above, which are only
+   *  the new-conversation default (codeg#1179). */
+  conversationId?: number | null
 ): Promise<string> {
   // 启动前可能等待人工确认目录信任（后端最多等待 10 分钟）。
   // 为后续进程启动留余量，避免 Web 默认 60 秒先中断原连接任务。
@@ -282,9 +286,28 @@ export async function acpConnect(
       sessionId: sessionId ?? null,
       preferredModeId: preferredModeId ?? null,
       preferredConfigValues: preferredConfigValues ?? null,
+      conversationId: conversationId ?? null,
     },
     { timeoutMs: 720_000 }
   )
+}
+
+/**
+ * Record the composer's pending mode pick on a connection — never sent to the
+ * agent; the tab applies it at its next send. `initial` = a draft's one-time
+ * hand-over at its first send: applied only while no pick was made on the
+ * connection. Resolves to whether it applied.
+ */
+export async function acpSetComposerMode(
+  connectionId: string,
+  modeId: string | null,
+  initial = false
+): Promise<boolean> {
+  return getTransport().call("acp_set_composer_mode", {
+    connectionId,
+    modeId,
+    initial,
+  })
 }
 
 /**
@@ -512,8 +535,19 @@ export async function acpAnswerPlanApproval(
   })
 }
 
-export async function acpDisconnect(connectionId: string): Promise<void> {
-  return getTransport().call("acp_disconnect", { connectionId })
+export function acpDisconnect(connectionId: string): Promise<void>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle: true
+): Promise<boolean>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle?: true
+): Promise<void | boolean> {
+  return getTransport().call(
+    "acp_disconnect",
+    onlyIfIdle ? { connectionId, onlyIfIdle } : { connectionId }
+  )
 }
 
 export async function acpTouchConnection(
@@ -966,8 +1000,12 @@ export async function listPiModelCapabilities(): Promise<PiModelCatalog> {
  * "inheriting the agent's built-in list", not an error; an unreadable one
  * arrives as `error` so the panel can refuse to edit it.
  */
-export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> {
-  return getTransport().call("acp_load_deepseek_model_catalog", {})
+export async function loadDeepSeekModelCatalog(
+  version?: string | null
+): Promise<DeepSeekModelCatalog> {
+  return getTransport().call("acp_load_deepseek_model_catalog", {
+    version: version ?? null,
+  })
 }
 
 /**
@@ -980,9 +1018,13 @@ export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> 
  * after it, not the ones already running.
  */
 export async function updateDeepSeekModelCatalog(
-  models: DeepSeekCatalogModel[] | null
+  models: DeepSeekCatalogModel[] | null,
+  version?: string | null
 ): Promise<void> {
-  return getTransport().call("acp_update_deepseek_model_catalog", { models })
+  return getTransport().call("acp_update_deepseek_model_catalog", {
+    models,
+    version: version ?? null,
+  })
 }
 
 /**
@@ -4182,11 +4224,24 @@ function stripUploadedTaskConfig(config: WorkTaskConfig): WorkTaskConfig {
 
 export async function workTaskUpdate(
   id: number,
-  draft: WorkTaskDraft
+  draft: WorkTaskDraft,
+  /** How the server treats the selector tuple (codeg#1179): untouched keeps
+   *  the CURRENT row's, reset re-resolves the folder's task settings now.
+   *  Older servers ignore both and apply the draft as sent. */
+  flags?: {
+    selectionUntouched?: boolean
+    selectionReset?: boolean
+    /** Only the selector tuple changes; refused if the task's title, folder
+     *  or brief moved since the dialog opened. */
+    selectorOnly?: boolean
+  }
 ): Promise<WorkTask> {
   return getTransport().call("work_task_update", {
     id,
     draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+    selectionUntouched: flags?.selectionUntouched ?? false,
+    selectionReset: flags?.selectionReset ?? false,
+    selectorOnly: flags?.selectorOnly ?? false,
   })
 }
 

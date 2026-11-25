@@ -217,6 +217,7 @@ function SidebarRailButton({
   label,
   onClick,
   active,
+  hint,
   badge,
   badgeClassName,
 }: {
@@ -224,6 +225,8 @@ function SidebarRailButton({
   label: string
   onClick: () => void
   active?: boolean
+  /** 图标态只放图标：页面内容提示并进 tooltip（title / aria-label）。 */
+  hint?: string
   badge?: number
   badgeClassName?: string
 }) {
@@ -231,8 +234,8 @@ function SidebarRailButton({
     <button
       type="button"
       onClick={onClick}
-      title={label}
-      aria-label={label}
+      title={hint ? `${label} · ${hint}` : label}
+      aria-label={hint ? `${label} ${hint}` : label}
       aria-current={active ? "page" : undefined}
       className={cn(
         RAIL_BUTTON_CLASS,
@@ -731,6 +734,7 @@ export function Sidebar() {
               <SidebarRailButton
                 icon={DraftingCompass}
                 label={t("harness")}
+                hint={t("harnessHint")}
                 active={routeId === "harness"}
                 onClick={() => {
                   // Opens on the section the page was last on: which one that is

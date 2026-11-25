@@ -1,14 +1,17 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { Ref } from "react"
+import { useEffect, type Ref } from "react"
 
 import { Sidebar } from "./sidebar"
 // Type-only (erased at runtime, so it does not defeat the mock below): pins the
 // stub's imperative handle to the real component's contract.
 import type { SidebarConversationListHandle } from "@/components/conversations/sidebar-conversation-list"
-import { HarnessViewProvider } from "@/contexts/harness-view-context"
+import {
+  HarnessViewProvider,
+  useHarnessView,
+} from "@/contexts/harness-view-context"
 import enMessages from "@/i18n/messages/en.json"
 import {
   resetFolderTabsStore,
@@ -47,6 +50,8 @@ const mockState = vi.hoisted(() => ({
   remoteConnections: [
     { id: 11, name: "prod-box", base_url: "https://prod.example" },
   ],
+  // 图标栏的当前路由：Harness 行据此点亮 aria-current。
+  routeId: "conversations",
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -106,8 +111,8 @@ vi.mock("@/contexts/tasks-view-context", () => ({
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
-    routeId: "conversations",
-    isConversations: true,
+    routeId: mockState.routeId,
+    isConversations: mockState.routeId === "conversations",
     setRoute: spies.setRoute,
     openConversations: spies.openConversations,
   }),
@@ -160,10 +165,23 @@ vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
 
-function renderSidebar() {
+/**
+ * The sidebar reads the Harness update count from its context; seed it through
+ * the provider's own setter so the row sees it exactly as it would in the app.
+ */
+function HarnessUpdates({ count }: { count: number }) {
+  const { setUpdatesCount } = useHarnessView()
+  useEffect(() => {
+    setUpdatesCount(count)
+  }, [count, setUpdatesCount])
+  return null
+}
+
+function renderSidebar({ harnessUpdates = 0 } = {}) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <HarnessViewProvider>
+        <HarnessUpdates count={harnessUpdates} />
         <Sidebar />
       </HarnessViewProvider>
     </NextIntlClientProvider>
@@ -543,6 +561,61 @@ describe("Sidebar — Navigation item visibility", () => {
     renderSidebar()
     expect(navRow("To-dos")).toBeNull()
     expect(navRow("Automations")).toBeTruthy()
+  })
+})
+
+describe("Sidebar — Harness row", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.setRoute.mockClear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+    mockState.routeId = "conversations"
+  })
+
+  // 图标栏的入口只有图标：名字来自 aria-label，title 补上页面内容提示。
+  const harnessRow = () =>
+    screen.getByRole("button", { name: /^Harness Engineering/ })
+
+  it("opens the Harness route", () => {
+    renderSidebar()
+    fireEvent.click(harnessRow())
+    expect(spies.setRoute).toHaveBeenCalledWith("harness")
+  })
+
+  it("is marked current only while its route is on screen", () => {
+    const { unmount } = renderSidebar()
+    expect(harnessRow()).not.toHaveAttribute("aria-current")
+    unmount()
+
+    mockState.routeId = "harness"
+    renderSidebar()
+    expect(harnessRow()).toHaveAttribute("aria-current", "page")
+    // Control: marking follows the route, not the row that was added last.
+    expect(
+      screen.getByRole("button", { name: "Infinite Canvas" })
+    ).not.toHaveAttribute("aria-current")
+  })
+
+  it("names what the page holds in its tooltip and label", () => {
+    renderSidebar()
+    expect(harnessRow()).toHaveAttribute(
+      "title",
+      "Harness Engineering · Skills · MCP"
+    )
+    expect(harnessRow()).toHaveAttribute(
+      "aria-label",
+      "Harness Engineering Skills · MCP"
+    )
+  })
+
+  it("carries no badge while nothing has an update", () => {
+    renderSidebar()
+    expect(harnessRow().textContent).toBe("")
+  })
+
+  it("counts the available updates in a corner badge", () => {
+    renderSidebar({ harnessUpdates: 3 })
+    expect(within(harnessRow()).getByText("3")).toBeTruthy()
   })
 })
 
