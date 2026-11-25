@@ -1147,7 +1147,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
       await act(async () => {
         await h.actions!.disconnectIfIdle(TAB)
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     })
 
     it("learns a running remote delegation from the snapshot", async () => {
@@ -1509,7 +1509,7 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
