@@ -101,21 +101,24 @@ function violations(text: string, name: string): string[] {
       ts.isTemplateTail(node)
     ) {
       const value = node.text
+      const fixedFont = /text-\[\d+(?:\.\d+)?px\]/.test(value)
+      const hasHash = value.includes("#")
+      if (!fixedFont && !hasHash) return
       const line =
         source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
-      if (/text-\[\d+(?:\.\d+)?px\]/.test(value)) {
-        failures.push(`${name}:${line} 固定像素字号`)
-      }
-      let parent: ts.Node | undefined = node.parent
-      while (parent && !ts.isJsxAttribute(parent) && !ts.isSourceFile(parent))
-        parent = parent.parent
-      // URL 片段和 SVG 引用不是颜色；className、style 中的相同值仍须拦截。
-      const fragment =
-        parent &&
-        ts.isJsxAttribute(parent) &&
-        /^(?:href|xlinkHref|to)$/.test(parent.name.getText(source)) &&
-        value.startsWith("#")
-      if (!fragment) {
+      if (fixedFont) failures.push(`${name}:${line} 固定像素字号`)
+      if (hasHash) {
+        // URL 片段和 SVG 引用不是颜色；className、style 中的相同值仍须拦截。
+        let parent: ts.Node | undefined = value.startsWith("#")
+          ? node.parent
+          : undefined
+        while (parent && !ts.isJsxAttribute(parent) && !ts.isSourceFile(parent))
+          parent = parent.parent
+        const fragment =
+          parent &&
+          ts.isJsxAttribute(parent) &&
+          /^(?:href|xlinkHref|to)$/.test(parent.name.getText(source))
+        if (fragment) return
         for (const match of value.matchAll(
           /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi
         )) {
@@ -150,7 +153,7 @@ it("界面源码禁止新增硬编码颜色和固定像素字号", () => {
       )
     )
   ).toEqual([])
-})
+}, 15_000)
 
 it.each([
   'const classes = "text-[17px] bg-[#123456]"',

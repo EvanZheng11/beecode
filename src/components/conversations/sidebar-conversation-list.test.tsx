@@ -575,6 +575,28 @@ describe("SidebarConversationList — 三天自动归档", () => {
     })
     expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
   })
+
+  it("其它会话持续更新时仍按固定节拍自动归档闲置会话", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(11, 1, { updated_at: new Date(FIXED - THREE_DAYS).toISOString() }),
+        conv(12, 1, { updated_at: new Date(FIXED).toISOString() }),
+      ],
+    })
+    render(archiveTree())
+    expect(screen.getAllByText("conv-11").length).toBeGreaterThan(0)
+    act(() => {
+      vi.advanceTimersByTime(MINUTE / 2)
+      useAppWorkspaceStore.setState((state) => ({
+        conversations: state.conversations.map((c) =>
+          c.id === 12 ? { ...c, updated_at: new Date().toISOString() } : c
+        ),
+      }))
+    })
+    act(() => vi.advanceTimersByTime(MINUTE / 2))
+    expect(screen.queryAllByText("conv-11")).toHaveLength(0)
+    expect(screen.getAllByText("conv-12").length).toBeGreaterThan(0)
+  })
 })
 
 describe("SidebarConversationList — single status event re-render scope", () => {

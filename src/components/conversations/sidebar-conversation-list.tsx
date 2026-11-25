@@ -1534,34 +1534,43 @@ export function SidebarConversationList({
     [allFolders, archivedFolderPaths]
   )
   const [archiveNow, setArchiveNow] = useState(() => Date.now())
+  const archiveInputs = {
+    archiveNow,
+    conversationArchive,
+    conversations,
+    hiddenFolderIds,
+  }
+  const archiveInputsRef = useRef(archiveInputs)
+  useIsomorphicLayoutEffect(() => {
+    archiveInputsRef.current = archiveInputs
+  })
   // 时间标签独立刷新；只有会话真的跨过归档阈值才重建整张列表。
   useEffect(() => {
     if (showArchived) return
     const interval = setInterval(() => {
       const now = Date.now()
+      const previous = archiveInputsRef.current
       if (
-        conversations.some(
+        previous.conversations.some(
           (conversation) =>
-            !hiddenFolderIds.has(conversation.folder_id) &&
+            !previous.hiddenFolderIds.has(conversation.folder_id) &&
             conversationArchiveReason(
               conversation,
-              archiveNow,
-              conversationArchive
+              previous.archiveNow,
+              previous.conversationArchive
             ) !==
-              conversationArchiveReason(conversation, now, conversationArchive)
+              conversationArchiveReason(
+                conversation,
+                now,
+                previous.conversationArchive
+              )
         )
       ) {
         setArchiveNow(now)
       }
     }, 60_000)
     return () => clearInterval(interval)
-  }, [
-    archiveNow,
-    conversationArchive,
-    conversations,
-    hiddenFolderIds,
-    showArchived,
-  ])
+  }, [showArchived])
   const shownConversations = useMemo(() => {
     // 手动归档/恢复覆盖自动归档；已归档目录的会话也要从 Recent/Pinned 中隐藏。
     const visible = showArchived
