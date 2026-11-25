@@ -959,6 +959,7 @@ describe("SidebarConversationList — sticky folder header overlay", () => {
   }
 
   it("聊天10条、文件夹15条、最近10条在20行视口底部保留完整布局", async () => {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "flat")
     const folders = Array.from({ length: 15 }, (_, index) =>
       folder(index + 1, `文件夹${index + 1}`)
     )

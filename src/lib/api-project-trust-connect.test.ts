@@ -17,9 +17,14 @@ describe("启动前目录信任等待", () => {
   it("连接保留人工确认时间并透传原任务参数", async () => {
     mocks.call.mockResolvedValue("connection-1")
     await expect(
-      acpConnect("pi", "/worktrees/child", "original-session", "safe", {
-        model: "selected-model",
-      })
+      acpConnect(
+        "pi",
+        "/worktrees/child",
+        "original-session",
+        "safe",
+        { model: "selected-model" },
+        42
+      )
     ).resolves.toBe("connection-1")
     expect(mocks.call).toHaveBeenCalledWith(
       "acp_connect",
@@ -29,6 +34,7 @@ describe("启动前目录信任等待", () => {
         sessionId: "original-session",
         preferredModeId: "safe",
         preferredConfigValues: { model: "selected-model" },
+        conversationId: 42,
       },
       { timeoutMs: 720_000 }
     )

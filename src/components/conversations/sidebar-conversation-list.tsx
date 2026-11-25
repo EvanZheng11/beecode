@@ -1482,13 +1482,8 @@ export function SidebarConversationList({
 
   // Share one clock without scheduling a list render on every tick.
   const [relativeClock] = useState(createSidebarRelativeClock)
-  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const tick = () => {
-      relativeClock.tick()
-      setNow(Date.now())
-    }
-    const interval = setInterval(tick, 60_000)
+    const interval = setInterval(() => relativeClock.tick(), 60_000)
     return () => clearInterval(interval)
   }, [relativeClock])
 
@@ -1499,12 +1494,12 @@ export function SidebarConversationList({
   // state write, so no render.
   const [recentDayStart, setRecentDayStart] = useState(localDayStart)
   useEffect(() => {
-    const interval = setInterval(
-      () => setRecentDayStart(localDayStart()),
-      60_000
-    )
+    const interval = setInterval(() => {
+      const nextDay = localDayStart()
+      if (nextDay !== recentDayStart) setRecentDayStart(nextDay)
+    }, 60_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [recentDayStart])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
@@ -1538,15 +1533,43 @@ export function SidebarConversationList({
     () => archivedFolderIds(allFolders, archivedFolderPaths),
     [allFolders, archivedFolderPaths]
   )
+  const [archiveNow, setArchiveNow] = useState(() => Date.now())
+  // 时间标签独立刷新；只有会话真的跨过归档阈值才重建整张列表。
+  useEffect(() => {
+    if (showArchived) return
+    const interval = setInterval(() => {
+      const now = Date.now()
+      if (
+        conversations.some(
+          (conversation) =>
+            !hiddenFolderIds.has(conversation.folder_id) &&
+            conversationArchiveReason(
+              conversation,
+              archiveNow,
+              conversationArchive
+            ) !==
+              conversationArchiveReason(conversation, now, conversationArchive)
+        )
+      ) {
+        setArchiveNow(now)
+      }
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [
+    archiveNow,
+    conversationArchive,
+    conversations,
+    hiddenFolderIds,
+    showArchived,
+  ])
   const shownConversations = useMemo(() => {
-    // 复用相对时间标签的分钟时钟，静置时也会归档；有新更新就自动重新显示。
     // 手动归档/恢复覆盖自动归档；已归档目录的会话也要从 Recent/Pinned 中隐藏。
     const visible = showArchived
       ? conversations
       : conversations.filter(
           (c) =>
             !hiddenFolderIds.has(c.folder_id) &&
-            !conversationArchiveReason(c, now, conversationArchive)
+            !conversationArchiveReason(c, archiveNow, conversationArchive)
         )
     const tagged = tagFilterActive
       ? visible.filter((c) => matchesTagFilter(c, tagFilter))
@@ -1560,7 +1583,7 @@ export function SidebarConversationList({
   }, [
     conversations,
     showArchived,
-    now,
+    archiveNow,
     hiddenFolderIds,
     conversationArchive,
     tagFilter,
