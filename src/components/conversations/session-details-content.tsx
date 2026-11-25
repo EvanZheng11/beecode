@@ -308,7 +308,7 @@ function CopyPropertyButton({
       )}
     >
       {copied ? (
-        <Check className="size-3 text-green-500" />
+        <Check className="size-3 text-tone-success" />
       ) : (
         <Copy className="size-3" />
       )}
